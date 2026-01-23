@@ -1,0 +1,14 @@
+# OS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Common build artifacts (individual PoCs may have their own .gitignore)
+target/
+node_modules/
+out/
+cache/
