@@ -21,6 +21,7 @@ Write specs with layered depth: executive summary up front, technical details be
 The goal is **not** production-ready or fully-secure implementations. The primary deliverable is a detailed `SPEC.md` that thoroughly documents the protocol. Implementation shortcuts are acceptable as long as they are explicitly documented in the spec or README.
 
 Prioritize:
+
 1. Clear, complete specifications
 2. Working demonstrations of the core concept
 3. Documented limitations and shortcuts
@@ -39,6 +40,7 @@ Each PoC lives in `/pocs/[project-name]`. See `/pocs/_template/` for the standar
 
 Required files:
 
+- `REQUIREMENTS.md` - Translates use case + approach into actionable requirements
 - `SPEC.md` - Detailed protocol specification (the main deliverable)
 - `README.md` with:
   - What privacy primitive this demonstrates
@@ -48,12 +50,23 @@ Required files:
 - `CHANGELOG.md` for tracking changes
 - CI workflow in `.github/workflows/[project-name].yml`
 
-## PoC Requirements
+## Methodology
 
-Every PoC must document:
+Each PoC starts from an [iptf-map use case](https://github.com/ethereum/iptf-map/tree/master/use-cases) and its corresponding [approach](https://github.com/ethereum/iptf-map/tree/master/approaches). The workflow:
 
-- The corresponding [iptf-map use case](https://github.com/ethereum/iptf-map/use-cases) it solves
-- Map to the corresponding [approach](https://github.com/ethereum/iptf-map/approaches)
+1. **Use Case (iptf-map):** Defines the business problem, actors, constraints, privacy needs
+2. **Approach (iptf-map):** Recommends architecture, discusses trade-offs for different audiences
+3. `REQUIREMENTS.md`: Translates use case + approach into concrete, actionable requirements for the PoC
+4. `SPEC.md`: Designs the protocol that satisfies the requirements
+5. **Implementation**: Code that demonstrates the spec
+
+**REQUIREMENTS.md** is the bridge between iptf-map context and our technical spec. It extracts:
+
+- Functional requirements by lifecycle phase (issuance, trading, redemption, etc.)
+- Privacy requirements (what's confidential vs public, regulatory access)
+- Security requirements (double-spend protection, access control)
+- Operational requirements (finality, cost, key management)
+- Out of scope items (explicit about what the PoC does NOT address)
 
 ## PoC Independence
 

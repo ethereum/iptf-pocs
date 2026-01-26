@@ -9,6 +9,7 @@ Proof of concept implementations for [IPTF](https://iptf.ethereum.org).
 ```
 pocs/
   [project-name]/     # Self-contained PoC with own build system
+    REQUIREMENTS.md   # Actionable requirements from use case + approach
     SPEC.md           # Protocol specification (main deliverable)
     README.md         # Build/run instructions, limitations
     CHANGELOG.md      # Version history
