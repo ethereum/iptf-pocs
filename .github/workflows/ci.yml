@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-structure:
+    name: Validate repository structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check PoC structure
+        run: |
+          # Validate each PoC has required files
+          for poc_dir in pocs/*/; do
+            # Skip template
+            if [[ "$poc_dir" == "pocs/_template/" ]]; then
+              continue
+            fi
+
+            poc_name=$(basename "$poc_dir")
+            echo "Checking PoC: $poc_name"
+
+            # Check for README.md
+            if [[ ! -f "${poc_dir}README.md" ]]; then
+              echo "ERROR: ${poc_dir}README.md is missing"
+              exit 1
+            fi
+
+            # Check for REQUIREMENTS.md
+            if [[ ! -f "${poc_dir}REQUIREMENTS.md" ]]; then
+              echo "ERROR: ${poc_dir}REQUIREMENTS.md is missing"
+              exit 1
+            fi
+
+            # Check for SPEC.md (either at root or in subdirectories for multi-approach)
+            if [[ ! -f "${poc_dir}SPEC.md" ]]; then
+              # Multi-approach PoC: check subdirectories have SPEC.md
+              has_spec=false
+              for subdir in "${poc_dir}"*/; do
+                if [[ -f "${subdir}SPEC.md" ]]; then
+                  has_spec=true
+                fi
+              done
+              if [[ "$has_spec" == "false" ]]; then
+                echo "ERROR: No SPEC.md found in $poc_dir or its subdirectories"
+                exit 1
+              fi
+            fi
+
+            echo "✓ $poc_name structure valid"
+          done
+
+          echo "All PoC structures validated successfully"
