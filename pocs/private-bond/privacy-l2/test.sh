@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-CONTRACT_PATH=~/confidential-bond-poc/private-l2/private-bonds-contract/target/private_bonds-PrivateBonds.json
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONTRACT_PATH="$SCRIPT_DIR/contracts/target/private_bonds-PrivateBonds.json"
 
 # ==============================================================================
 # PRIVATE BONDS ON AZTEC - INVESTOR/ISSUER STORY

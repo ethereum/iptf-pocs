@@ -87,7 +87,7 @@ The issuer deploys contract with `initialize(total_supply, maturity_date)`, mint
 
 Observer can see that the investor received bonds (via whitelist check) but cannot determine how much.
 
-> **PoC Limitation**: On-chain payment requires a stablecoin contract on Aztec L2. For PoC, we use off-chain fiat settlement. In production, Aztec's native shielding enables bridging L1 stablecoins (USDC) to private L2 tokens for atomic DvP.
+> **PoC Limitation**: On-chain payment requires a stablecoin contract on Aztec L2. For PoC, we use off-chain fiat settlement. In production, Aztec's native shielding enables bridging L1 stablecoins to private L2 tokens for atomic DvP.
 
 ## Secondary Market: Trading
 
@@ -127,41 +127,41 @@ At maturity, bondholders redeem notes for par value. Redemption uses the same [a
 ### Flow
 
 ```
-┌──────────┐                                    ┌──────────┐
-│ Investor │                                    │  Issuer  │
-│(has bonds)                                    │(has USDC)│
-└────┬─────┘                                    └────┬─────┘
-     │                                               │
-     │  1. Create authwit:                           │
-     │     "Bond contract can burn X of my bonds     │
-     │      if I receive Y USDC"                     │
-     │───────────────────────────────────────────────┼──┐
-     │                                               │  │
-     │       (Investor can cancel anytime            │  │
-     │        before step 4)                         │  │
-     │                                               │  │
-     │                        2. Issuer sources      │  │
-     │                           liquidity (off-chain)  │
-     │                                               │  │
-     │                        3. Create authwit:     │  │
-     │                           "Bond contract can  │  │
-     │                            transfer my Y USDC"│  │
-     │                                               │──┼──┐
-     │                                               │  │  │
-     │                        4. settle_redemption() │  │  │
-     │                                               │  │  │
-     │              ┌────────────────────────────────┴──┴──┴──┐
-     │              │  Bond Contract (atomic):                │
-     │              │  - Check maturity date reached          │
-     │              │  - Verify investor's authwit            │
-     │              │  - Verify issuer's authwit              │
-     │              │  - Burn investor's bonds                │
-     │              │  - Transfer issuer's USDC to investor   │
-     │              │  - Emit nullifiers (consume authwits)   │
-     │              └─────────────────────────────────────────┘
-     │                                               │
-     ▼                                               ▼
- receives USDC                                 bonds redeemed
+┌──────────┐                                       ┌──────────┐
+│ Investor │                                       │  Issuer  │
+│(has bonds)                                       │(has stables)
+└────┬─────┘                                       └────┬─────┘
+     │                                                  │
+     │  1. Create authwit:                              │
+     │     "Bond contract can burn X of my bonds       │
+     │      if I receive Y stables"                    │
+     │──────────────────────────────────────────────────┼──┐
+     │                                                  │  │
+     │       (Investor can cancel anytime               │  │
+     │        before step 4)                            │  │
+     │                                                  │  │
+     │                        2. Issuer sources         │  │
+     │                           liquidity (off-chain)  │  │
+     │                                                  │  │
+     │                        3. Create authwit:        │  │
+     │                           "Bond contract can     │  │
+     │                            transfer my Y stables"│  │
+     │                                                  │──┼──┐
+     │                                                  │  │  │
+     │                        4. settle_redemption()    │  │  │
+     │                                                  │  │  │
+     │              ┌───────────────────────────────────┴──┴──┴──┐
+     │              │  Bond Contract (atomic):                   │
+     │              │  - Check maturity date reached             │
+     │              │  - Verify investor's authwit               │
+     │              │  - Verify issuer's authwit                 │
+     │              │  - Burn investor's bonds                   │
+     │              │  - Transfer issuer's stables to investor   │
+     │              │  - Emit nullifiers (consume authwits)      │
+     │              └────────────────────────────────────────────┘
+     │                                                  │
+     ▼                                                  ▼
+ receives stables                                bonds redeemed
 ```
 
 ### Why 2-Step?
@@ -316,88 +316,39 @@ Message hash: H(consumer_contract, chain_id, version, inner_hash)
 
 This binds authorization to the specific contract, function, arguments, and chain.
 
-### Private Authwit Verification Flow
-
-When a DvP contract calls `bond.transfer_from(Alice, Bob, 100)`:
-
-```
-┌───────────┐         ┌───────────┐         ┌───────────┐         ┌───────────┐
-│   Alice   │         │    DvP    │         │   Bond    │         │  Alice's  │
-│   (PXE)   │         │ Contract  │         │ Contract  │         │  Account  │
-└─────┬─────┘         └─────┬─────┘         └─────┬─────┘         └─────┬─────┘
-      │                     │                     │                     │
-      │ 1. Alice initiates  │                     │                     │
-      │    dvp.execute()    │                     │                     │
-      │────────────────────>│                     │                     │
-      │                     │                     │                     │
-      │                     │ 2. transfer_from    │                     │
-      │                     │    (Alice,Bob,100)  │                     │
-      │                     │────────────────────>│                     │
-      │                     │                     │                     │
-      │                     │                     │ 3. Static call:     │
-      │                     │                     │    verify_authwit   │
-      │                     │                     │────────────────────>│
-      │                     │                     │                     │
-      │                     │                     │         4. Oracle fetches witness
-      │                     │                     │            from Alice's PXE
-      │<────────────────────┼─────────────────────┼─────────────────────│
-      │                     │                     │                     │
-      │ 5. Return witness   │                     │                     │
-      │────────────────────>│─────────────────────┼────────────────────>│
-      │                     │                     │                     │
-      │                     │                     │         6. Validate witness
-      │                     │                     │            matches action hash
-      │                     │                     │                     │
-      │                     │                     │ 7. Return: valid    │
-      │                     │                     │<────────────────────│
-      │                     │                     │                     │
-      │                     │                     │ 8. Execute transfer │
-      │                     │                     │    + emit nullifier │
-      │                     │                     │    (prevents replay)│
-      └─────────────────────┴─────────────────────┴─────────────────────┘
-```
-
-**Key points:**
-
-- Alice must initiate the transaction (her PXE holds the witness and note secrets)
-- Static call to account contract prevents re-entrancy during verification
-- Bond contract (consumer) emits nullifier, not the account contract
-- Nullifier prevents the same authwit from being used twice
-
 ### Atomic Swap Pattern
 
-Both secondary market DvP and redemption use the same pattern:
+Both secondary market DvP and redemption use the same pattern. The party making an offer (Buyer) creates their authwit first, then the counterparty (Seller) accepts by creating theirs and executing the swap:
 
 ```
-┌─────────────┐                              ┌─────────────┐
-│   Party A   │                              │   Party B   │
-│   (has X)   │                              │   (has Y)   │
-└──────┬──────┘                              └──────┬──────┘
-       │                                            │
-       │  1. Create authwit:                        │
-       │     "Swap can transfer my X to B"          │
-       │───────────────────┐                        │
-       │                   ▼                        │
-       │          ┌────────────────┐                │
-       │          │  Swap Contract │                │
-       │          │                │<───────────────│
-       │          │                │  2. Create authwit:
-       │          └───────┬────────┘     "Swap can transfer my Y to A"
-       │                  │                         │
-       │                  │  3. Either party        │
-       │                  │     calls execute()     │
-       │                  ▼                         │
-       │          ┌────────────────┐                │
-       │          │  Atomically:   │                │
-       │          │  - Verify A's authwit           │
-       │          │  - Verify B's authwit           │
-       │          │  - X: A → B (or burn)           │
-       │          │  - Y: B → A                     │
-       │          │  - Emit nullifiers              │
-       │          └────────────────┘                │
-       │                                            │
-       ▼                                            ▼
-   receives Y                                  receives X
+┌──────────────┐                              ┌─────────────┐
+│    Buyer     │                              │   Seller    │
+│(has stables) │                              │ (has Bonds) │
+└──────┬───────┘                              └──────┬──────┘
+       │                                             │
+       │  1. Create authwit (offer):                 │
+       │     "Swap can transfer my stables"          │
+       │────────────────────────────────────────────>│
+       │                                             │
+       │                                             │  2. Create authwit (accept):
+       │                                             │     "Swap can transfer my Bonds"
+       │                                             │
+       │                     ┌────────────────┐      │
+       │                     │  Swap Contract │<─────│
+       │                     └───────┬────────┘      │
+       │                             │         3. Seller calls execute()
+       │                             ▼               │
+       │                     ┌────────────────┐      │
+       │                     │  Atomically:   │      │
+       │                     │  - Verify Buyer's authwit
+       │                     │  - Verify Seller's authwit
+       │                     │  - Stables: Buyer → Seller
+       │                     │  - Bonds: Seller → Buyer
+       │                     │  - Emit nullifiers   │
+       │                     └────────────────┘      │
+       │                             │               │
+       ▼                             │               ▼
+  receives Bonds <───────────────────┴───────> receives Stables
 ```
 
 | Use Case         | Party A  | Party B | Asset X | Asset Y     | X Outcome |
