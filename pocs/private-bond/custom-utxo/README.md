@@ -1,0 +1,298 @@
+# Private Institutional Bond Protocol
+
+> **Status:** Complete
+> **Privacy Primitive:** Confidential transfers via UTXO model with ZK proofs
+
+A zero-coupon bond protocol using zero-knowledge proofs to keep transaction amounts private while maintaining auditability on-chain.
+
+## Overview
+
+This is a proof-of-concept implementation of a privacy-preserving bond protocol. Bondholders can trade and redeem bonds without revealing transaction amounts to the blockchain—only nullifiers and commitments are visible.
+
+### Key features:
+
+- Zero-coupon bonds with maturity enforcement
+- UTXO-based note model for privacy
+- Atomic peer-to-peer trading
+- Redemption at maturity
+- All amounts private; only identities and opaque events visible on-chain
+
+## Repository Structure
+
+#### `/circuits`
+
+Noir ZK circuits implementing the core proving system.
+
+- `src/main.nr` — JoinSplit circuit (2-input, 2-output)
+- Proves: ownership, merkle membership, balance conservation, maturity constraints
+
+#### `/contracts`
+
+Solidity smart contracts for on-chain settlement.
+
+- `src/PrivateBond.sol` — Main contract with `mint`, `atomicSwap`, and `burn` functions
+- `src/Verifier.sol` — HONK proof verifier (generated)
+
+#### `/wallet`
+
+Rust CLI emulating the full user flow.
+
+- Generate bonds (onboarding)
+- Trade bonds (atomicSwap)
+- Redeem at maturity (burn)
+- Query bond state and merkle proofs
+
+#### `/SPEC.md`
+
+Full specification covering cryptography, protocol flow, security assumptions, and privacy analysis.
+
+## How It Works: UTXO Model
+
+`Notes` are like coins. Each note contains:
+
+- `value`: amount of the note
+- `owner`: shielded public key derived from user seed
+- `salt`: random number used for uniqueness
+- `maturityDate`: maturity date of the bond
+- `assetId`: ID of the asset of the note
+
+#### Note Commitment
+
+`Commitment = Hash(value, salt, owner, assetId, maturityDate)`
+
+#### Note storage
+
+All commitments are stored in a merkle tree on-chain. Proves membership without revealing which specific commitments you own.
+
+### Nullify a note to avoid double spending
+
+`Nullifier = Hash(salt, private_key)`
+When you spend a note, you publish its nullifier to prevent double-spending. No one can link the nullifier back to the note.
+
+#### Transactions
+
+- **Onboarding**: User creates a note and commits it to the merkle tree
+- **Trading**: User combines 2 notes (100 + 60) into 2 new ones (60 + 40), proving balance conservation
+- **Redemption**: At maturity, user burns a note to redeem cash, proving they own it via ZK
+
+All values stay private. Only hashes, nullifiers, and transaction confirmations are visible on-chain.
+
+## Cryptographic Assumptions
+
+- **BN254 Elliptic Curve**: Discrete log is hard
+- **Poseidon Hash**: Collision-resistant, algebraically efficient for ZK circuits
+- **X25519**: Secure ECDH key exchange for memo encryption
+- **ChaCha20-Poly1305**: Authenticated encryption for memos
+
+## Threat Model
+
+- **Trusted Issuer**: Issuer acts as relayer and has visibility into all trades (for regulatory compliance)
+- **On-chain Privacy**: External observers cannot determine amounts or link notes
+- **Regulatory Access**: Issuer can decrypt memos and provide audit trails
+- **No Frontrunning Protection**: Issuer controls transaction ordering (acceptable in regulated context)
+
+## Getting Started
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (for wallet CLI)
+- [Foundry](https://book.getfoundry.sh/getting-started/installation) (for contracts)
+- [Noir](https://noir-lang.org/docs/getting_started/installation/) (for circuits)
+- [Barretenberg](https://github.com/AztecProtocol/aztec-packages/tree/master/barretenberg) (`bb` CLI for proof generation)
+
+### Clone & Setup
+
+```bash
+# Initialize git submodules (required for Foundry dependencies)
+git submodule update --init --recursive
+```
+
+### Build Everything
+
+```bash
+# 1. Build and test contracts
+cd contracts
+forge build
+forge test
+
+# 2. Build circuits
+cd ../circuits
+nargo build
+
+# 3. Build wallet CLI
+cd ../wallet
+cargo build --release
+```
+
+## Demo: Full Bond Lifecycle
+
+This walkthrough demonstrates the complete flow: issuance → purchase → P2P trade → redemption.
+
+### Terminal 1: Start Local Blockchain
+
+```bash
+cd contracts
+anvil --disable-code-size-limit
+```
+
+Keep this running. Note the first private key displayed.
+
+### Terminal 2: Deploy Contract
+
+```bash
+cd contracts
+forge script script/PrivateBond.s.sol --rpc-url http://localhost:8545 --broadcast --private-key <PRIVATE_KEY>
+```
+
+Note the deployed `PrivateBond` address and update `wallet/src/config.rs` if different.
+
+### Step 1: Issuer Creates Bond Tranche
+
+```bash
+cd wallet
+
+# Issuer onboards with 1000 units
+./target/release/wallet --wallet issuer onboard
+```
+
+This will:
+
+- Generate issuer's shielded keys
+- Create initial bond note (value=1000, maturity=1 year)
+- Mint commitment on-chain
+- Save bond to `data/issuer_bond_*.json`
+
+### Step 2: Alice Registers & Buys Bonds
+
+```bash
+# Alice registers (creates wallet, no bonds yet)
+./target/release/wallet --wallet alice register
+
+# Alice buys 300 units from issuer
+./target/release/wallet --wallet alice buy \
+  --value 300 \
+  --source-note data/issuer_bond_*.json \
+  --issuer-wallet issuer
+```
+
+This will:
+
+- Generate ZK proof (JoinSplit: 1000 → 300 + 700)
+- Call `transfer()` on contract
+- Save Alice's bond to `data/bond_alice_*.json`
+- Save issuer's change note (700 units)
+
+### Step 3: Bob Registers & Trades with Alice
+
+```bash
+# Bob registers
+./target/release/wallet --wallet bob register
+
+# For trade demo, Bob needs a bond first. Buy from issuer's change:
+./target/release/wallet --wallet bob buy \
+  --value 200 \
+  --source-note data/issuer_change_*.json \
+  --issuer-wallet issuer
+
+# Now Alice and Bob can swap their bonds atomically
+./target/release/wallet trade \
+  --wallet-a alice \
+  --bond-a data/bond_alice_*.json \
+  --wallet-b bob \
+  --bond-b data/bond_bob_*.json
+```
+
+This will:
+
+- Generate 2 ZK proofs (one per party)
+- Call `atomicSwap()` with both proofs
+- Save new bonds for each party
+- Create encrypted memos
+
+### Step 4: Bob Redeems at Maturity
+
+For testing, you can warp anvil's time:
+
+```bash
+# In anvil terminal, or use cast:
+cast rpc evm_increaseTime 31536000  # +1 year
+cast rpc evm_mine
+```
+
+Then redeem:
+
+```bash
+./target/release/wallet --wallet bob redeem \
+  --bond data/bond_bob_*.json
+```
+
+This will:
+
+- Verify bond is at maturity
+- Generate burn proof (outputs sum to 0)
+- Call `burn()` on contract
+- Mark bond as redeemed
+
+### Utility Commands
+
+```bash
+# View bond details
+./target/release/wallet info --bond data/bond_alice_*.json
+
+# Scan for encrypted memos sent to you
+./target/release/wallet --wallet alice scan
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         Wallet CLI                          │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────┐ │
+│  │ Onboard │  │   Buy   │  │  Trade  │  │     Redeem      │ │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────────┬────────┘ │
+│       │            │            │                │          │
+│       ▼            ▼            ▼                ▼          │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              ZK Proof Generation (Noir)              │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Smart Contract (Solidity)                │
+│  ┌────────┐  ┌──────────┐  ┌────────────┐  ┌─────────────┐  │
+│  │  mint  │  │ transfer │  │ atomicSwap │  │    burn     │  │
+│  └────────┘  └──────────┘  └────────────┘  └─────────────┘  │
+│                                                             │
+│  State: commitments[], nullifiers{}, knownRoots{}           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## POC Implementation Notes
+
+This repository is a proof-of-concept. The following simplifications were made:
+
+| Spec                                          | POC Implementation                  | Rationale                           |
+| --------------------------------------------- | ----------------------------------- | ----------------------------------- |
+| Merkle tree height 16                         | Height 3 (8 leaves max)             | Faster proof generation for demos   |
+| Whitelist `mapping(address => bool)`          | `onlyOwner` modifier                | Single issuer is sufficient for POC |
+| Deterministic salt `Poseidon(privkey, index)` | Random salt `rand::random()`        | Simpler, no index tracking needed   |
+| Memos stored on-chain                         | Memos stored locally (`data/*.bin`) | Avoids on-chain storage costs       |
+| Client-side memo encryption                   | Relayer encrypts memos              | Trusted relayer model for POC       |
+| 254-bit salt (Field element)                  | 64-bit salt (`u64`)                 | Simpler serialization for POC       |
+| Swap binder hash in circuit                   | No cryptographic binding            | Trusted relayer assumed for POC     |
+
+### Known Limitations
+
+- **Tree capacity**: Only 8 notes max (height 3). Production would use height 16-32.
+- **No KYC whitelist**: Any address with contract owner privkey can transact.
+- **Trusted relayer for memos**: Relayer has access to both parties' keys during trade. Production would require client-side encryption before submission.
+- **Single asset type**: All notes share same `assetId`. Multi-asset would require per-asset trees or asset binding in commitments.
+- **Weak salt entropy**: Salt is 64-bit (`u64`), which is theoretically brute-forceable. Production should use 254-bit Field elements.
+- **Issuer knows all secrets**: Issuer generates notes and knows salts, enabling deanonymization. Production should have users generate commitments locally first.
+- **No swap binding**: Atomic swaps lack cryptographic binding between proofs. A malicious relayer could mix-match. Production should add `binder_hash` constraint.
+
+## License
+
+MIT
