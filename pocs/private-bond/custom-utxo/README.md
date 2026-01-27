@@ -100,6 +100,13 @@ All values stay private. Only hashes, nullifiers, and transaction confirmations 
 - [Noir](https://noir-lang.org/docs/getting_started/installation/) (for circuits)
 - [Barretenberg](https://github.com/AztecProtocol/aztec-packages/tree/master/barretenberg) (`bb` CLI for proof generation)
 
+### Clone & Setup
+
+```bash
+# Initialize git submodules (required for Foundry dependencies)
+git submodule update --init --recursive
+```
+
 ### Build Everything
 
 ```bash

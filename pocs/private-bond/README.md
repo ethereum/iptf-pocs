@@ -9,10 +9,10 @@ This PoC demonstrates a privacy-preserving zero-coupon bond protocol. Bondholder
 
 Two implementation approaches are provided:
 
-| Approach | Description | Location |
-|----------|-------------|----------|
+| Approach        | Description                       | Location                       |
+| --------------- | --------------------------------- | ------------------------------ |
 | **Custom UTXO** | Privacy built from scratch on EVM | [custom-utxo/](./custom-utxo/) |
-| **Privacy L2** | Native privacy on Aztec network | [privacy-l2/](./privacy-l2/) |
+| **Privacy L2**  | Native privacy on Aztec network   | [privacy-l2/](./privacy-l2/)   |
 
 ## Requirements
 
@@ -25,14 +25,14 @@ See [REQUIREMENTS.md](./REQUIREMENTS.md) for the shared requirements both approa
 
 ## Comparison
 
-| Aspect | Custom UTXO | Privacy L2 |
-|--------|-------------|------------|
-| Deployment | Ethereum mainnet | Aztec L2 |
-| Code complexity | ~1000+ lines across 3 components | ~200 lines single contract |
-| Trusted relayer | Required (issuer) | Not required |
-| Composability | Isolated system | Native cross-contract |
-| Client requirements | Light (relayer handles proofs) | Heavy (PXE for local proving) |
-| Throughput | High (relayer batching) | Bound by sequencer |
+| Aspect              | Custom UTXO                      | Privacy L2                    |
+| ------------------- | -------------------------------- | ----------------------------- |
+| Deployment          | Ethereum mainnet                 | Aztec L2                      |
+| Code complexity     | ~1000+ lines across 3 components | ~200 lines single contract    |
+| Trusted relayer     | Required (issuer)                | Not required                  |
+| Composability       | Isolated system                  | Native cross-contract         |
+| Client requirements | Light (relayer handles proofs)   | Heavy (PXE for local proving) |
+| Throughput          | High (relayer batching)          | Bound by sequencer            |
 
 ## Quick Start
 
