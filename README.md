@@ -8,21 +8,27 @@ Proof of concept implementations for [IPTF](https://iptf.ethereum.org).
 
 ```
 pocs/
-  [project-name]/     # Self-contained PoC with own build system
-    REQUIREMENTS.md   # Actionable requirements from use case + approach
-    SPEC.md           # Protocol specification (main deliverable)
-    README.md         # Build/run instructions, limitations
-    CHANGELOG.md      # Version history
-    ...
+  [project-name]/       # Self-contained PoC
+    REQUIREMENTS.md     # Actionable requirements from use case + approach
+    SPEC.md             # Protocol specification (main deliverable)
+    README.md           # Build/run instructions, limitations
+    [approach-1]/       # For multi-approach PoCs
+      SPEC.md
+      README.md
+    [approach-2]/
+      ...
 docs/
-  CONTRIBUTING.md     # PR guidelines
+  CONTRIBUTING.md       # PR guidelines
+CHANGELOG.md            # Repository-wide change history
 ```
 
-Each PoC is independent—own language, tooling, and CI pipeline. No shared dependencies between projects.
+Each PoC is independent—own language and tooling. No shared dependencies between projects.
 
 ## PoCs
 
-*None yet. See [pocs/_template](pocs/_template) for the starter template.*
+| Name | Privacy Primitive | Status |
+|------|-------------------|--------|
+| [private-bond](./pocs/private-bond/) | Confidential bond transfers | In Progress |
 
 ## Contributing
 
