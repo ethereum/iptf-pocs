@@ -47,8 +47,31 @@ Required files:
   - Cryptographic assumptions and threat model
   - Build and run instructions
   - Known limitations and shortcuts taken
-- `CHANGELOG.md` for tracking changes
-- CI workflow in `.github/workflows/[project-name].yml`
+
+A single `CHANGELOG.md` at the repository root tracks changes across all PoCs.
+
+### Multi-Approach PoCs
+
+When a use case can be solved with fundamentally different technical approaches (e.g., different cryptographic constructions or deployment targets), structure the PoC as follows:
+
+```
+pocs/[project-name]/
+├── README.md           # Overview comparing approaches
+├── REQUIREMENTS.md     # Shared requirements (approach-agnostic)
+├── [approach-1]/
+│   ├── README.md       # Approach-specific instructions
+│   └── SPEC.md         # Approach-specific protocol design
+└── [approach-2]/
+    ├── README.md
+    └── SPEC.md
+```
+
+This pattern is appropriate when:
+- Approaches have different cryptographic assumptions
+- Approaches target different deployment environments
+- The same requirements can be satisfied with distinct constructions
+
+The shared `REQUIREMENTS.md` captures what needs to be achieved; each approach's `SPEC.md` describes how.
 
 ## Methodology
 
@@ -73,7 +96,6 @@ Each PoC starts from an [iptf-map use case](https://github.com/ethereum/iptf-map
 Each PoC should be self-contained:
 
 - Own build system and dependencies
-- Own CI pipeline (path-filtered)
 - No cross-PoC imports or shared code (unless explicitly extracted to a shared library)
 - Language/tooling choices independent of other PoCs
 
@@ -82,3 +104,7 @@ This ensures:
 - Easy extraction if a PoC graduates to its own repo
 - No cascading breakage across unrelated projects
 - Clear ownership and maintenance boundaries
+
+## CI/CD
+
+General CI workflows live in `.github/workflows/` and validate repository-wide concerns like PoC structure. Since these are proofs of concept focused on specifications rather than production code, per-PoC test pipelines are not required.
