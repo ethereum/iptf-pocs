@@ -1,10 +1,10 @@
 ---
-title: "DIY Prividium Requirements"
+title: "DIY Validium Requirements"
 use_case: "Private institutional payments"
 approach: "Validium with ZK proofs"
 ---
 
-# DIY Prividium Requirements
+# DIY Validium Requirements
 
 ## 1. Core Problem
 

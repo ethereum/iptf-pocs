@@ -1,18 +1,30 @@
-# DIY Prividium
+# DIY Validium
 
 > **Status:** Draft
-> **Privacy Primitive:** Private balances and transfers with ZK proofs
+> **Privacy Primitive:** Ethereum security with database privacy
 
 ## Overview
 
-DIY Prividium demonstrates a privacy-preserving payment system built in phases:
+Institutions want blockchain guarantees (immutability, settlement finality) without blockchain transparency (competitors seeing volumes, positions, counterparties).
+
+**The pattern:** Keep data in your database, post only roots + ZK proofs on-chain.
+
+### Use Cases
+
+- **Private stablecoins** - Hide holder balances and transfer amounts
+- **Tokenized securities** - Keep positions and trade details confidential
+- **Cross-institution settlement** - Bilateral netting without exposing positions
+
+### How It Works
+
+This PoC demonstrates the pattern in phases:
 
 1. **Allowlist Membership** - Prove you're on an approved list without revealing your identity
 2. **Private Balances** - Prove you have sufficient balance without revealing the amount
 3. **Private Transfers** - Transfer value privately between accounts
 4. **Tokenization** - Bridge between private balances and on-chain ERC20 tokens
 
-This is a Validium-style architecture: account data lives off-chain (SQLite), validity proofs live on-chain (Ethereum/Sepolia).
+Architecture: Account data lives off-chain (SQLite), validity proofs live on-chain (Ethereum/Sepolia).
 
 ## Cryptographic Assumptions
 
@@ -95,7 +107,7 @@ cd contracts && forge test
 ## Project Structure
 
 ```
-diy-prividium/
+diy-validium/
 ├── README.md           # This file
 ├── REQUIREMENTS.md     # Formal requirements
 ├── SPEC.md             # Protocol specification

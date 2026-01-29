@@ -1,6 +1,6 @@
-# DIY Prividium PoC - Implementation Plan
+# DIY Validium PoC - Implementation Plan
 
-Location: `iptf-pocs/pocs/diy-prividium/`
+Location: `iptf-pocs/pocs/diy-validium/`
 
 ## Vision
 
@@ -236,7 +236,7 @@ let receipt = prover.prove(guest_code, (account, proof, required_amount))?;
 ## File Structure
 
 ```
-iptf-pocs/pocs/diy-prividium/
+iptf-pocs/pocs/diy-validium/
 ├── README.md               # Overview and instructions
 ├── REQUIREMENTS.md         # Formal requirements
 ├── SPEC.md                 # Protocol specification
@@ -275,7 +275,7 @@ iptf-pocs/pocs/diy-prividium/
 
 1. **Local proof generation**
    ```bash
-   cd iptf-pocs/pocs/diy-prividium
+   cd iptf-pocs/pocs/diy-validium
    cargo run --release -- prove-membership
    ```
 

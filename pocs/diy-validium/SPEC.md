@@ -1,5 +1,5 @@
 ---
-title: "DIY Prividium"
+title: "DIY Validium"
 status: Draft
 version: 0.1.0
 authors: []
@@ -8,16 +8,28 @@ iptf_use_case: "Private institutional payments"
 iptf_approach: "Validium with ZK proofs"
 ---
 
-# DIY Prividium: Protocol Specification
+# DIY Validium: Protocol Specification
 
 ## Problem Statement
 
-Financial institutions need to transact on Ethereum while maintaining confidentiality of balances and transaction details. Public blockchains expose all state to observers, making them unsuitable for sensitive financial operations without a privacy layer.
+Institutions want blockchain guarantees—immutability, settlement finality, auditability—without blockchain transparency. Competitors shouldn't see your volumes, positions, or counterparties.
+
+The pattern: **Keep data in your database, post only roots + ZK proofs on-chain.**
+
+This gives you Ethereum's security guarantees while keeping sensitive data private.
+
+### Use Cases
+
+| Use Case | What's Private | What's On-Chain |
+|----------|---------------|-----------------|
+| **Private Stablecoins** | Holder balances, transfer amounts | Total supply, validity proofs |
+| **Tokenized Securities** | Positions, trade details | Settlement finality, compliance attestations |
+| **Cross-Institution Settlement** | Bilateral positions, netting details | Net settlement amounts, proof of correct computation |
 
 ### Constraints
 
-- **Privacy**: Balances and transfer amounts must remain confidential
-- **Regulatory**: System must be auditable (future: viewing keys)
+- **Privacy**: Balances and transfer amounts must remain confidential from public observers
+- **Regulatory**: System must be auditable (future: viewing keys for selective disclosure)
 - **Operational**: Must integrate with existing Ethereum tooling
 - **Trust**: Minimize trust assumptions while acknowledging PoC limitations
 
@@ -107,7 +119,7 @@ nullifier = SHA256(secret_key || "nullifier_domain")
 ### On-Chain State
 
 ```solidity
-contract PrividiumVerifier {
+contract ValidiumVerifier {
     bytes32 public stateRoot;
     mapping(bytes32 => bool) public nullifiers;
     address public operator;
@@ -457,7 +469,7 @@ User                    Contract                 Operator
 ### Contract: Bridge
 
 ```solidity
-contract PrividiumBridge {
+contract ValidiumBridge {
     IERC20 public token;
     bytes32 public stateRoot;
     mapping(bytes32 => bool) public nullifiers;
