@@ -237,8 +237,9 @@ contract ConfidentialBond is ZamaEthereumConfig {
         bytes calldata inputProof
     ) external onlyWhitelisted(from) onlyWhitelisted(to) returns (bool) {
         euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
-        _spendAllowance(from, msg.sender, amount);
-        _transfer(from, to, amount);
+        // _updateAllowance returns combined check: allowance AND balance sufficient
+        ebool isTransferable = _updateAllowance(from, msg.sender, amount);
+        _transferWithCheck(from, to, amount, isTransferable);
         return true;
     }
 
@@ -276,16 +277,23 @@ contract ConfidentialBond is ZamaEthereumConfig {
     // ============ Internal Functions ============
 
     /**
-     * @dev Execute encrypted transfer with balance check
+     * @dev Execute encrypted transfer with balance check (for direct transfers)
      * Uses FHE.select pattern to avoid revealing insufficient balance via revert
      */
     function _transfer(address from, address to, euint64 amount) internal {
         // Check sufficient balance (encrypted comparison)
         ebool hasEnough = FHE.le(amount, _balances[from]);
+        _transferWithCheck(from, to, amount, hasEnough);
+    }
 
-        // Conditional transfer: if insufficient, amount becomes 0
+    /**
+     * @dev Execute encrypted transfer with pre-computed transferability check
+     * Used by transferFrom where allowance check is combined with balance check
+     */
+    function _transferWithCheck(address from, address to, euint64 amount, ebool isTransferable) internal {
+        // Conditional transfer: if check fails, amount becomes 0
         // This preserves privacy - observers can't tell if transfer "failed"
-        euint64 transferAmount = FHE.select(hasEnough, amount, FHE.asEuint64(0));
+        euint64 transferAmount = FHE.select(isTransferable, amount, FHE.asEuint64(0));
 
         // Update balances (encrypted arithmetic)
         _balances[from] = FHE.sub(_balances[from], transferAmount);
@@ -315,24 +323,34 @@ contract ConfidentialBond is ZamaEthereumConfig {
     }
 
     /**
-     * @dev Spend allowance with encrypted comparison
-     * Uses same FHE.select pattern for privacy
+     * @dev Update allowance and return combined transferability check
+     * Returns ebool that is true only if BOTH allowance AND balance are sufficient
+     * This ensures transferFrom fails silently when either condition is not met
      */
-    function _spendAllowance(address _owner, address spender, euint64 amount) internal {
+    function _updateAllowance(address _owner, address spender, euint64 amount) internal returns (ebool) {
         euint64 currentAllowance = _allowances[_owner][spender];
 
         // Check sufficient allowance
-        ebool hasEnough = FHE.le(amount, currentAllowance);
+        ebool allowedTransfer = FHE.le(amount, currentAllowance);
 
-        // If insufficient allowance, effective spend becomes 0
-        euint64 spendAmount = FHE.select(hasEnough, amount, FHE.asEuint64(0));
+        // Check sufficient balance
+        ebool canTransfer = FHE.le(amount, _balances[_owner]);
 
-        // Decrease allowance
-        _allowances[_owner][spender] = FHE.sub(currentAllowance, spendAmount);
+        // Combined check: both conditions must be true
+        ebool isTransferable = FHE.and(canTransfer, allowedTransfer);
+
+        // Conditionally update allowance (only if transferable)
+        _allowances[_owner][spender] = FHE.select(
+            isTransferable,
+            FHE.sub(currentAllowance, amount),
+            currentAllowance
+        );
 
         // Update ACL
         FHE.allow(_allowances[_owner][spender], _owner);
         FHE.allow(_allowances[_owner][spender], spender);
         FHE.allowThis(_allowances[_owner][spender]);
+
+        return isTransferable;
     }
 }

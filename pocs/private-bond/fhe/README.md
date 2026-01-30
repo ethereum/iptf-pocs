@@ -97,23 +97,78 @@ interface IConfidentialBond {
 
 The fhEVM Hardhat plugin supports multiple runtime environments:
 
-| Mode | Encryption | Speed | Use Case |
-|------|------------|-------|----------|
-| `hardhat` | Mock | Fast | Unit tests, CI, rapid iteration |
-| `hardhat node` | Mock | Fast | Integration testing with persistence |
-| `sepolia` | Real | Slow | Production-like validation |
+| Mode | Command | Encryption | Speed | Use Case |
+|------|---------|------------|-------|----------|
+| Mock (Hardhat) | `npm test` | Simulated | Fast (seconds) | Development, CI |
+| Sepolia | `npm run test:sepolia` | Real FHE | Slow (minutes) | Production validation |
 
 ### Running Tests
 
 ```bash
-# Mock mode (default) - fast, no real encryption
+# Mock mode (default) - fast, simulated encryption
 npm run test
 
-# Sepolia mode - real FHE, requires configuration
-npx hardhat vars set MNEMONIC
-npx hardhat vars set INFURA_API_KEY
+# Sepolia mode - real FHE (see below for setup)
 npm run test:sepolia
 ```
+
+## Testing on Sepolia (Real FHE)
+
+Running tests on Sepolia executes real FHE operations using [Zama's coprocessor](https://www.zama.org/post/fhevm-coprocessor). This validates that the protocol works with actual homomorphic encryption, not just simulated operations.
+
+### Prerequisites
+
+1. **Sepolia ETH**: Get testnet ETH from a faucet:
+   - [Alchemy Sepolia Faucet](https://sepoliafaucet.com)
+   - [Infura Sepolia Faucet](https://www.infura.io/faucet/sepolia)
+
+2. **Infura Account**: Create a free account at [infura.io](https://infura.io) and get an API key.
+
+### Setup
+
+Set your credentials using Hardhat's secure variable storage:
+
+```bash
+# Set your wallet private key (never commit this!)
+npx hardhat vars set PRIVATE_KEY
+
+# Set your Infura API key
+npx hardhat vars set INFURA_API_KEY
+```
+
+Verify configuration:
+
+```bash
+npx hardhat vars list
+```
+
+### Running Sepolia Tests
+
+```bash
+# Run all tests (takes 5-10 minutes)
+npm run test:sepolia
+
+# Run a single test (recommended for development)
+npx hardhat test --network sepolia --grep "should set the correct owner"
+```
+
+### Important Notes
+
+| Consideration | Details |
+|---------------|---------|
+| **Gas Costs** | FHE operations are expensive. Ensure wallet has at least 0.5 Sepolia ETH |
+| **Time** | Full test suite takes 5-10 minutes due to real encryption operations |
+| **Confirmations** | Tests wait for transaction confirmations on Sepolia |
+| **Time Manipulation** | Some redemption tests are skipped on Sepolia (can't fast-forward time on live network) |
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| "insufficient funds" | Get more Sepolia ETH from faucet |
+| "timeout exceeded" | Tests have 10-minute timeout; retry or run single tests |
+| "nonce too low" | Wait for pending transactions to confirm |
+| "gas estimation failed" | Increase gas limit in hardhat.config.ts |
 
 ## Test Coverage
 
@@ -137,7 +192,7 @@ The test suite covers:
 
 4. **Silent Failures**: The `FHE.select` pattern means insufficient balance transfers "succeed" with zero effect (for privacy). Applications should verify balance changes.
 
-5. **Mock Mode Limitations**: The fhEVM mock framework has issues with Hardhat's `loadFixture` when tests perform complex state reverts. Some edge case tests may fail in mock mode but pass on Sepolia with real encryption.
+5. **Time-Dependent Tests**: Redemption tests that require time manipulation (fast-forwarding to maturity) only run in mock mode since live networks can't manipulate time.
 
 ## Security Disclaimer
 

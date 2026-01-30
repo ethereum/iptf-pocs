@@ -12,7 +12,7 @@ iptf_approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/appr
 
 ## Overview
 
-This protocol implements confidential institutional bonds using Zama's fhEVM - a framework that enables Fully Homomorphic Encryption (FHE) on EVM-compatible chains. Unlike ZK-based approaches (Custom UTXO, Aztec) where computations happen off-chain and are verified on-chain, FHE allows **computations directly on encrypted data on-chain**.
+This protocol implements confidential institutional bonds using Zama's fhEVM - a framework that enables Fully Homomorphic Encryption (FHE) on EVM-compatible chains. Unlike private UTXO approaches where users generate ZK proofs locally, FHE allows **computations on encrypted data** with computation delegated to off-chain coprocessors while encrypted state remains on-chain.
 
 Key characteristics:
 
@@ -26,15 +26,19 @@ The contract implements: bond lifecycle (issuance, transfer, redemption), whitel
 
 ## FHE vs ZK: Architectural Comparison
 
-| Aspect | ZK (Custom UTXO / Aztec) | FHE (Zama fhEVM) |
-|--------|--------------------------|------------------|
+| Aspect | Private UTXO with ZK | FHE (Zama fhEVM) |
+|--------|----------------------|------------------|
 | State model | UTXO (notes, nullifiers) | Account-based (balances) |
 | Privacy mechanism | Prove without revealing | Compute on encrypted data |
-| Where computation happens | Off-chain (prover) | On-chain (encrypted ops) |
+| Where computation happens | Off-chain (prover) | Off-chain (coprocessor) with on-chain encrypted state |
 | Double-spend prevention | Nullifiers | Encrypted balance checks |
-| Developer experience | New paradigm (notes, proofs) | Familiar (ERC20-like) |
-| Client requirements | Local proving (heavy) | Standard wallet + decrypt requests |
+| Developer experience | New paradigm with DSLs (circuits, notes) | Familiar (ERC20-like)* |
+| Client requirements | Local proving (compute-heavy) | Standard wallet + network decryption† |
 | Trust model | Cryptographic only | Threshold network operators |
+
+*Solidity with FHE library, but debugging encrypted state is non-trivial.
+
+†**Vendor dependency consideration**: Decryption requires Zama's threshold network. Institutions face a choice: (a) rely on Zama's hosted infrastructure (potential vendor lock-in), or (b) operate their own threshold network nodes (significant operational cost, unclear feasibility for single institutions). This differs from ZK approaches where users hold their own decryption keys.
 
 ## Identity & Access Model
 

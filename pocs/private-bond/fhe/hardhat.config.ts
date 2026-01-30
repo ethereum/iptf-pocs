@@ -32,7 +32,13 @@ const config: HardhatUserConfig = {
       chainId: 11155111,
       url: `https://sepolia.infura.io/v3/${INFURA_API_KEY}`,
       accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
+      gas: 5_000_000,
+      gasPrice: "auto",
+      timeout: 300000,
     },
+  },
+  mocha: {
+    timeout: 600000,
   },
   gasReporter: {
     enabled: process.env.REPORT_GAS !== undefined,
