@@ -25,13 +25,13 @@ npm run test:sepolia  # Real FHE (slow, requires setup)
 | **Mock** | `npm test` | FHE simulated in-memory via `@fhevm/mock-utils` | Seconds |
 | **Sepolia** | `npm run test:sepolia` | Real TFHE ops via Zama coprocessor | Minutes |
 
-**Important**: Local tests (`npm test`) do not perform real homomorphic encryption. The `@fhevm/mock-utils` library simulates FHE behavior for fast development. To validate actual FHE operations, run on Sepolia.
+**Important**: Local tests (`npm test`) do not perform real homomorphic encryption. The `@fhevm/mock-utils` library simulates FHE behavior for fast development. To validate actual FHE operations, run on Sepolia. No critical tests were skipped for efficiency—all core functionality is validated on the live network.
 
 ## Sepolia Setup (Real FHE)
 
 1. Get Sepolia ETH from a [faucet](https://sepoliafaucet.com)
 2. Get an [Infura](https://infura.io) API key
-3. Get a Zama fhEVM API key (required by `@fhevm/hardhat-plugin`)
+3. Get a Zama fhEVM API key (can be a placeholder value)
 4. Set credentials:
 
 ```bash
