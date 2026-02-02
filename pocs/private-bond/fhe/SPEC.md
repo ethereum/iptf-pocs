@@ -46,9 +46,18 @@ In fhEVM, encrypted values (`euint64`, `ebool`) are useless without decryption r
 
 **Ciphertext handles change on every operation**: When a balance is updated (e.g., `_balances[to] = FHE.add(...)`), a new ciphertext handle is created. Previous permissions do not apply to the new handle - the contract must call `FHE.allow` again after each mutation.
 
+## Bond Identifier
+
+Each bond contract includes a public `bondId` (bytes32) for reconciliation with off-chain systems. This identifier can be:
+
+- **ISIN/CUSIP hash**: `keccak256(abi.encodePacked("US0378331005"))` for standard securities identifiers
+- **BDT hash**: `keccak256(abi.encode(bdtData))` where `bdtData` follows the [ICMA Bond Data Taxonomy](https://github.com/ethereum/iptf-map/blob/master/patterns/pattern-icma-bdt-data-model.md)
+
+The `bondId` is public and immutable, enabling external systems (custodians, CSDs, regulators) to match on-chain contracts to off-chain bond records.
+
 ## Primary Market: Issuance
 
-The issuer deploys the contract with bond parameters (total supply, maturity date), receiving the full supply as an encrypted balance.
+The issuer deploys the contract with bond parameters (bond identifier, total supply, maturity date), receiving the full supply as an encrypted balance.
 
 **Distribution Flow:**
 

@@ -32,6 +32,15 @@ The Shielded Identity enables proof generation and memo encryption without revea
 
 **Access Control**: Contract maintains whitelist `mapping(address => whitelisted)`. Only whitelisted ECDSA addresses can submit proofs.
 
+## Bond Identifier
+
+Each bond contract includes a public `bondId` (bytes32) for reconciliation with off-chain systems. This identifier can be:
+
+- **ISIN/CUSIP hash**: `keccak256(abi.encodePacked("US0378331005"))` for standard securities identifiers
+- **BDT hash**: `keccak256(abi.encode(bdtData))` where `bdtData` follows the [ICMA Bond Data Taxonomy](https://github.com/ethereum/iptf-map/blob/master/patterns/pattern-icma-bdt-data-model.md)
+
+The `bondId` is public and immutable, enabling external systems (custodians, CSDs, regulators) to match on-chain contracts to off-chain bond records.
+
 ## Primary Market: Issuance
 
 Issuer creates a single Global Note representing the entire bond tranche. This note exists in the shielded pool and is distributed on-demand via standard `JoinSplit` transactions:

@@ -24,6 +24,10 @@ contract ConfidentialBond is ZamaEthereumConfig {
     /// @notice Bond issuer address with admin privileges
     address public owner;
 
+    /// @notice Bond identifier for reconciliation (ISIN hash, CUSIP, or BDT hash)
+    /// @dev Can be keccak256(abi.encode(bdtData)) or padded ISIN/CUSIP
+    bytes32 public bondId;
+
     /// @notice KYC-approved addresses that can hold/transfer bonds
     mapping(address => bool) public whitelist;
 
@@ -89,11 +93,13 @@ contract ConfidentialBond is ZamaEthereumConfig {
 
     /**
      * @notice Deploy a new confidential bond
+     * @param _bondId Bond identifier (ISIN hash, CUSIP, or BDT hash) for reconciliation
      * @param _totalSupply Total bonds to issue (assigned to deployer)
      * @param _maturityDate Unix timestamp for redemption eligibility
      */
-    constructor(uint64 _totalSupply, uint64 _maturityDate) {
+    constructor(bytes32 _bondId, uint64 _totalSupply, uint64 _maturityDate) {
         owner = msg.sender;
+        bondId = _bondId;
         totalSupply = _totalSupply;
         maturityDate = _maturityDate;
 

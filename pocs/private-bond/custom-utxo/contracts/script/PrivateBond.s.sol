@@ -10,18 +10,22 @@ contract PrivateBondScript is Script {
     PrivateBond public privateBond;
     address public owner;
 
+    // Bond identifier - set via environment or hardcode for testing
+    // Can be keccak256(ISIN), keccak256(CUSIP), or keccak256(BDT_data)
+    bytes32 public bondId = keccak256("US0378331005"); // Example ISIN hash
+
     function setUp() public {}
 
     function run() public {
         vm.startBroadcast();
 
         owner = msg.sender;
-        
+
         verifier = new HonkVerifier();
-        privateBond = new PrivateBond(address(verifier), owner);
+        privateBond = new PrivateBond(bondId, address(verifier), owner);
 
         vm.stopBroadcast();
-        
+
         require(address(privateBond) != address(0), "PrivateBond deployment failed");
     }
 }
