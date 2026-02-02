@@ -104,7 +104,7 @@ impl Note {
 
         // 5. Encrypt with ChaCha20-Poly1305
         let cipher = ChaCha20Poly1305::new(key.into());
-        let nonce = Nonce::from_slice(&[0u8; 12]); // Safe with ephemeral keys (unique per message)
+        let nonce = Nonce::from_slice(&[0u8; 12]); // Static nonce is safe: ephemeral key ensures unique (key, nonce) pair
         let ciphertext = cipher
             .encrypt(nonce, note_bytes.as_ref())
             .map_err(|e| format!("Encryption failed: {}", e))?;
@@ -132,7 +132,7 @@ impl Note {
 
         // 3. Decrypt with ChaCha20-Poly1305
         let cipher = ChaCha20Poly1305::new(key.into());
-        let nonce = Nonce::from_slice(&[0u8; 12]); // Same nonce used in encryption
+        let nonce = Nonce::from_slice(&[0u8; 12]); // Static zero nonce (see SPEC.md)
         let plaintext = cipher
             .decrypt(nonce, memo.ciphertext.as_ref())
             .map_err(|e| format!("Decryption failed: {}", e))?;
