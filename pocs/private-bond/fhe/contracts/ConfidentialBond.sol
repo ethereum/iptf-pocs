@@ -6,7 +6,7 @@ import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
 /**
  * @title ConfidentialBond
- * @notice A confidential zero-coupon bond using Zama fhEVM
+ * @notice A confidential zero-coupon bond using Zama fhEVM. Each unit denotes a fractional interest in the bond.
  * @dev Implements ERC20-like interface with encrypted balances and amounts
  *
  * Privacy model:
