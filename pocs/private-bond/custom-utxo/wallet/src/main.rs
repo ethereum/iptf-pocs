@@ -376,13 +376,6 @@ async fn buy(
     let input_nullifier_fr = issuer_wallet.keys.sign_nullifier(source_bond.salt);
     let dummy_nullifier_fr = issuer_wallet.keys.sign_nullifier(0); // Dummy note has salt=0
 
-    // Debug: verify nullifier computation uses the same private key
-    let private_key_debug = issuer_wallet.keys.get_private_spending_key();
-    println!(
-        "   DEBUG: salt={}, private_key={}",
-        source_bond.salt, private_key_debug
-    );
-    println!("   DEBUG: computed nullifier={}", input_nullifier_fr);
 
     // 6. Create OUTPUT notes
     let mut rng = rand::thread_rng();
