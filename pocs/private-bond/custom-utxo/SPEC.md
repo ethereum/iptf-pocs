@@ -52,9 +52,9 @@ Traders interact via Issuer as relayer:
 1. Alice and Bob negotiate off-chain, exchange public viewing keys
 2. Alice creates ZK proof A: spends her bond note, outputs note for Bob
 3. Alice encrypts memo: value, salt, assetId (encrypted with ECDH(`private_viewing_key_alice`, `public_viewing_key_bob`))
-4. Alice submits proof + memo to Issuer via secure channel
-5. Bob similarly creates proof B + memo, submits to Issuer
-6. Issuer verifies both are whitelisted, decrypts memos for audit
+4. Alice submits proof + plaintext note details + encrypted memo to Issuer via secure channel
+5. Bob similarly creates proof B + plaintext details + memo, submits to Issuer
+6. Issuer verifies both are whitelisted, audits transaction details from secure channel submission
 7. Issuer submits atomicSwap(proofA, proofB, memoA, memoB) as single transaction
 8. Contract verifies both proofs, updates merkle tree, records nullifiers
 9. Bob and Alice decrypt their memos from chain, learn note details
@@ -203,8 +203,8 @@ Private Inputs:
 - Correctness: ZK proofs guarantee balance and membership ✅
 - Issuer censorship: No mitigation (trusted relayer model) ❌
 - Issuer frontrunning: Mitigated by regulation, not cryptography ❌
-- Issuer decryption key: Single point of failure, can expose entire market ❌
-  - Mitigation: Implement per-note Viewing Keys or Selective Disclosure
+- Issuer data access: Issuer sees all transaction details via secure channel, creating audit trail ❌
+  - Mitigation: Minimize data retention, implement strict access controls and data destruction policies
 - Atomic Swap Integrity: Relayer can execute mismatched proofs (wrong assets traded) ❌
   - Mitigation: Both proofs must include a shared `binder_hash = Poseidon(my_commitment, counterparty_commitment)`, verified in circuit and contract
 
