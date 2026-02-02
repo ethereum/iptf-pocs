@@ -4,6 +4,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRACT_PATH="$SCRIPT_DIR/contracts/target/private_bonds-PrivateBonds.json"
 
+# Ensure contract is compiled
+if [ ! -f "$CONTRACT_PATH" ]; then
+  echo "Contract not compiled. Compiling..."
+  (cd "$SCRIPT_DIR/contracts" && aztec compile)
+  echo ""
+fi
+
 # ==============================================================================
 # PRIVATE BONDS ON AZTEC - INVESTOR/ISSUER STORY
 # ==============================================================================

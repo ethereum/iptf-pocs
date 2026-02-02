@@ -76,7 +76,7 @@ The fixed supply model prevents observers from deducing transaction amounts by w
 
 ```bash
 # 1. Start Aztec sandbox
-aztec start --sandbox
+aztec start --local-network
 
 # 2. Import test accounts (in a new terminal)
 aztec-wallet import-test-accounts
@@ -93,7 +93,7 @@ This walkthrough demonstrates the complete flow: issuance → whitelist → dist
 ### Terminal 1: Start Aztec Sandbox
 
 ```bash
-aztec start --sandbox
+aztec start --local-network
 ```
 
 Wait for "Aztec Sandbox is now ready". The sandbox provides pre-funded test accounts.
@@ -234,14 +234,14 @@ The sandbox provides pre-funded test accounts:
 
 This repository is a proof-of-concept. The following simplifications were made:
 
-| Spec Feature                          | PoC Implementation                      | Rationale                                |
-| ------------------------------------- | --------------------------------------- | ---------------------------------------- |
-| Atomic DvP with stablecoin            | Simple `transfer_private` + off-chain   | No stablecoin contract on Aztec testnet  |
-| Atomic redemption (bond ↔ stablecoin) | Simple `redeem` burn + off-chain fiat   | No stablecoin contract on Aztec testnet  |
-| Bond attributes (ISIN/Asset ID)       | Single asset type assumed               | Simplifies contract for PoC              |
-| Key rotation support                  | Not implemented                         | Aztec account abstraction handles keys   |
-| Per-note selective disclosure         | Per-contract viewing keys (app-siloed)  | Native Aztec granularity; per-note needs custom ECDH |
-| Merkle whitelist for privacy          | Public `Map<address, bool>`             | Simpler, acceptable for regulated context|
+| Spec Feature                          | PoC Implementation                     | Rationale                                            |
+| ------------------------------------- | -------------------------------------- | ---------------------------------------------------- |
+| Atomic DvP with stablecoin            | Simple `transfer_private` + off-chain  | No stablecoin contract on Aztec testnet              |
+| Atomic redemption (bond ↔ stablecoin) | Simple `redeem` burn + off-chain fiat  | No stablecoin contract on Aztec testnet              |
+| Bond attributes (ISIN/Asset ID)       | Single asset type assumed              | Simplifies contract for PoC                          |
+| Key rotation support                  | Not implemented                        | Aztec account abstraction handles keys               |
+| Per-note selective disclosure         | Per-contract viewing keys (app-siloed) | Native Aztec granularity; per-note needs custom ECDH |
+| Merkle whitelist for privacy          | Public `Map<address, bool>`            | Simpler, acceptable for regulated context            |
 
 ### Known Limitations
 
