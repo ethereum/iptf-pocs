@@ -1,0 +1,6 @@
+[submodule "pocs/private-bond/custom-utxo/contracts/lib/forge-std"]
+	path = pocs/private-bond/custom-utxo/contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "pocs/private-bond/custom-utxo/contracts/lib/openzeppelin-contracts"]
+	path = pocs/private-bond/custom-utxo/contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
