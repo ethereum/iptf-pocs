@@ -98,11 +98,7 @@ enum Commands {
     },
 
     /// Scan: decrypt memos sent to this wallet
-    Scan {
-        /// Optional: sender wallet name (to derive pubkey for decryption)
-        #[arg(long)]
-        sender: Option<String>,
-    },
+    Scan,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -124,7 +120,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             Commands::Redeem { bond } => redeem(&cli.wallet, &bond).await,
             Commands::Info { bond } => info(&bond),
-            Commands::Scan { sender } => scan(&cli.wallet, sender.as_deref()),
+            Commands::Scan => scan(&cli.wallet),
         }
     });
 
@@ -376,13 +372,6 @@ async fn buy(
     let input_nullifier_fr = issuer_wallet.keys.sign_nullifier(source_bond.salt);
     let dummy_nullifier_fr = issuer_wallet.keys.sign_nullifier(0); // Dummy note has salt=0
 
-    // Debug: verify nullifier computation uses the same private key
-    let private_key_debug = issuer_wallet.keys.get_private_spending_key();
-    println!(
-        "   DEBUG: salt={}, private_key={}",
-        source_bond.salt, private_key_debug
-    );
-    println!("   DEBUG: computed nullifier={}", input_nullifier_fr);
 
     // 6. Create OUTPUT notes
     let mut rng = rand::thread_rng();
@@ -619,7 +608,7 @@ async fn buy(
     match Note::encrypt(&buyer_wallet.keys, issuer_wallet.keys.public_viewing_key(), &buyer_note) {
         Ok(memo) => {
             let memo_filename = format!("{}/memo_{}_{}.bin", DATA_DIR, buyer_wallet_name, &format!("{:016x}", buyer_salt)[..8]);
-            match fs::write(&memo_filename, &memo.ciphertext) {
+            match fs::write(&memo_filename, &memo.to_bytes()) {
                 Ok(_) => println!("🔒 Encrypted memo saved to: {}", memo_filename),
                 Err(e) => println!("⚠️  Failed to save memo: {}", e),
             }
@@ -1022,7 +1011,7 @@ async fn trade(wallet_a_name: &str, bond_a_path: &str, wallet_b_name: &str, bond
     };
     if let Ok(memo) = Note::encrypt(&wallet_a.keys, wallet_b.keys.public_viewing_key(), &note_for_b) {
         let memo_file = format!("{}/memo_trade_{}_{}.bin", DATA_DIR, wallet_b_name, &format!("{:016x}", new_salt_a_to_b)[..8]);
-        let _ = fs::write(&memo_file, &memo.ciphertext);
+        let _ = fs::write(&memo_file, &memo.to_bytes());
         println!("🔒 Encrypted memo for {} saved", wallet_b_name);
     }
 
@@ -1035,7 +1024,7 @@ async fn trade(wallet_a_name: &str, bond_a_path: &str, wallet_b_name: &str, bond
     };
     if let Ok(memo) = Note::encrypt(&wallet_b.keys, wallet_a.keys.public_viewing_key(), &note_for_a) {
         let memo_file = format!("{}/memo_trade_{}_{}.bin", DATA_DIR, wallet_a_name, &format!("{:016x}", new_salt_b_to_a)[..8]);
-        let _ = fs::write(&memo_file, &memo.ciphertext);
+        let _ = fs::write(&memo_file, &memo.to_bytes());
         println!("🔒 Encrypted memo for {} saved", wallet_a_name);
     }
 
@@ -1316,7 +1305,7 @@ fn info(bond_path: &str) {
     }
 }
 
-fn scan(wallet_name: &str, sender_name: Option<&str>) {
+fn scan(wallet_name: &str) {
     println!("\n🔍 Scanning for encrypted memos...");
 
     // Load recipient wallet
@@ -1352,54 +1341,28 @@ fn scan(wallet_name: &str, sender_name: Option<&str>) {
         memos_found += 1;
         let memo_path = entry.path();
         
-        // Read memo ciphertext
-        let ciphertext = match fs::read(&memo_path) {
+        // Read memo bytes and deserialize
+        let memo_bytes = match fs::read(&memo_path) {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let memo = notes::Memo { ciphertext };
-
-        // Try decryption with specified sender or all known wallets
-        let sender_wallets: Vec<String> = if let Some(name) = sender_name {
-            vec![name.to_string()]
-        } else {
-            // Find all wallet files
-            fs::read_dir(DATA_DIR)
-                .ok()
-                .map(|entries| {
-                    entries
-                        .flatten()
-                        .filter_map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            if name.starts_with("wallet_") && name.ends_with(".json") {
-                                Some(name.trim_start_matches("wallet_").trim_end_matches(".json").to_string())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
+        let memo = match notes::Memo::from_bytes(&memo_bytes) {
+            Ok(m) => m,
+            Err(_) => continue,
         };
 
-        for sender_wallet_name in &sender_wallets {
-            if let Some(sender_wallet) = load_wallet(sender_wallet_name) {
-                match Note::decrypt(
-                    &recipient_wallet.keys,
-                    sender_wallet.keys.public_viewing_key(),
-                    &memo,
-                ) {
-                    Ok(note) => {
-                        decrypted_count += 1;
-                        println!("\n   📬 Memo from '{}': {}", sender_wallet_name, filename);
-                        println!("      Value:    {}", note.value);
-                        println!("      Salt:     {:016x}", note.salt);
-                        println!("      Asset ID: {}", note.asset_id);
-                        println!("      Maturity: {}", format_date(note.maturity_date));
-                        break; // Found the right sender
-                    }
-                    Err(_) => continue, // Try next sender
-                }
+        // Decrypt memo (sender identity not needed with ephemeral keys)
+        match Note::decrypt(&recipient_wallet.keys, &memo) {
+            Ok(note) => {
+                decrypted_count += 1;
+                println!("\n   📬 Memo: {}", filename);
+                println!("      Value:    {}", note.value);
+                println!("      Salt:     {:016x}", note.salt);
+                println!("      Asset ID: {}", note.asset_id);
+                println!("      Maturity: {}", format_date(note.maturity_date));
+            }
+            Err(e) => {
+                println!("\n   ⚠️  Failed to decrypt {}: {}", filename, e);
             }
         }
     }
@@ -1409,7 +1372,7 @@ fn scan(wallet_name: &str, sender_name: Option<&str>) {
     } else {
         println!("\n✅ Found {} memos, decrypted {}", memos_found, decrypted_count);
         if decrypted_count < memos_found {
-            println!("   ℹ️  Some memos could not be decrypted (sender unknown)");
+            println!("   ℹ️  Some memos could not be decrypted (wrong recipient or corrupted)");
         }
     }
 }

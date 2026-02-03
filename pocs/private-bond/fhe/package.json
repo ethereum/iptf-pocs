@@ -1,0 +1,45 @@
+{
+  "name": "private-bond-fhe",
+  "version": "0.1.0",
+  "description": "Confidential bond implementation using Zama fhEVM",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=7.0.0"
+  },
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test --network hardhat",
+    "test:sepolia": "hardhat test --network sepolia",
+    "clean": "hardhat clean && rm -rf artifacts cache types",
+    "lint": "solhint 'contracts/**/*.sol'",
+    "typechain": "hardhat compile"
+  },
+  "devDependencies": {
+    "@fhevm/hardhat-plugin": "0.3.0-4",
+    "@fhevm/mock-utils": "0.3.0-4",
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.0",
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.0",
+    "@typechain/ethers-v6": "^0.5.0",
+    "@typechain/hardhat": "^9.0.0",
+    "@types/chai": "^4.3.0",
+    "@types/mocha": "^10.0.0",
+    "@types/node": "^20.0.0",
+    "@zama-fhe/relayer-sdk": "^0.3.0-8",
+    "chai": "^4.3.0",
+    "hardhat": "^2.22.0",
+    "hardhat-gas-reporter": "^1.0.0",
+    "solhint": "^5.0.0",
+    "solidity-coverage": "^0.8.0",
+    "ts-node": "^10.9.0",
+    "typechain": "^8.3.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@fhevm/solidity": "^0.10.0",
+    "encrypted-types": "^0.0.4"
+  }
+}

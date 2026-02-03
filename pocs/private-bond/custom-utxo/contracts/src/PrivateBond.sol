@@ -7,13 +7,17 @@ import "./PoseidonT3.sol";
 
 contract PrivateBond is Ownable {
     HonkVerifier public verifier;
-    
+
+    /// @notice Bond identifier for reconciliation (ISIN hash, CUSIP, or BDT hash)
+    bytes32 public bondId;
+
     bytes32[] public commitments;
 
     mapping(bytes32 => bool) public knownRoots;
     mapping(bytes32 => bool) public nullifiers;
 
-    constructor(address _verifier, address initialOwner) Ownable(initialOwner) {
+    constructor(bytes32 _bondId, address _verifier, address initialOwner) Ownable(initialOwner) {
+        bondId = _bondId;
         verifier = HonkVerifier(_verifier);
     }
 

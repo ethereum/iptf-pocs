@@ -7,8 +7,27 @@
 *.swp
 *.swo
 
-# Common build artifacts (individual PoCs may have their own .gitignore)
+# Common build artifacts
 target/
 node_modules/
 out/
 cache/
+
+# Hardhat / Solidity
+artifacts/
+typechain-types/
+types/
+
+# fhevm
+fhevmTemp/
+
+# Coverage
+coverage/
+coverage.json
+
+# Environment
+.env
+.env.local
+
+# Misc
+*.log

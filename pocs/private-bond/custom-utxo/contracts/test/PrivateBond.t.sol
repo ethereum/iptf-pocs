@@ -22,11 +22,13 @@ contract PrivateBondTest is Test {
     bytes32 constant COMM_OUT_A = 0x1156c6bc9367cc966088ceedb112f454eeca564ce36c0af52a1a6dbc8d57162e;
     bytes32 constant COMM_OUT_B = 0x1b3df58b47ca4b3e800b6bd238d89a9d78a64245825070dcf50e56f9110a509c;
     bytes32 constant MATURITY = bytes32(uint256(1893456000));
+    // Example bond identifier (could be hash of ISIN/CUSIP or BDT data)
+    bytes32 constant BOND_ID = keccak256("US0378331005"); // Example ISIN hash
 
     function setUp() public {
         issuer = address(this);
         MockVerifier mockVerifier = new MockVerifier();
-        privateBond = new PrivateBond(address(mockVerifier), issuer);
+        privateBond = new PrivateBond(BOND_ID, address(mockVerifier), issuer);
     }
 
     function testMintBond() public {

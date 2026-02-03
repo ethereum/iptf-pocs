@@ -88,7 +88,7 @@ All values stay private. Only hashes, nullifiers, and transaction confirmations 
 
 - **Trusted Issuer**: Issuer acts as relayer and has visibility into all trades (for regulatory compliance)
 - **On-chain Privacy**: External observers cannot determine amounts or link notes
-- **Regulatory Access**: Issuer can decrypt memos and provide audit trails
+- **Regulatory Access**: Issuer receives transaction details via secure channel for audit trails
 - **No Frontrunning Protection**: Issuer controls transaction ordering (acceptable in regulated context)
 
 ## Getting Started
