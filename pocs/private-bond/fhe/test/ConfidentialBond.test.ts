@@ -17,6 +17,7 @@ describe("ConfidentialBond", function () {
   let regulator: HardhatEthersSigner;
   let unauthorized: HardhatEthersSigner;
 
+  const BOND_ID = ethers.keccak256(ethers.toUtf8Bytes("TEST-BOND-001"));
   const TOTAL_SUPPLY = 1_000_000n;
   let MATURITY_DATE: bigint;
 
@@ -90,6 +91,7 @@ describe("ConfidentialBond", function () {
       "ConfidentialBond",
     );
     bond = (await ConfidentialBondFactory.deploy(
+      BOND_ID,
       TOTAL_SUPPLY,
       MATURITY_DATE,
     )) as unknown as ConfidentialBond;
@@ -529,6 +531,7 @@ describe("ConfidentialBond", function () {
         ? BigInt(Math.floor(Date.now() / 1000))
         : BigInt(await time.latest());
       ownershipBond = (await ConfidentialBondFactory.deploy(
+        BOND_ID,
         1000n,
         latestTime + 365n * 24n * 60n * 60n,
       )) as unknown as ConfidentialBond;
@@ -590,6 +593,7 @@ describe("ConfidentialBond", function () {
       redemptionMaturity = latestTime + ONE_YEAR;
 
       redemptionBond = (await ConfidentialBondFactory.deploy(
+        BOND_ID,
         100_000n,
         redemptionMaturity,
       )) as unknown as ConfidentialBond;
@@ -686,6 +690,7 @@ describe("ConfidentialBond", function () {
         ? BigInt(Math.floor(Date.now() / 1000))
         : BigInt(await time.latest());
       const edgeCaseBond = (await ConfidentialBondFactory.deploy(
+        BOND_ID,
         10_000n,
         latestTime + 365n * 24n * 60n * 60n,
       )) as unknown as ConfidentialBond;
