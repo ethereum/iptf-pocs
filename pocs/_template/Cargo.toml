@@ -5,4 +5,4 @@ authors = ["{{authors}}"]
 edition = "2024"
 
 [lib]
-path = "src/lib/lib.rs"
+path = "src/lib.rs"
