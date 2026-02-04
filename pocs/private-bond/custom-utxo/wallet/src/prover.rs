@@ -15,6 +15,32 @@ pub struct CircuitNote {
     pub maturity_date: u64,
 }
 
+use serde::{Deserialize, Serialize};
+
+use toml;
+
+static TREE_DEPTH: usize = 3;
+
+#[derive(Deserialize, Serialize, Debug)]
+struct ProverToml {
+    root: String,
+    nullifiers: [String; 2],
+    commitments_out: [String; 2],
+    input_values: [u64; 2],
+    input_salts: [String; 2],
+    input_owner: String,
+    input_asset_id: u64,
+    input_maturity_date: u64,
+    path_indices: [[u8; TREE_DEPTH]; 2],
+    path_elements: [[String; TREE_DEPTH]; 2],
+    output_values: [u64; 2],
+    output_salts: [String; 2],
+    output_owners: [String; 2],
+    output_asset_ids: [u64; 2],
+    output_maturity_date: u64,
+    private_key: String,
+}
+
 impl CircuitNote {
     /// Create a dummy note (value=0) for padding
     pub fn dummy(owner: Fr, asset_id: u64, maturity_date: u64) -> Self {
@@ -26,19 +52,21 @@ impl CircuitNote {
             maturity_date,
         }
     }
-    
+
     /// Compute the note commitment (matches circuit's note_commit function)
     /// commitment = poseidon::hash_5([value, salt, owner, asset_id, maturity_date])
     pub fn commitment(&self) -> Fr {
         use poseidon_rs::Poseidon;
         let hasher = Poseidon::new();
-        hasher.hash(vec![
-            Fr::from_str(&self.value.to_string()).unwrap(),
-            Fr::from_str(&self.salt.to_string()).unwrap(),
-            self.owner.clone(),
-            Fr::from_str(&self.asset_id.to_string()).unwrap(),
-            Fr::from_str(&self.maturity_date.to_string()).unwrap(),
-        ]).unwrap()
+        hasher
+            .hash(vec![
+                Fr::from_str(&self.value.to_string()).unwrap(),
+                Fr::from_str(&self.salt.to_string()).unwrap(),
+                self.owner.clone(),
+                Fr::from_str(&self.asset_id.to_string()).unwrap(),
+                Fr::from_str(&self.maturity_date.to_string()).unwrap(),
+            ])
+            .unwrap()
     }
 }
 
@@ -118,131 +146,112 @@ impl WitnessBuilder {
         format!("{}", fr)
     }
 
-    /// Generate Prover.toml content
+    /// Build ProverToml struct from witness data
+    fn build_prover_toml(&self) -> ProverToml {
+        // Convert merkle path indices to fixed-size arrays
+        let path_indices_0: [u8; TREE_DEPTH] = self.merkle_paths[0]
+            .indices
+            .iter()
+            .take(TREE_DEPTH)
+            .copied()
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("Path indices should have TREE_DEPTH elements");
+
+        let path_indices_1: [u8; TREE_DEPTH] = self.merkle_paths[1]
+            .indices
+            .iter()
+            .take(TREE_DEPTH)
+            .copied()
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("Path indices should have TREE_DEPTH elements");
+
+        // Convert merkle path elements to fixed-size arrays of hex strings
+        let path_elements_0: [String; TREE_DEPTH] = self.merkle_paths[0]
+            .elements
+            .iter()
+            .take(TREE_DEPTH)
+            .map(|e| Self::fr_to_hex(e))
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("Path elements should have TREE_DEPTH elements");
+
+        let path_elements_1: [String; TREE_DEPTH] = self.merkle_paths[1]
+            .elements
+            .iter()
+            .take(TREE_DEPTH)
+            .map(|e| Self::fr_to_hex(e))
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("Path elements should have TREE_DEPTH elements");
+
+        ProverToml {
+            // Public inputs
+            root: Self::fr_to_hex(&self.root),
+            nullifiers: [
+                Self::fr_to_hex(&self.nullifiers[0]),
+                Self::fr_to_hex(&self.nullifiers[1]),
+            ],
+            commitments_out: [
+                Self::fr_to_hex(&self.commitments_out[0]),
+                Self::fr_to_hex(&self.commitments_out[1]),
+            ],
+
+            // Input notes
+            input_values: [self.input_notes[0].value, self.input_notes[1].value],
+            input_salts: [
+                self.input_notes[0].salt.to_string(),
+                self.input_notes[1].salt.to_string(),
+            ],
+            input_owner: Self::fr_to_hex(&self.input_notes[0].owner),
+            input_asset_id: self.input_notes[0].asset_id,
+            input_maturity_date: self.input_notes[0].maturity_date,
+
+            // Merkle paths
+            path_indices: [path_indices_0, path_indices_1],
+            path_elements: [path_elements_0, path_elements_1],
+
+            // Output notes - use hex strings for salts (large u64 values overflow Noir's parser)
+            output_values: [self.output_notes[0].value, self.output_notes[1].value],
+            output_salts: [
+                format!("0x{:x}", self.output_notes[0].salt),
+                format!("0x{:x}", self.output_notes[1].salt),
+            ],
+            output_owners: [
+                Self::fr_to_hex(&self.output_notes[0].owner),
+                Self::fr_to_hex(&self.output_notes[1].owner),
+            ],
+            output_asset_ids: [self.output_notes[0].asset_id, self.output_notes[1].asset_id],
+            output_maturity_date: self.output_notes[0].maturity_date,
+
+            // Private key
+            private_key: Self::fr_to_hex(&self.private_key),
+        }
+    }
+
+    /// Generate Prover.toml content as a string
     pub fn to_prover_toml(&self) -> String {
-        let mut toml = String::new();
-
-        // Public inputs
-        toml.push_str("# Public inputs (witnesses to be proven on-chain)\n");
-        toml.push_str(&format!("root = \"{}\"\n", Self::fr_to_hex(&self.root)));
-        toml.push_str(&format!(
-            "nullifiers = [\"{}\", \"{}\"]\n",
-            Self::fr_to_hex(&self.nullifiers[0]),
-            Self::fr_to_hex(&self.nullifiers[1])
-        ));
-        toml.push_str(&format!(
-            "commitments_out = [\"{}\", \"{}\"]\n",
-            Self::fr_to_hex(&self.commitments_out[0]),
-            Self::fr_to_hex(&self.commitments_out[1])
-        ));
-        toml.push('\n');
-
-        // Input notes - use hex strings for salts (large u64 values overflow Noir's parser)
-        toml.push_str("# Input notes (private)\n");
-        toml.push_str(&format!(
-            "input_values = [{}, {}]\n",
-            self.input_notes[0].value,
-            self.input_notes[1].value
-        ));
-        toml.push_str(&format!(
-            "input_salts = [\"0x{:x}\", \"0x{:x}\"]\n",
-            self.input_notes[0].salt,
-            self.input_notes[1].salt
-        ));
-        toml.push_str(&format!(
-            "input_owner = \"{}\"\n",
-            Self::fr_to_hex(&self.input_notes[0].owner)
-        ));
-        toml.push_str(&format!(
-            "input_asset_id = {}\n",
-            self.input_notes[0].asset_id
-        ));
-        toml.push_str(&format!(
-            "input_maturity_date = {}\n",
-            self.input_notes[0].maturity_date
-        ));
-        toml.push('\n');
-
-        // Merkle paths
-        toml.push_str("# Merkle proof paths for each input note\n");
-        toml.push_str(&format!(
-            "path_indices = [[{}], [{}]]\n",
-            self.merkle_paths[0]
-                .indices
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.merkle_paths[1]
-                .indices
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        toml.push_str(&format!(
-            "path_elements = [[{}], [{}]]\n",
-            self.merkle_paths[0]
-                .elements
-                .iter()
-                .map(|e| format!("\"{}\"", Self::fr_to_hex(e)))
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.merkle_paths[1]
-                .elements
-                .iter()
-                .map(|e| format!("\"{}\"", Self::fr_to_hex(e)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        toml.push('\n');
-
-        // Output notes - use hex strings for salts (large u64 values overflow Noir's parser)
-        toml.push_str("# Output notes (private)\n");
-        toml.push_str(&format!(
-            "output_values = [{}, {}]\n",
-            self.output_notes[0].value,
-            self.output_notes[1].value
-        ));
-        toml.push_str(&format!(
-            "output_salts = [\"0x{:x}\", \"0x{:x}\"]\n",
-            self.output_notes[0].salt,
-            self.output_notes[1].salt
-        ));
-        toml.push_str(&format!(
-            "output_owners = [\"{}\", \"{}\"]\n",
-            Self::fr_to_hex(&self.output_notes[0].owner),
-            Self::fr_to_hex(&self.output_notes[1].owner)
-        ));
-        toml.push_str(&format!(
-            "output_asset_ids = [{}, {}]\n",
-            self.output_notes[0].asset_id,
-            self.output_notes[1].asset_id
-        ));
-        toml.push_str(&format!(
-            "output_maturity_date = {}\n",
-            self.output_notes[0].maturity_date
-        ));
-        toml.push('\n');
-
-        // Private key - use decimal format like the working example
-        toml.push_str("# Private key\n");
-        toml.push_str(&format!(
-            "private_key = \"{}\"\n",
-            Self::fr_to_hex(&self.private_key)
-        ));
-
-        toml
+        toml::to_string(&self.build_prover_toml()).expect("Failed to serialize ProverToml")
     }
 
     /// Write Prover.toml to the circuit directory
     pub fn write_prover_toml(&self, circuit_dir: &str) -> Result<(), String> {
-        let content = self.to_prover_toml();
-        let path = format!("{}/Prover.toml", circuit_dir);
+        use std::io::Write;
+        use std::path::Path;
 
-        fs::write(&path, content).map_err(|e| format!("Failed to write Prover.toml: {}", e))?;
+        let path = Path::new(circuit_dir).join("Prover.toml");
+        let mut file = fs::File::create(&path)
+            .map_err(|e| format!("Failed to create Prover.toml: {}", e))?;
 
-        println!("   📝 Wrote witness to {}", path);
+        let witness_toml = self.build_prover_toml();
+        let toml_string =
+            toml::to_string(&witness_toml).map_err(|e| format!("Failed to serialize: {}", e))?;
+
+        file.write_all(toml_string.as_bytes())
+            .map_err(|e| format!("Failed to write Prover.toml: {}", e))?;
+
+        println!("   📝 Wrote witness to {}", path.display());
         Ok(())
     }
 }
@@ -365,10 +374,10 @@ pub fn build_joinsplit_witness(
     input_note: CircuitNote,
     input_merkle_path: MerklePath,
     input_nullifier: Fr,
-    dummy_input: CircuitNote,           // Dummy note (value=0, salt=0) - must also be in tree
-    dummy_merkle_path: MerklePath,      // Merkle path for the dummy note
-    output_notes: [CircuitNote; 2],     // [buyer_note, change_note]
-    output_commitments: [Fr; 2],        // [buyer_commitment, change_commitment]
+    dummy_input: CircuitNote, // Dummy note (value=0, salt=0) - must also be in tree
+    dummy_merkle_path: MerklePath, // Merkle path for the dummy note
+    output_notes: [CircuitNote; 2], // [buyer_note, change_note]
+    output_commitments: [Fr; 2], // [buyer_commitment, change_commitment]
     private_key: Fr,
 ) -> WitnessBuilder {
     // Compute dummy nullifier (Poseidon(salt=0, private_key))
