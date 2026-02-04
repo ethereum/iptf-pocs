@@ -1,0 +1,26 @@
+[31337]
+endpoint_url = "http://localhost:8545"
+
+[31337.bool]
+use_mock_verifier = "${USE_MOCK_VERIFIER}"
+
+[31337.address]
+shielded_pool_address = "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e"
+composite_verifier_address = "0x610178dA211FEF7D417bC0e6FeD39F05609AD788"
+attestation_registry_address = "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318"
+mock_token_address = "0xA51c1fc2f0D1a1b8494Ed1FE312d7C3a78Ed91C0"
+deposit_verifier_address = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
+transfer_verifier_address = "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
+withdraw_verifier_address = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
+
+[11155111]
+endpoint_url = "${SEPOLIA_RPC_URL}"
+
+[11155111.bool]
+use_mock_verifier = "${USE_MOCK_VERIFIER}"
+
+[11155111.address]
+deposit_verifier_address = "${DEPOSIT_VERIFIER_ADDRESS}"
+transfer_verifier_address = "${TRANSFER_VERIFIER_ADDRESS}"
+withdraw_verifier_address = "${WITHDRAW_VERIFIER_ADDRESS}"
+attestation_registry_address = "${ATTESTATION_REGISTRY_ADDRESS}"
