@@ -28,10 +28,7 @@ contract MembershipVerifier {
     /// @param seal The RISC Zero proof seal.
     /// @param journalRoot The Merkle root committed in the proof journal.
     /// @return True if verification succeeds.
-    function verifyMembership(
-        bytes calldata seal,
-        bytes32 journalRoot
-    ) external returns (bool) {
+    function verifyMembership(bytes calldata seal, bytes32 journalRoot) external returns (bool) {
         require(journalRoot == allowlistRoot, "Root mismatch");
 
         bytes memory journal = abi.encodePacked(journalRoot);

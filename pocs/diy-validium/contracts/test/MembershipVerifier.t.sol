@@ -36,4 +36,22 @@ contract MembershipVerifierTest is Test {
         vm.expectRevert("Root mismatch");
         membershipVerifier.verifyMembership(hex"", wrongRoot);
     }
+
+    function test_imageId_isPlaceholderZero() public view {
+        // IMAGE_ID should be bytes32(0) until the guest ELF is compiled
+        assertEq(membershipVerifier.IMAGE_ID(), bytes32(0));
+    }
+
+    function test_verifyMembership_revertsWithZeroRoot() public {
+        vm.expectRevert("Root mismatch");
+        membershipVerifier.verifyMembership(hex"", bytes32(0));
+    }
+
+    function test_verifyMembership_canBeCalledMultipleTimes() public {
+        // Phase 1 has no nullifier tracking, so repeated calls should succeed
+        bool result1 = membershipVerifier.verifyMembership(hex"", ROOT);
+        bool result2 = membershipVerifier.verifyMembership(hex"", ROOT);
+        assertTrue(result1);
+        assertTrue(result2);
+    }
 }
