@@ -628,7 +628,44 @@ contract.
 
 ---
 
-## Phase 4: ERC20 Bridge
+## Phase 4: Institutional Lifecycle (Bridge + Compliance Disclosure)
+
+Phase 4 demonstrates the full institutional lifecycle: deposit ERC20 tokens
+into the private system (gated by allowlist membership), execute private
+transfers (Phase 3), prove compliance to regulators via selective disclosure,
+and withdraw back to ERC20. This is the "Prividium pattern" — privacy by
+default, transparency by choice.
+
+### Overview
+
+```
+Institution A           Operator                  On-chain
+
+DEPOSIT (permissioned):
+  membership proof ──────────────────────────────→ verify allowlist membership
+  approve + deposit ─────────────────────────────→ transferFrom(A, bridge, amt)
+                        credit off-chain balance    emit Deposit(pubkey, amt)
+                        update Merkle root ──────→ updateRoot(newRoot, proof)
+
+TRANSFER (private):
+  [Phase 3 — hidden from everyone, only nullifiers on-chain]
+
+COMPLIANCE DISCLOSURE:
+  regulator requests audit
+  A generates disclosure ────────────────────────→ verify disclosure proof
+    proof: "account with                           (optional: on-chain or off-chain)
+    disclosure_key K has
+    balance >= threshold"
+  Regulator learns: A is solvent
+  Regulator does NOT learn: exact balance, pubkey, tree position
+
+WITHDRAW (proven):
+  generate withdrawal proof
+  withdraw(seal, ...) ──────────────────────────→ verify proof
+                                                   check stateRoot, nullifier
+                                                   transfer(recipient, amount)
+                                                   emit Withdrawal(...)
+```
 
 ### Deposit Flow
 
@@ -638,19 +675,31 @@ User                    Contract                 Operator
   │ 1. approve(amount)      │                        │
   │────────────────────────▶│                        │
   │                         │                        │
-  │ 2. deposit(amount, pk)  │                        │
+  │ 2. deposit(amount, pk,  │                        │
+  │    membershipSeal)      │                        │
   │────────────────────────▶│                        │
-  │                         │ 3. transferFrom        │
+  │                         │ 3. Verify membership   │
+  │                         │    proof (allowlist)    │
+  │                         │ 4. transferFrom        │
   │                         │─────────▶              │
   │                         │                        │
-  │                         │ 4. emit Deposit event  │
+  │                         │ 5. emit Deposit event  │
   │                         │───────────────────────▶│
   │                         │                        │
-  │                         │ 5. Credit off-chain    │
+  │                         │ 6. Credit off-chain    │
   │                         │                        │
-  │                         │ 6. Update root + proof │
+  │                         │ 7. Update root + proof │
   │                         │◀───────────────────────│
 ```
+
+Deposits are gated by an allowlist membership proof: only addresses whose
+pubkey is in the allowlist Merkle tree can deposit. The bridge contract
+verifies the membership proof on-chain before accepting the ERC20 transfer.
+
+> **PoC Shortcut:** In this PoC, the membership proof verification in the
+> bridge is simplified — it checks that a valid seal is provided but the
+> IMAGE_ID is a placeholder `bytes32(0)`. Production would use the real
+> compiled guest image ID.
 
 ### Withdraw Flow
 
@@ -676,22 +725,153 @@ User                    Contract                 Operator
   │                         │───────────────────────▶│
 ```
 
-### Contract: Bridge
+### Circuit: Withdrawal Proof
+
+The withdrawal circuit is structurally similar to a transfer (Phase 3)
+but updates only a single leaf: the sender's balance decreases by the
+withdrawal amount. No recipient leaf is involved — the funds exit the
+private system entirely.
+
+**Public Inputs (Journal):**
+- `old_root: [u8; 32]` — pre-withdrawal Merkle root
+- `new_root: [u8; 32]` — post-withdrawal Merkle root
+- `nullifier: [u8; 32]` — withdrawal nullifier
+- `amount: u64` — withdrawal amount (big-endian, 8 bytes)
+- `recipient: [u8; 20]` — Ethereum address to receive funds
+
+**Private Inputs:**
+- `secret_key: [u8; 32]` — account owner's secret key
+- `balance: u64` — current balance
+- `salt: [u8; 32]` — current salt
+- `path: Vec<[u8; 32]>` — Merkle proof path (length == TREE_DEPTH)
+- `indices: Vec<bool>` — Merkle proof direction flags (length == TREE_DEPTH)
+- `new_salt: [u8; 32]` — new salt for the post-withdrawal commitment
+
+**Circuit Logic:**
+```rust
+fn verify_withdrawal(/* inputs */) {
+    // 1. Derive pubkey from secret key
+    let pubkey = sha256(&secret_key);
+
+    // 2. Compute old leaf commitment
+    let old_leaf = sha256(&[&pubkey[..], &balance.to_le_bytes()[..], &salt[..]].concat());
+
+    // 3. Verify account exists in current tree (recompute root from leaf)
+    let old_root = recompute_root(old_leaf, &path, &indices);
+
+    // 4. Validate withdrawal amount
+    assert!(amount > 0, "Withdrawal amount must be positive");
+    assert!(balance >= amount, "Insufficient balance");
+
+    // 5. Compute nullifier (domain-separated from transfers)
+    let nullifier = sha256(&[&secret_key[..], &old_root[..], b"withdrawal_v1"].concat());
+
+    // 6. Compute new leaf with reduced balance
+    let new_balance = balance - amount;
+    let new_leaf = sha256(&[&pubkey[..], &new_balance.to_le_bytes()[..], &new_salt[..]].concat());
+
+    // 7. Single-leaf root update: replace old_leaf with new_leaf in tree
+    let new_root = compute_single_leaf_root(new_leaf, &path, &indices);
+
+    // 8. Commit public outputs (big-endian for Solidity compatibility)
+    commit(old_root);                          // 32 bytes
+    commit(new_root);                          // 32 bytes
+    commit(nullifier);                         // 32 bytes
+    commit(amount.to_be_bytes());              // 8 bytes, big-endian
+    commit(recipient);                         // 20 bytes
+}
+```
+
+**Single-Leaf Root Update (`compute_single_leaf_root`):**
+
+Unlike the dual-leaf update in Phase 3, a withdrawal only modifies one leaf.
+The new root is computed by hashing the new leaf upward through the same
+Merkle path, using the original siblings:
+
+```rust
+fn compute_single_leaf_root(
+    new_leaf: [u8; 32],
+    path: &[[u8; 32]],
+    indices: &[bool],
+) -> [u8; 32] {
+    let mut current = new_leaf;
+    for (sibling, &is_right) in path.iter().zip(indices.iter()) {
+        current = if is_right {
+            sha256(&[sibling, &current].concat())
+        } else {
+            sha256(&[&current, sibling].concat())
+        };
+    }
+    current
+}
+```
+
+**Nullifier Domain Separation:** Withdrawal nullifiers use the domain tag
+`"withdrawal_v1"` instead of `"transfer_v1"`. This ensures that a transfer
+nullifier and a withdrawal nullifier from the same account and state are
+always different, preventing cross-operation collisions.
+
+**Committed Outputs (Journal):**
+Total: 124 bytes = old_root (32) + new_root (32) + nullifier (32) +
+amount_be (8) + recipient (20).
+
+All committed as raw bytes via `env::commit_slice`. The `amount` field is
+committed as big-endian u64 (8 bytes) to match Solidity's `abi.encodePacked`
+encoding for `uint64`.
+
+### Contract: ValidiumBridge
 
 ```solidity
 contract ValidiumBridge {
-    IERC20 public token;
+    IERC20 public immutable token;
+    IRiscZeroVerifier public immutable verifier;
     bytes32 public stateRoot;
     mapping(bytes32 => bool) public nullifiers;
-    IRiscZeroVerifier public verifier;
+    address public operator;
+
+    bytes32 public allowlistRoot;
+    bytes32 public constant MEMBERSHIP_IMAGE_ID = bytes32(0);
+    bytes32 public constant WITHDRAWAL_IMAGE_ID = bytes32(0);
+
+    error StaleState(bytes32 expected, bytes32 provided);
+    error NullifierAlreadyUsed(bytes32 nullifier);
+    error InvalidAmount();
 
     event Deposit(address indexed depositor, bytes32 pubkey, uint256 amount);
-    event Withdrawal(bytes32 nullifier, address recipient, uint256 amount);
+    event Withdrawal(
+        bytes32 indexed nullifier,
+        address indexed recipient,
+        uint256 amount
+    );
 
-    function deposit(uint256 amount, bytes32 pubkey) external {
+    constructor(
+        IERC20 _token,
+        IRiscZeroVerifier _verifier,
+        bytes32 _initialRoot,
+        bytes32 _allowlistRoot
+    ) {
+        token = _token;
+        verifier = _verifier;
+        stateRoot = _initialRoot;
+        allowlistRoot = _allowlistRoot;
+        operator = msg.sender;
+    }
+
+    function deposit(
+        uint256 amount,
+        bytes32 pubkey,
+        bytes calldata membershipSeal
+    ) external {
+        if (amount == 0) revert InvalidAmount();
+
+        // Verify membership proof: pubkey must be in allowlist
+        bytes memory membershipJournal = abi.encodePacked(allowlistRoot);
+        verifier.verify(
+            membershipSeal, MEMBERSHIP_IMAGE_ID, sha256(membershipJournal)
+        );
+
         token.transferFrom(msg.sender, address(this), amount);
         emit Deposit(msg.sender, pubkey, amount);
-        // Operator watches events, credits off-chain balance
     }
 
     function withdraw(
@@ -699,25 +879,215 @@ contract ValidiumBridge {
         bytes32 oldRoot,
         bytes32 newRoot,
         bytes32 nullifier,
-        uint256 amount,
+        uint64 amount,
         address recipient
     ) external {
-        require(oldRoot == stateRoot, "Stale state");
-        require(!nullifiers[nullifier], "Already withdrawn");
+        if (oldRoot != stateRoot) revert StaleState(stateRoot, oldRoot);
+        if (nullifiers[nullifier]) revert NullifierAlreadyUsed(nullifier);
+        if (amount == 0) revert InvalidAmount();
 
+        // Journal: oldRoot(32) + newRoot(32) + nullifier(32) +
+        //          amount_be(8) + recipient(20) = 124 bytes
         bytes memory journal = abi.encodePacked(
             oldRoot, newRoot, nullifier, amount, recipient
         );
-        verifier.verify(seal, WITHDRAW_IMAGE_ID, sha256(journal));
+        verifier.verify(seal, WITHDRAWAL_IMAGE_ID, sha256(journal));
 
+        // CEI: state updates before external call
         stateRoot = newRoot;
         nullifiers[nullifier] = true;
+
         token.transfer(recipient, amount);
 
         emit Withdrawal(nullifier, recipient, amount);
     }
 }
 ```
+
+> **CEI Pattern:** The `withdraw` function follows Checks-Effects-Interactions:
+> state updates (`stateRoot`, `nullifiers`) happen before the external
+> `token.transfer` call to prevent reentrancy.
+
+### Compliance Disclosure Flow
+
+```
+User                    Auditor                  Contract (optional)
+  │                         │                        │
+  │ 1. Auditor requests     │                        │
+  │    compliance check     │                        │
+  │◀────────────────────────│                        │
+  │                         │                        │
+  │ 2. Generate disclosure  │                        │
+  │    proof locally        │                        │
+  │                         │                        │
+  │ 3. Submit proof to      │                        │
+  │    auditor (off-chain)  │                        │
+  │────────────────────────▶│                        │
+  │                         │                        │
+  │                         │ 4. Verify proof        │
+  │                         │ (off-chain or on-chain)│
+  │                         │───────────────────────▶│
+  │                         │                        │
+  │                         │◀───────────────────────│
+  │                         │    verified            │
+```
+
+### Circuit: Disclosure Proof
+
+The disclosure circuit is the Prividium differentiator. It proves that an
+account satisfies a compliance predicate (balance >= threshold) without
+revealing the actual balance, the account's pubkey, or its position in the
+tree. The proof is bound to a specific auditor via a disclosure key.
+
+**Public Inputs (Journal):**
+- `merkle_root: [u8; 32]` — current state root
+- `threshold: u64` — minimum balance being proven (big-endian, 8 bytes)
+- `disclosure_key_hash: [u8; 32]` — `SHA256(SHA256(sk) || auditor_pubkey || "disclosure_v1")`
+
+**Private Inputs:**
+- `secret_key: [u8; 32]` — account owner's secret key
+- `balance: u64` — account balance
+- `salt: [u8; 32]` — account salt
+- `path: Vec<[u8; 32]>` — Merkle proof path
+- `indices: Vec<bool>` — Merkle proof direction flags
+- `auditor_pubkey: [u8; 32]` — the auditor's public key
+
+**Circuit Logic:**
+```rust
+fn verify_disclosure(/* inputs */) {
+    // 1. Derive pubkey from secret key
+    let pubkey = sha256(&secret_key);
+
+    // 2. Compute leaf commitment
+    let leaf = sha256(&[&pubkey[..], &balance.to_le_bytes()[..], &salt[..]].concat());
+
+    // 3. Verify account exists in current tree (recompute root from leaf)
+    let merkle_root = recompute_root(leaf, &path, &indices);
+
+    // 4. Prove balance satisfies threshold
+    assert!(balance >= threshold, "Balance below threshold");
+
+    // 5. Compute disclosure key (binds proof to specific auditor)
+    let disclosure_key_hash = sha256(
+        &[&pubkey[..], &auditor_pubkey[..], b"disclosure_v1"].concat()
+    );
+
+    // 6. Commit public outputs (big-endian for Solidity compatibility)
+    commit(merkle_root);                       // 32 bytes
+    commit(threshold.to_be_bytes());           // 8 bytes, big-endian
+    commit(disclosure_key_hash);               // 32 bytes
+}
+```
+
+**Disclosure Key Derivation:**
+
+The disclosure key hash serves three purposes:
+1. **Auditor binding:** Includes `auditor_pubkey`, so the proof is only
+   meaningful to the intended auditor. A different auditor produces a
+   different `disclosure_key_hash`.
+2. **Account binding:** Includes the prover's `pubkey` (derived from `sk`),
+   so different accounts produce different keys.
+3. **Domain separation:** The `"disclosure_v1"` tag prevents collisions
+   with other hash-based constructs in the protocol.
+
+The auditor registers or agrees upon their `auditor_pubkey` off-chain.
+When the prover submits a disclosure proof, the auditor checks that
+`disclosure_key_hash` matches the expected value for the account
+relationship.
+
+**Why this works:**
+- Auditor Bob knows his own pubkey and Alice's expected `disclosure_key_hash`
+  (established during account onboarding or out-of-band).
+- Alice proves: "the account bound to this disclosure_key_hash has
+  balance >= threshold."
+- Bob verifies the proof. He learns Alice satisfies the threshold.
+  He does **not** learn her exact balance, her pubkey directly, or
+  her position in the tree.
+- The proof is auditor-specific — Alice cannot reuse a proof meant
+  for a different auditor, because `disclosure_key_hash` would differ.
+
+**Institutional applications:**
+- Capital adequacy: "Prove reserves >= $50M" without revealing $53.7M
+- Counterparty solvency: "Prove you can cover this $10M trade"
+- AML threshold: "Prove no single balance exceeds $10K"
+
+**Committed Outputs (Journal):**
+Total: 72 bytes = merkle_root (32) + threshold_be (8) +
+disclosure_key_hash (32).
+
+### Contract: DisclosureVerifier
+
+```solidity
+contract DisclosureVerifier {
+    IRiscZeroVerifier public immutable verifier;
+    bytes32 public stateRoot;
+    bytes32 public constant IMAGE_ID = bytes32(0);
+
+    event DisclosureVerified(
+        bytes32 indexed root,
+        uint64 threshold,
+        bytes32 indexed disclosureKeyHash
+    );
+
+    constructor(IRiscZeroVerifier _verifier, bytes32 _stateRoot) {
+        verifier = _verifier;
+        stateRoot = _stateRoot;
+    }
+
+    function verifyDisclosure(
+        bytes calldata seal,
+        bytes32 root,
+        uint64 threshold,
+        bytes32 disclosureKeyHash
+    ) external {
+        require(root == stateRoot, "Root mismatch");
+
+        // Journal: root(32) + threshold_be(8) + disclosureKeyHash(32) = 72 bytes
+        bytes memory journal = abi.encodePacked(
+            root, threshold, disclosureKeyHash
+        );
+        verifier.verify(seal, IMAGE_ID, sha256(journal));
+
+        emit DisclosureVerified(root, threshold, disclosureKeyHash);
+    }
+}
+```
+
+> **Read-only contract:** The DisclosureVerifier does not modify state
+> (no nullifiers, no root updates). Disclosure proofs are attestations,
+> not state transitions. The `stateRoot` is set at construction and can
+> be updated by the operator to track the current bridge state.
+
+### Privacy Guarantees
+
+| Operation | What's Public | What's Private | Who Learns What |
+|-----------|--------------|----------------|-----------------|
+| **Deposit** | Amount, depositor address, pubkey | Account position in tree | Public chain observers see deposit |
+| **Transfer** | Nullifiers, Merkle roots | Amount, sender, recipient, balances | Only operator sees details |
+| **Disclosure** | Threshold, disclosure_key_hash | Actual balance, pubkey, tree position | Auditor learns: balance >= threshold. Nothing more. |
+| **Withdraw** | Amount, recipient address | Prior balance, account history, tree position | Public chain observers see withdrawal |
+
+**Critical caveats:**
+- Deposits and withdrawals are public — privacy exists only between them
+- Operator sees everything — primary privacy concern in production
+- No DA fallback — if operator disappears, funds are locked
+- Timing analysis can link deposits to withdrawals with few participants
+- Disclosure proofs reveal a lower bound on balance, not the exact value
+
+### Operator Trust Model
+
+**Trusted (not enforced by ZK or on-chain logic):**
+- Credits private balances correctly on deposit (could credit wrong amount)
+- Maintains Merkle tree accurately (could serve stale or incorrect proofs)
+- Maps pubkeys to real identities (sees all account data)
+- Controls data availability (sole holder of off-chain state)
+
+**Enforced by ZK proofs + on-chain verification:**
+- Cannot forge a transfer or withdrawal proof without the sender's secret key
+- Cannot double-spend (nullifiers are recorded on-chain, one per state root per account)
+- Cannot steal funds via withdrawal (withdrawal proofs are verified on-chain)
+- Cannot update state root without a valid proof
+- Cannot fake a disclosure proof (bound to real account state and specific auditor)
 
 ---
 
@@ -727,13 +1097,15 @@ contract ValidiumBridge {
 
 | Adversary | Capability |
 |-----------|------------|
-| Public observer | Sees all on-chain data |
-| Malicious user | Tries to forge proofs, double-spend |
+| Public observer | Sees all on-chain data (deposits, withdrawals, roots, nullifiers) |
+| Malicious user | Tries to forge proofs, double-spend, or create fake disclosures |
 | Network attacker | Can delay/reorder transactions |
+| Curious auditor | Receives disclosure proofs; tries to learn more than threshold |
 
 **NOT considered:**
 - Malicious operator (trusted in this PoC)
 - Side-channel attacks on proof generation
+- Cross-chain bridge attacks (no L1/L2 bridge)
 
 ### Guarantees
 
@@ -743,23 +1115,68 @@ contract ValidiumBridge {
 | No double-spend | Nullifiers are recorded on-chain |
 | No forgery | Requires knowledge of secret key |
 | State integrity | Root transitions validated by proofs |
+| Selective disclosure | Disclosure proofs bound to specific auditor and threshold |
+| Deposit gating | Membership proof required for bridge deposit |
+| Withdrawal integrity | Bridge verifies proof before releasing ERC20 tokens |
 
 ### Limitations & Shortcuts (PoC Scope)
 
 - **Centralized operator**: Data availability depends on single operator
   - Production: DA committee or on-chain calldata
 
-- **No viewing keys**: Cannot selectively reveal to regulators
-  - Production: Add optional disclosure mechanism
+- **No real viewing keys**: Disclosure uses hash-based key derivation, not
+  encryption-based viewing keys
+  - Production: Threshold decryption, verifiable encryption (see Penumbra, Aztec)
 
 - **Simple key derivation**: `pubkey = sha256(secret_key)`
-  - Production: Use proper EC key derivation
+  - Production: Use proper EC key derivation (e.g., ed25519)
 
 - **Fixed tree depth**: 20 levels hardcoded
   - Production: Make configurable
 
 - **In-memory account storage**: PoC uses in-memory data structures
   - Production: Use a persistent database (SQLite, Postgres, etc.)
+
+- **IMAGE_ID placeholders**: On-chain contracts use `bytes32(0)` as the
+  guest image ID. Must be updated with real compiled image IDs before
+  testnet deployment.
+
+- **No transaction batching**: Each operation requires a separate proof.
+  Production would batch multiple transfers per proof.
+
+- **Single ERC20**: Bridge supports one token. Production would add
+  `asset_id` to the commitment scheme.
+
+---
+
+## Future Work
+
+The following extensions are documented for completeness. None are
+implemented in this PoC.
+
+- **Viewing keys with real crypto**: Replace hash-based disclosure keys
+  with threshold decryption or verifiable encryption. See Penumbra's
+  viewing key model and Aztec's note discovery mechanism.
+
+- **Role-based access control**: Operator/trader/auditor roles with
+  permissioned contract access. The bridge should restrict `withdraw`
+  to the operator or authorized submitters.
+
+- **Data availability**: DA committee or on-chain calldata fallback
+  so users can reconstruct state if the operator disappears (escape hatch).
+
+- **Multi-asset**: Add `asset_id` to the commitment scheme:
+  `SHA256(pubkey || asset_id || balance_le || salt)`. Each deposit
+  specifies which token is being deposited.
+
+- **Transaction batching**: N transfers per proof for cost efficiency.
+  The circuit would verify N sender-recipient pairs in a single execution.
+
+- **Range proofs**: Prove "amount ∈ [min, max]" without revealing the
+  exact value. Useful for AML compliance ("no transaction > $10K").
+
+- **ERC-3643 compliance hooks**: ZK proofs of claim validity — prove
+  KYC status without revealing the underlying claim data.
 
 ---
 
@@ -771,6 +1188,8 @@ contract ValidiumBridge {
 - **Journal**: Public outputs from a RISC Zero proof
 - **Seal**: The proof bytes that can be verified on-chain
 - **Validium**: L2 where data is off-chain but validity is proven
+- **Disclosure Key**: Hash binding an account to a specific auditor, enabling selective compliance proofs
+- **Prividium Pattern**: Privacy by default, transparency by choice — private state transitions with selective disclosure for compliance
 
 ## References
 
@@ -778,3 +1197,5 @@ contract ValidiumBridge {
 - [Tornado Cash (nullifier design)](https://tornado.cash/)
 - [Zcash Protocol Specification](https://zips.z.cash/protocol/protocol.pdf)
 - [Validium on ethereum.org](https://ethereum.org/en/developers/docs/scaling/validium/)
+- [Penumbra — Viewing Keys](https://protocol.penumbra.zone/)
+- [Aztec — Note Discovery](https://docs.aztec.network/)
