@@ -477,9 +477,10 @@ fn compute_new_root(
 ) -> [u8; 32] {
     let depth = sender_indices.len();
 
-    // Find divergence depth (from leaf level upward).
-    // At leaf level (index depth-1), indices encode the leaf position.
-    // We scan from the root side (index 0) to find where paths first differ.
+    // Find divergence depth.
+    // The indices array is indexed root-to-leaf: indices[0] is the root level,
+    // indices[depth-1] is the leaf level. We scan from root (index 0) downward
+    // to find where the sender and recipient paths first differ.
     let divergence = (0..depth)
         .position(|i| sender_indices[i] != recipient_indices[i])
         .expect("Sender and recipient must differ (no self-transfers)");

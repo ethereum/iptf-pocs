@@ -182,3 +182,171 @@ pub fn account_commitment(pubkey: &[u8; 32], balance: u64, salt: &[u8; 32]) -> [
     hasher.update(salt);
     hasher.finalize().into()
 }
+
+/// Recompute a Merkle root after updating two leaves simultaneously.
+///
+/// When a transfer changes both the sender and recipient leaves, the
+/// algorithm finds the shallowest level where the two paths diverge,
+/// recomputes each sub-branch independently below that level, joins
+/// them as siblings at the divergence point, and continues hashing
+/// upward using the shared siblings above divergence.
+///
+/// See SPEC.md Phase 3, "Dual-Leaf Root Recomputation".
+pub fn compute_new_root(
+    sender_leaf: [u8; 32],
+    sender_indices: &[bool],
+    recipient_leaf: [u8; 32],
+    recipient_indices: &[bool],
+    sender_path: &[[u8; 32]],
+    recipient_path: &[[u8; 32]],
+) -> [u8; 32] {
+    let depth = sender_indices.len();
+
+    // Proof arrays are leaf-to-root: path[0] is the leaf-level sibling,
+    // path[depth-1] is the root-adjacent sibling.
+    //
+    // Find divergence: the shallowest level (closest to root) where
+    // sender_indices and recipient_indices differ. In our leaf-to-root
+    // indexing this is the highest array index where they differ.
+    let divergence = (0..depth)
+        .rev()
+        .find(|&i| sender_indices[i] != recipient_indices[i])
+        .expect("Sender and recipient must differ (no self-transfers)");
+
+    // Recompute sender's branch from leaf (level 0) up to but not
+    // including the divergence level.
+    let mut sender_hash = sender_leaf;
+    for i in 0..divergence {
+        sender_hash = if sender_indices[i] {
+            hash_pair(&sender_path[i], &sender_hash)
+        } else {
+            hash_pair(&sender_hash, &sender_path[i])
+        };
+    }
+
+    // Recompute recipient's branch from leaf up to but not including
+    // the divergence level.
+    let mut recipient_hash = recipient_leaf;
+    for i in 0..divergence {
+        recipient_hash = if recipient_indices[i] {
+            hash_pair(&recipient_path[i], &recipient_hash)
+        } else {
+            hash_pair(&recipient_hash, &recipient_path[i])
+        };
+    }
+
+    // At the divergence level the two recomputed branches are siblings.
+    let mut current = if sender_indices[divergence] {
+        // Sender is right child, recipient is left child
+        hash_pair(&recipient_hash, &sender_hash)
+    } else {
+        // Sender is left child, recipient is right child
+        hash_pair(&sender_hash, &recipient_hash)
+    };
+
+    // Above divergence: continue hashing toward the root using the
+    // shared siblings (same in both paths above the divergence point).
+    for i in (divergence + 1)..depth {
+        current = if sender_indices[i] {
+            hash_pair(&sender_path[i], &current)
+        } else {
+            hash_pair(&current, &sender_path[i])
+        };
+    }
+
+    current
+}
+
+/// Verify a transfer proof as specified in SPEC.md Phase 3 circuit logic.
+///
+/// This mirrors the transfer circuit: derives the sender pubkey from the
+/// secret key, verifies both accounts in the old tree, checks balance
+/// constraints, verifies the nullifier, computes new commitments, and
+/// asserts the new root matches.
+///
+/// Panics on any verification failure.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_transfer(
+    sender_sk: [u8; 32],
+    sender_balance: u64,
+    sender_salt: [u8; 32],
+    sender_path: &[[u8; 32]],
+    sender_indices: &[bool],
+    amount: u64,
+    recipient_pubkey: [u8; 32],
+    recipient_balance: u64,
+    recipient_salt: [u8; 32],
+    recipient_path: &[[u8; 32]],
+    recipient_indices: &[bool],
+    new_sender_salt: [u8; 32],
+    new_recipient_salt: [u8; 32],
+    old_root: [u8; 32],
+    new_root: [u8; 32],
+    nullifier: [u8; 32],
+) {
+    // 1. Derive sender pubkey from secret key
+    let sender_pubkey = sha256_hash(&sender_sk);
+
+    // 2. Prohibit self-transfers
+    assert_ne!(sender_pubkey, recipient_pubkey, "Self-transfer not allowed");
+
+    // 3. Compute sender's old leaf commitment and verify in old tree
+    let sender_old_leaf = account_commitment(&sender_pubkey, sender_balance, &sender_salt);
+    verify_membership(sender_old_leaf, sender_path, sender_indices, old_root);
+
+    // 4. Compute recipient's old leaf commitment and verify in old tree
+    let recipient_old_leaf =
+        account_commitment(&recipient_pubkey, recipient_balance, &recipient_salt);
+    verify_membership(
+        recipient_old_leaf,
+        recipient_path,
+        recipient_indices,
+        old_root,
+    );
+
+    // 5. Check sufficient sender balance (underflow protection)
+    assert!(sender_balance >= amount, "Insufficient balance");
+
+    // 6. Check recipient overflow protection
+    assert!(
+        recipient_balance <= u64::MAX - amount,
+        "Recipient balance overflow"
+    );
+
+    // 7. Compute and verify state-bound nullifier
+    let computed_nullifier = sha256_hash(&[&sender_sk[..], &old_root[..], b"transfer_v1"].concat());
+    assert_eq!(computed_nullifier, nullifier, "Nullifier mismatch");
+
+    // 8. Compute new balances (safe after checks in steps 5-6)
+    let new_sender_balance = sender_balance - amount;
+    let new_recipient_balance = recipient_balance + amount;
+
+    // 9. Compute new leaf commitments
+    let sender_new_leaf = account_commitment(&sender_pubkey, new_sender_balance, &new_sender_salt);
+    let recipient_new_leaf = account_commitment(
+        &recipient_pubkey,
+        new_recipient_balance,
+        &new_recipient_salt,
+    );
+
+    // 10. Recompute new root with both leaves updated
+    let computed_new_root = compute_new_root(
+        sender_new_leaf,
+        sender_indices,
+        recipient_new_leaf,
+        recipient_indices,
+        sender_path,
+        recipient_path,
+    );
+    assert_eq!(
+        computed_new_root, new_root,
+        "New root mismatch: state transition verification failed"
+    );
+}
+
+/// Helper: compute SHA-256 of input bytes.
+fn sha256_hash(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}

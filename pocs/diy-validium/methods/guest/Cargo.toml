@@ -20,3 +20,7 @@ path = "src/membership.rs"
 [[bin]]
 name = "balance"
 path = "src/balance.rs"
+
+[[bin]]
+name = "transfer"
+path = "src/transfer.rs"

@@ -366,6 +366,8 @@ fn test_wrong_root_panics() {
         recipient.salt,
         &recipient_proof.path,
         &recipient_proof.indices,
+        new_sender_salt,
+        new_recipient_salt,
         wrong_old_root,
         fake_new_root,
         nullifier,
