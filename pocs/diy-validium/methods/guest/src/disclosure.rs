@@ -48,6 +48,19 @@ fn account_commitment(pubkey: &[u8; 32], balance: u64, salt: &[u8; 32]) -> [u8; 
     hasher.finalize().into()
 }
 
+/// Compute the Merkle root by hashing a leaf upward through the proof path.
+fn compute_root(leaf: [u8; 32], path: &[[u8; 32]], indices: &[bool]) -> [u8; 32] {
+    let mut current = leaf;
+    for (sibling, &is_right) in path.iter().zip(indices.iter()) {
+        current = if is_right {
+            hash_pair(sibling, &current)
+        } else {
+            hash_pair(&current, sibling)
+        };
+    }
+    current
+}
+
 fn main() {
     // 1. Read all private inputs (order must match host env::write order)
     let secret_key: [u8; 32] = risc0_zkvm::guest::env::read();
@@ -63,17 +76,7 @@ fn main() {
 
     // 3. Compute leaf commitment and verify membership (recompute root)
     let leaf = account_commitment(&pubkey, balance, &salt);
-    let merkle_root = {
-        let mut current = leaf;
-        for (sibling, &is_right) in path.iter().zip(indices.iter()) {
-            current = if is_right {
-                hash_pair(sibling, &current)
-            } else {
-                hash_pair(&current, sibling)
-            };
-        }
-        current
-    };
+    let merkle_root = compute_root(leaf, &path, &indices);
 
     // 4. Prove balance satisfies threshold
     assert!(balance >= threshold, "Balance below threshold");

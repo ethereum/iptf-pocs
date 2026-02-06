@@ -67,7 +67,7 @@ contract ValidiumBridge {
         bytes memory membershipJournal = abi.encodePacked(allowlistRoot);
         verifier.verify(membershipSeal, MEMBERSHIP_IMAGE_ID, sha256(membershipJournal));
 
-        token.transferFrom(msg.sender, address(this), amount);
+        require(token.transferFrom(msg.sender, address(this), amount), "Deposit transfer failed");
 
         emit Deposit(msg.sender, pubkey, amount);
     }
@@ -99,7 +99,7 @@ contract ValidiumBridge {
         stateRoot = newRoot;
         nullifiers[nullifier] = true;
 
-        token.transfer(recipient, amount);
+        require(token.transfer(recipient, amount), "Withdrawal transfer failed");
 
         emit Withdrawal(nullifier, recipient, amount);
     }

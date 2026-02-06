@@ -6,6 +6,14 @@ A proof of concept for private institutional payments on Ethereum using a validi
 
 Institutions need blockchain guarantees -- immutability, settlement finality, auditability -- without exposing balances, transfer amounts, or counterparties to public observers. This PoC demonstrates a validium pattern: account state lives off-chain in the operator's database, while only Merkle roots and ZK validity proofs are posted on-chain. The result is Ethereum's security model with database-level privacy.
 
+The full lifecycle demonstrates the **Prividium pattern** -- privacy by default, transparency by choice:
+1. **Permissioned deposit** (allowlist membership proof gates ERC20 bridge entry)
+2. **Private transfers** (ZK-proven state transitions, hidden from everyone)
+3. **Selective disclosure** (prove compliance to regulators without revealing balances)
+4. **Proven withdrawal** (ZK-proven exit back to on-chain ERC20)
+
+Five ZK circuits, all written in standard Rust, covering the complete institutional privacy workflow.
+
 See [SPEC.md](SPEC.md) for the full protocol specification.
 
 ## Architecture Overview
@@ -16,7 +24,9 @@ Off-chain (Operator)          ZK Layer (RISC Zero)         On-chain (Ethereum)
 | Account database      | --> | Prove state valid   | --> | Verify proof        |
 | - pubkeys, balances   |     | - Membership        |     | - Store Merkle root |
 | - salts, Merkle tree  |     | - Balance >= X      |     | - Record nullifiers |
-|                       |     | - Transfer correct   |     | - Emit events       |
+|                       |     | - Transfer correct   |     | - Bridge ERC20      |
+|                       |     | - Withdrawal valid   |     | - Emit events       |
+|                       |     | - Disclosure valid   |     |                     |
 +-----------------------+     +---------------------+     +---------------------+
 ```
 
@@ -29,7 +39,7 @@ Data stays private. Only roots and proofs touch the chain.
 | **1. Allowlist Membership** | Prove you belong to an approved set without revealing your identity | Implemented |
 | **2. Private Balance Proofs** | Prove balance >= X without revealing actual balance | Implemented |
 | **3. Private Transfers** | Transfer value between accounts with ZK-proven state transitions | Implemented |
-| **4. ERC20 Bridge** | Deposit/withdraw between on-chain ERC20 and private balances | Spec only |
+| **4. Institutional Lifecycle** | ERC20 bridge (deposit/withdraw) + compliance disclosure proofs | Implemented |
 
 ## Prerequisites
 
@@ -63,7 +73,7 @@ cargo build
 # Rust tests (Merkle tree, account store, circuit tests via dev mode)
 RISC0_SKIP_BUILD=1 cargo test -p diy-validium-host
 
-# Solidity tests (MembershipVerifier, BalanceVerifier)
+# Solidity tests (all verifiers + bridge + disclosure)
 cd contracts && forge test --offline
 ```
 
@@ -77,7 +87,7 @@ RISC0_DEV_MODE=1 cargo run
 cargo run
 ```
 
-The demo creates sample accounts, builds a Merkle tree, then runs Phase 1 (membership proof), Phase 2 (balance proof), and Phase 3 (transfer proof with dual-leaf state transition) end-to-end.
+The demo creates sample accounts, builds a Merkle tree, then runs all five proof types end-to-end: membership, balance, transfer, withdrawal, and disclosure.
 
 ### Deploy Contracts
 
@@ -87,12 +97,12 @@ cd contracts
 # Local deployment with mock verifier
 forge script script/Deploy.s.sol --broadcast
 
-# Testnet deployment (set RPC_URL and provide a real verifier)
-VERIFIER_ADDRESS=0x... ALLOWLIST_ROOT=0x... ACCOUNTS_ROOT=0x... \
+# Testnet deployment (set RPC_URL and provide a real verifier + token)
+VERIFIER_ADDRESS=0x... TOKEN_ADDRESS=0x... ALLOWLIST_ROOT=0x... ACCOUNTS_ROOT=0x... \
   forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
 ```
 
-If `VERIFIER_ADDRESS` is not set, the script deploys a `MockRiscZeroVerifier` that accepts all proofs (suitable for testing only).
+If `VERIFIER_ADDRESS` is not set, the script deploys a `MockRiscZeroVerifier` that accepts all proofs (suitable for testing only). The bridge requires `TOKEN_ADDRESS` to be set; otherwise bridge deployment is skipped.
 
 ## Project Structure
 
@@ -103,21 +113,31 @@ diy-validium/
 ├── Cargo.toml                       # Rust workspace root
 ├── host/
 │   ├── src/
-│   │   ├── main.rs                  # E2E demo (Phase 1 + Phase 2 + Phase 3)
+│   │   ├── main.rs                  # E2E demo (Phases 1-4)
 │   │   ├── merkle.rs                # Merkle tree + proof generation
 │   │   └── accounts.rs              # Account model + store
 │   └── tests/                       # Integration tests
+│       ├── membership_circuit.rs    # Phase 1 circuit tests
+│       ├── balance_circuit.rs       # Phase 2 circuit tests
+│       ├── account_store.rs         # Account store tests
+│       ├── transfer_circuit.rs      # Phase 3 circuit tests
+│       ├── withdrawal_circuit.rs    # Phase 4 withdrawal tests
+│       └── disclosure_circuit.rs    # Phase 4 disclosure tests
 ├── methods/
 │   ├── guest/src/
 │   │   ├── membership.rs            # Phase 1 ZK circuit
 │   │   ├── balance.rs               # Phase 2 ZK circuit
-│   │   └── transfer.rs              # Phase 3 ZK circuit
+│   │   ├── transfer.rs              # Phase 3 ZK circuit
+│   │   ├── withdrawal.rs            # Phase 4 withdrawal circuit
+│   │   └── disclosure.rs            # Phase 4 disclosure circuit
 │   └── src/lib.rs                   # ELF + image ID exports
 └── contracts/
     ├── src/
     │   ├── MembershipVerifier.sol    # Phase 1 on-chain verifier
     │   ├── BalanceVerifier.sol       # Phase 2 on-chain verifier
-    │   └── TransferVerifier.sol      # Phase 3 on-chain verifier
+    │   ├── TransferVerifier.sol      # Phase 3 on-chain verifier
+    │   ├── ValidiumBridge.sol        # Phase 4 ERC20 bridge
+    │   └── DisclosureVerifier.sol    # Phase 4 disclosure verifier
     ├── test/                         # Foundry tests
     └── script/Deploy.s.sol           # Deployment script
 ```
@@ -133,21 +153,23 @@ diy-validium/
 - Individual account balances are hidden from public observers
 - Transfer amounts and sender/recipient links are not revealed on-chain
 - Allowlist membership can be proven without disclosing identity
+- Compliance can be proven without revealing exact balances (disclosure proofs)
 
 **What is NOT protected:**
 - Malicious operator -- the operator is trusted to maintain correct off-chain state and data availability
 - Traffic analysis and timing correlation
 - Side-channel attacks on proof generation
-- Regulatory visibility -- no viewing keys or selective disclosure in this PoC
+- Deposits and withdrawals are public -- privacy exists only between them
 
 ## Known Limitations
 
 - **Centralized operator**: Single operator holds all account data. Production would use a DA committee or post calldata on-chain.
-- **No viewing keys**: No mechanism for selective disclosure to regulators or auditors.
+- **Hash-based disclosure keys**: Disclosure uses `SHA256(pubkey || auditor_pubkey || "disclosure_v1")`, not encryption-based viewing keys. Production would use threshold decryption or verifiable encryption (see Penumbra, Aztec).
 - **Simple key derivation**: `pubkey = SHA256(secret_key)`. Production would use proper elliptic curve key derivation.
 - **In-memory storage**: Account state is held in memory. Production would use a persistent database.
 - **IMAGE_ID placeholders**: On-chain contracts use `bytes32(0)` as the guest image ID. Must be updated with real compiled image IDs before testnet deployment.
 - **No transaction batching**: Each operation requires a separate proof. Production would batch multiple transfers.
+- **Single ERC20**: Bridge supports one token. Production would add `asset_id` to the commitment scheme.
 - **Dev mode for tests**: Rust integration tests use `RISC0_DEV_MODE` (fake proofs) for speed.
 
 ## Security Disclaimer
@@ -160,3 +182,5 @@ diy-validium/
 - [Tornado Cash -- Nullifier Design](https://tornado.cash/)
 - [Zcash Protocol Specification](https://zips.z.cash/protocol/protocol.pdf)
 - [Validium on ethereum.org](https://ethereum.org/en/developers/docs/scaling/validium/)
+- [Penumbra -- Viewing Keys](https://protocol.penumbra.zone/)
+- [Aztec -- Note Discovery](https://docs.aztec.network/)
