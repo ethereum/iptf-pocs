@@ -304,24 +304,27 @@ pub fn verify_transfer(
         old_root,
     );
 
-    // 5. Check sufficient sender balance (underflow protection)
+    // 5. Check positive transfer amount
+    assert!(amount > 0, "Transfer amount must be positive");
+
+    // 6. Check sufficient sender balance (underflow protection)
     assert!(sender_balance >= amount, "Insufficient balance");
 
-    // 6. Check recipient overflow protection
+    // 7. Check recipient overflow protection
     assert!(
         recipient_balance <= u64::MAX - amount,
         "Recipient balance overflow"
     );
 
-    // 7. Compute and verify state-bound nullifier
+    // 8. Compute and verify state-bound nullifier
     let computed_nullifier = sha256_hash(&[&sender_sk[..], &old_root[..], b"transfer_v1"].concat());
     assert_eq!(computed_nullifier, nullifier, "Nullifier mismatch");
 
-    // 8. Compute new balances (safe after checks in steps 5-6)
+    // 9. Compute new balances (safe after checks in steps 5-7)
     let new_sender_balance = sender_balance - amount;
     let new_recipient_balance = recipient_balance + amount;
 
-    // 9. Compute new leaf commitments
+    // 10. Compute new leaf commitments
     let sender_new_leaf = account_commitment(&sender_pubkey, new_sender_balance, &new_sender_salt);
     let recipient_new_leaf = account_commitment(
         &recipient_pubkey,
@@ -329,7 +332,7 @@ pub fn verify_transfer(
         &new_recipient_salt,
     );
 
-    // 10. Recompute new root with both leaves updated
+    // 11. Recompute new root with both leaves updated
     let computed_new_root = compute_new_root(
         sender_new_leaf,
         sender_indices,

@@ -478,16 +478,19 @@ fn compute_new_root(
     let depth = sender_indices.len();
 
     // Find divergence depth.
-    // The indices array is indexed root-to-leaf: indices[0] is the root level,
-    // indices[depth-1] is the leaf level. We scan from root (index 0) downward
-    // to find where the sender and recipient paths first differ.
+    // The indices array is indexed leaf-to-root: indices[0] is the leaf level,
+    // indices[depth-1] is the root-adjacent level. We scan from root
+    // (highest index) downward to find the shallowest level where the
+    // sender and recipient paths first differ.
     let divergence = (0..depth)
-        .position(|i| sender_indices[i] != recipient_indices[i])
+        .rev()
+        .find(|&i| sender_indices[i] != recipient_indices[i])
         .expect("Sender and recipient must differ (no self-transfers)");
 
-    // Recompute sender's branch from leaf up to (but not including) divergence level.
+    // Recompute sender's branch from leaf (index 0) up to (but not
+    // including) the divergence level.
     let mut sender_hash = sender_leaf;
-    for i in (divergence + 1..depth).rev() {
+    for i in 0..divergence {
         sender_hash = if sender_indices[i] {
             sha256(&[&sender_path[i][..], &sender_hash[..]].concat())
         } else {
@@ -495,9 +498,10 @@ fn compute_new_root(
         };
     }
 
-    // Recompute recipient's branch from leaf up to (but not including) divergence level.
+    // Recompute recipient's branch from leaf up to (but not including)
+    // the divergence level.
     let mut recipient_hash = recipient_leaf;
-    for i in (divergence + 1..depth).rev() {
+    for i in 0..divergence {
         recipient_hash = if recipient_indices[i] {
             sha256(&[&recipient_path[i][..], &recipient_hash[..]].concat())
         } else {
@@ -514,9 +518,9 @@ fn compute_new_root(
         sha256(&[&sender_hash[..], &recipient_hash[..]].concat())
     };
 
-    // Continue hashing above divergence using shared path siblings.
-    // Above divergence, sender_path and recipient_path have the same siblings.
-    for i in (0..divergence).rev() {
+    // Continue hashing above divergence toward root using shared path
+    // siblings (same in both paths above the divergence point).
+    for i in (divergence + 1)..depth {
         current = if sender_indices[i] {
             sha256(&[&sender_path[i][..], &current[..]].concat())
         } else {

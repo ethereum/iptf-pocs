@@ -184,28 +184,31 @@ fn main() {
         account_commitment(&recipient_pubkey, recipient_balance, &recipient_salt);
     verify_membership(recipient_old_leaf, &recipient_path, &recipient_indices, old_root);
 
-    // 6. Check sufficient sender balance (underflow protection)
+    // 6. Check positive transfer amount
+    assert!(amount > 0, "Transfer amount must be positive");
+
+    // 7. Check sufficient sender balance (underflow protection)
     assert!(sender_balance >= amount, "Insufficient balance");
 
-    // 7. Check recipient overflow protection
+    // 8. Check recipient overflow protection
     assert!(
         recipient_balance <= u64::MAX - amount,
         "Recipient balance overflow"
     );
 
-    // 8. Compute state-bound nullifier
+    // 9. Compute state-bound nullifier
     let nullifier = sha256(&[&sender_sk[..], &old_root[..], b"transfer_v1"].concat());
 
-    // 9. Compute new balances (safe after checks in steps 6-7)
+    // 10. Compute new balances (safe after checks in steps 6-8)
     let new_sender_balance = sender_balance - amount;
     let new_recipient_balance = recipient_balance + amount;
 
-    // 10. Compute new leaf commitments
+    // 11. Compute new leaf commitments
     let sender_new_leaf = account_commitment(&sender_pubkey, new_sender_balance, &new_sender_salt);
     let recipient_new_leaf =
         account_commitment(&recipient_pubkey, new_recipient_balance, &new_recipient_salt);
 
-    // 11. Recompute new root with both leaves updated
+    // 12. Recompute new root with both leaves updated
     let new_root = compute_new_root(
         sender_new_leaf,
         &sender_indices,
@@ -215,7 +218,7 @@ fn main() {
         &recipient_path,
     );
 
-    // 12. Commit public outputs to journal (big-endian for Solidity compatibility)
+    // 13. Commit public outputs to journal (big-endian for Solidity compatibility)
     risc0_zkvm::guest::env::commit_slice(&old_root);
     risc0_zkvm::guest::env::commit_slice(&new_root);
     risc0_zkvm::guest::env::commit_slice(&nullifier);
