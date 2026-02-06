@@ -9,8 +9,8 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # RISC Zero
-risc0-zkvm = "1.2"
-risc0-build = "1.2"
+risc0-zkvm = "3.0"
+risc0-build = "3.0"
 
 # Crypto
 sha2 = "0.10"
