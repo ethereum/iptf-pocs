@@ -33,6 +33,7 @@ Institutions require payment privacy equivalent to traditional banking while ope
 | **Regulatory** | Only KYC-verified participants. Viewing keys enable selective disclosure for AML/CFT monitoring. |
 | **Operational** | Near real-time settlement (minutes). Compatible with existing ERC-20 stablecoins without issuer modifications. |
 | **Trust** | Relayers cannot steal funds or link transactions. Compliance authorities cannot forge attestations for non-verified parties. |
+| **Deployable on Ethereum L1** | Inherits security properties of the L1's consensus and access to bridged liquidity |  
 
 ## Approach
 
