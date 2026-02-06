@@ -43,6 +43,20 @@ contract TransferVerifier {
     /// @param newRoot The post-transition Merkle root committed in the proof.
     /// @param nullifier The nullifier committed in the proof to prevent double-spend.
     function executeTransfer(bytes calldata seal, bytes32 oldRoot, bytes32 newRoot, bytes32 nullifier) external {
-        revert("Not implemented");
+        if (oldRoot != stateRoot) {
+            revert StaleState(stateRoot, oldRoot);
+        }
+        if (nullifiers[nullifier]) {
+            revert NullifierAlreadyUsed(nullifier);
+        }
+
+        // Journal encodes: oldRoot (32 bytes) + newRoot (32 bytes) + nullifier (32 bytes)
+        bytes memory journal = abi.encodePacked(oldRoot, newRoot, nullifier);
+        verifier.verify(seal, IMAGE_ID, sha256(journal));
+
+        stateRoot = newRoot;
+        nullifiers[nullifier] = true;
+
+        emit Transfer(oldRoot, newRoot, nullifier);
     }
 }
