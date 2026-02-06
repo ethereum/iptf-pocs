@@ -110,11 +110,18 @@ Tree depth: 20 (supports ~1M accounts)
 #### Nullifier
 
 ```
-nullifier = SHA256(secret_key || "nullifier_domain")
+nullifier = SHA256(secret_key || old_root || "transfer_v1")
 ```
 
 - `secret_key`: 32 bytes
-- `"nullifier_domain"`: ASCII string, padded/hashed
+- `old_root`: 32 bytes (the pre-transition Merkle root)
+- `"transfer_v1"`: ASCII domain separator (operation-specific)
+
+Nullifiers are **state-bound**: each state transition generates a unique nullifier
+derived from the sender's secret key and the pre-transition root. This allows
+accounts to perform multiple transfers while preventing double-spends (same
+old_root can only be used once per account). Different operation types use
+different domain separators to ensure disjoint nullifier spaces.
 
 ### On-Chain State
 
@@ -360,22 +367,32 @@ contract BalanceVerifier {
 - `sender_sk: [u8; 32]` (secret key)
 - `sender_balance: u64`
 - `sender_salt: [u8; 32]`
-- `sender_path: Vec<[u8; 32]>`
-- `sender_indices: Vec<bool>`
+- `sender_path: Vec<[u8; 32]>` (length == TREE_DEPTH)
+- `sender_indices: Vec<bool>` (length == TREE_DEPTH)
 - `amount: u64`
 - `recipient_pubkey: [u8; 32]`
 - `recipient_balance: u64` (current)
 - `recipient_salt: [u8; 32]`
-- `recipient_path: Vec<[u8; 32]>`
-- `recipient_indices: Vec<bool>`
+- `recipient_path: Vec<[u8; 32]>` (length == TREE_DEPTH)
+- `recipient_indices: Vec<bool>` (length == TREE_DEPTH)
 - `new_sender_salt: [u8; 32]`
 - `new_recipient_salt: [u8; 32]`
+
+**Input Validation:**
+```rust
+assert_eq!(sender_path.len(), TREE_DEPTH);
+assert_eq!(sender_indices.len(), TREE_DEPTH);
+assert_eq!(recipient_path.len(), TREE_DEPTH);
+assert_eq!(recipient_indices.len(), TREE_DEPTH);
+assert!(amount > 0, "Transfer amount must be positive");
+```
 
 **Circuit Logic:**
 ```rust
 fn verify_transfer(/* inputs */) {
-    // 1. Derive sender pubkey from secret key
-    let sender_pubkey = derive_pubkey(sender_sk);
+    // 1. Derive sender pubkey; prohibit self-transfers
+    let sender_pubkey = sha256(&sender_sk);  // pubkey = SHA256(secret_key)
+    assert_ne!(sender_pubkey, recipient_pubkey, "Self-transfer not allowed");
 
     // 2. Compute sender's old commitment
     let sender_old_leaf = sha256(&[
@@ -387,21 +404,33 @@ fn verify_transfer(/* inputs */) {
     // 3. Verify sender in old tree
     verify_membership(sender_old_leaf, &sender_path, &sender_indices, old_root);
 
-    // 4. Check sufficient balance
-    assert!(sender_balance >= amount);
+    // 4. Compute recipient's old commitment and verify in old tree
+    let recipient_old_leaf = sha256(&[
+        &recipient_pubkey[..],
+        &recipient_balance.to_le_bytes()[..],
+        &recipient_salt[..]
+    ].concat());
+    verify_membership(recipient_old_leaf, &recipient_path, &recipient_indices, old_root);
 
-    // 5. Compute nullifier
+    // 5. Check sufficient balance (underflow protection)
+    assert!(sender_balance >= amount, "Insufficient balance");
+
+    // 6. Check recipient overflow protection
+    assert!(recipient_balance <= u64::MAX - amount, "Recipient balance overflow");
+
+    // 7. Compute state-bound nullifier
     let computed_nullifier = sha256(&[
         &sender_sk[..],
-        b"nullifier_domain"
+        &old_root[..],
+        b"transfer_v1"
     ].concat());
     assert_eq!(computed_nullifier, nullifier);
 
-    // 6. Compute new balances
+    // 8. Compute new balances (safe after checks in steps 5-6)
     let new_sender_balance = sender_balance - amount;
     let new_recipient_balance = recipient_balance + amount;
 
-    // 7. Compute new commitments
+    // 9. Compute new commitments
     let sender_new_leaf = sha256(&[
         &sender_pubkey[..],
         &new_sender_balance.to_le_bytes()[..],
@@ -414,21 +443,101 @@ fn verify_transfer(/* inputs */) {
         &new_recipient_salt[..]
     ].concat());
 
-    // 8. Verify new tree structure
-    // (simplified: in practice, need to update both leaves and recompute root)
+    // 10. Recompute new root with both leaves updated
     let computed_new_root = compute_new_root(
-        sender_new_leaf, sender_indices,
-        recipient_new_leaf, recipient_indices,
-        old_root
+        sender_new_leaf, &sender_indices,
+        recipient_new_leaf, &recipient_indices,
+        &sender_path, &recipient_path,
     );
     assert_eq!(computed_new_root, new_root);
 }
 ```
 
+**Dual-Leaf Root Recomputation (`compute_new_root`):**
+
+When two leaves change simultaneously, the tree update must account for
+whether the sender and recipient share subtree ancestors. The algorithm:
+
+1. Find the divergence depth: the shallowest level where `sender_indices`
+   and `recipient_indices` differ.
+2. Below divergence: recompute each branch independently using its own
+   sibling path from the old tree.
+3. At divergence: the two recomputed branches become siblings of each other.
+4. Above divergence: continue hashing upward using shared sibling hashes
+   (which are the same in both paths above the divergence point).
+
+```rust
+fn compute_new_root(
+    sender_leaf: [u8; 32],
+    sender_indices: &[bool],
+    recipient_leaf: [u8; 32],
+    recipient_indices: &[bool],
+    sender_path: &[[u8; 32]],
+    recipient_path: &[[u8; 32]],
+) -> [u8; 32] {
+    let depth = sender_indices.len();
+
+    // Find divergence depth (from leaf level upward).
+    // At leaf level (index depth-1), indices encode the leaf position.
+    // We scan from the root side (index 0) to find where paths first differ.
+    let divergence = (0..depth)
+        .position(|i| sender_indices[i] != recipient_indices[i])
+        .expect("Sender and recipient must differ (no self-transfers)");
+
+    // Recompute sender's branch from leaf up to (but not including) divergence level.
+    let mut sender_hash = sender_leaf;
+    for i in (divergence + 1..depth).rev() {
+        sender_hash = if sender_indices[i] {
+            sha256(&[&sender_path[i][..], &sender_hash[..]].concat())
+        } else {
+            sha256(&[&sender_hash[..], &sender_path[i][..]].concat())
+        };
+    }
+
+    // Recompute recipient's branch from leaf up to (but not including) divergence level.
+    let mut recipient_hash = recipient_leaf;
+    for i in (divergence + 1..depth).rev() {
+        recipient_hash = if recipient_indices[i] {
+            sha256(&[&recipient_path[i][..], &recipient_hash[..]].concat())
+        } else {
+            sha256(&[&recipient_hash[..], &recipient_path[i][..]].concat())
+        };
+    }
+
+    // At divergence level, the two branches are siblings.
+    let mut current = if sender_indices[divergence] {
+        // Sender is right child, recipient is left child
+        sha256(&[&recipient_hash[..], &sender_hash[..]].concat())
+    } else {
+        // Sender is left child, recipient is right child
+        sha256(&[&sender_hash[..], &recipient_hash[..]].concat())
+    };
+
+    // Continue hashing above divergence using shared path siblings.
+    // Above divergence, sender_path and recipient_path have the same siblings.
+    for i in (0..divergence).rev() {
+        current = if sender_indices[i] {
+            sha256(&[&sender_path[i][..], &current[..]].concat())
+        } else {
+            sha256(&[&current[..], &sender_path[i][..]].concat())
+        };
+    }
+
+    current
+}
+```
+
+**Invariant:** Accounts maintain fixed positions in the Merkle tree. The
+sender's position (encoded by `sender_indices`) and recipient's position
+(encoded by `recipient_indices`) do not change between old and new state.
+Tree compaction is not supported in this PoC.
+
 **Committed Outputs (Journal):**
 - `old_root: [u8; 32]`
 - `new_root: [u8; 32]`
 - `nullifier: [u8; 32]`
+
+All committed as big-endian bytes for Solidity compatibility (see Phase 2 endianness note).
 
 ### Contract: TransferVerifier
 
@@ -437,7 +546,17 @@ contract TransferVerifier {
     bytes32 public stateRoot;
     mapping(bytes32 => bool) public nullifiers;
     IRiscZeroVerifier public verifier;
+    address public operator;
     bytes32 public constant IMAGE_ID = /* transfer circuit hash */;
+
+    error StaleState(bytes32 expected, bytes32 provided);
+    error NullifierAlreadyUsed(bytes32 nullifier);
+
+    event Transfer(
+        bytes32 indexed oldRoot,
+        bytes32 indexed newRoot,
+        bytes32 indexed nullifier
+    );
 
     function executeTransfer(
         bytes calldata seal,
@@ -445,17 +564,17 @@ contract TransferVerifier {
         bytes32 newRoot,
         bytes32 nullifier
     ) external {
-        // 1. Check old root matches current state
-        require(oldRoot == stateRoot, "Stale state");
+        // 1. Check old root matches current state (cheap check first)
+        if (oldRoot != stateRoot) revert StaleState(stateRoot, oldRoot);
 
-        // 2. Check nullifier not used
-        require(!nullifiers[nullifier], "Double spend");
+        // 2. Check nullifier not used (cheap check)
+        if (nullifiers[nullifier]) revert NullifierAlreadyUsed(nullifier);
 
-        // 3. Verify proof
+        // 3. Verify proof (expensive — after cheap checks)
         bytes memory journal = abi.encodePacked(oldRoot, newRoot, nullifier);
         verifier.verify(seal, IMAGE_ID, sha256(journal));
 
-        // 4. Update state
+        // 4. Atomic state update (no external calls between these)
         stateRoot = newRoot;
         nullifiers[nullifier] = true;
 
@@ -463,6 +582,44 @@ contract TransferVerifier {
     }
 }
 ```
+
+> **Access Control:** In this PoC, `executeTransfer` is callable by any address.
+> In production, restrict to the operator or authorized submitters to limit
+> gas griefing from invalid proof submissions.
+
+### Off-Chain State Consistency
+
+The operator maintains an off-chain mirror of the account state. To prevent
+divergence between off-chain and on-chain state:
+
+1. **Sequential processing:** The operator generates at most one proof per
+   state root. No concurrent proof generation from the same root.
+2. **Pending transaction tracking:** While a transfer transaction is pending
+   in the mempool, the operator rejects new proof generation requests.
+3. **Confirmation:** After on-chain confirmation, the operator applies the
+   state transition to the off-chain database and opens the next proof slot.
+4. **Revert handling:** If a transaction reverts (stale state, gas issues),
+   the operator discards the pending state diff and resumes from the
+   confirmed on-chain root.
+
+```
+Operator State Machine:
+  IDLE ──[generate proof]──▶ PENDING ──[tx confirmed]──▶ IDLE (new root)
+                                │
+                                └──[tx reverted]──▶ IDLE (same root)
+```
+
+> **PoC Shortcut:** This PoC uses single-threaded proof generation, which
+> naturally serializes state transitions. Production systems would need
+> explicit locking or an optimistic concurrency mechanism.
+
+### Phase Independence
+
+Phase 2 and Phase 3 deploy separate contracts with independent state roots.
+Phase 2's `BalanceVerifier` operates on a static snapshot of account state.
+Phase 3's `TransferVerifier` manages a dynamic state root that evolves with
+each transfer. In a production system, these would be unified into a single
+contract.
 
 ---
 
