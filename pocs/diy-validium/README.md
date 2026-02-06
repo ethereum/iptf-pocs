@@ -28,7 +28,7 @@ Data stays private. Only roots and proofs touch the chain.
 |-------|-------------|--------|
 | **1. Allowlist Membership** | Prove you belong to an approved set without revealing your identity | Implemented |
 | **2. Private Balance Proofs** | Prove balance >= X without revealing actual balance | Implemented |
-| **3. Private Transfers** | Transfer value between accounts with ZK-proven state transitions | Spec complete, contract stubbed |
+| **3. Private Transfers** | Transfer value between accounts with ZK-proven state transitions | Implemented |
 | **4. ERC20 Bridge** | Deposit/withdraw between on-chain ERC20 and private balances | Spec only |
 
 ## Prerequisites
@@ -77,7 +77,7 @@ RISC0_DEV_MODE=1 cargo run
 cargo run
 ```
 
-The demo creates sample accounts, builds a Merkle tree, then runs Phase 1 (membership proof) and Phase 2 (balance proof) end-to-end.
+The demo creates sample accounts, builds a Merkle tree, then runs Phase 1 (membership proof), Phase 2 (balance proof), and Phase 3 (transfer proof with dual-leaf state transition) end-to-end.
 
 ### Deploy Contracts
 
@@ -103,20 +103,21 @@ diy-validium/
 ├── Cargo.toml                       # Rust workspace root
 ├── host/
 │   ├── src/
-│   │   ├── main.rs                  # E2E demo (Phase 1 + Phase 2)
+│   │   ├── main.rs                  # E2E demo (Phase 1 + Phase 2 + Phase 3)
 │   │   ├── merkle.rs                # Merkle tree + proof generation
 │   │   └── accounts.rs              # Account model + store
 │   └── tests/                       # Integration tests
 ├── methods/
 │   ├── guest/src/
 │   │   ├── membership.rs            # Phase 1 ZK circuit
-│   │   └── balance.rs               # Phase 2 ZK circuit
+│   │   ├── balance.rs               # Phase 2 ZK circuit
+│   │   └── transfer.rs              # Phase 3 ZK circuit
 │   └── src/lib.rs                   # ELF + image ID exports
 └── contracts/
     ├── src/
     │   ├── MembershipVerifier.sol    # Phase 1 on-chain verifier
     │   ├── BalanceVerifier.sol       # Phase 2 on-chain verifier
-    │   └── TransferVerifier.sol      # Phase 3 on-chain verifier (stubbed)
+    │   └── TransferVerifier.sol      # Phase 3 on-chain verifier
     ├── test/                         # Foundry tests
     └── script/Deploy.s.sol           # Deployment script
 ```
@@ -147,7 +148,6 @@ diy-validium/
 - **In-memory storage**: Account state is held in memory. Production would use a persistent database.
 - **IMAGE_ID placeholders**: On-chain contracts use `bytes32(0)` as the guest image ID. Must be updated with real compiled image IDs before testnet deployment.
 - **No transaction batching**: Each operation requires a separate proof. Production would batch multiple transfers.
-- **TransferVerifier stubbed**: Phase 3 contract is deployed but `executeTransfer` reverts with "Not implemented".
 - **Dev mode for tests**: Rust integration tests use `RISC0_DEV_MODE` (fake proofs) for speed.
 
 ## Security Disclaimer

@@ -1,16 +1,18 @@
 //! DIY Validium Host - Proof generation and verification
 //!
-//! Demonstrates both Phase 1 (membership) and Phase 2 (balance) proof flows.
-//! Builds a Merkle tree from sample accounts, then:
+//! Demonstrates Phase 1 (membership), Phase 2 (balance), and Phase 3 (transfer)
+//! proof flows. Builds a Merkle tree from sample accounts, then:
 //!   Phase 1: Proves an account is in the allowlist
 //!   Phase 2: Proves an account has balance >= required_amount
+//!   Phase 3: Proves a valid private transfer between two accounts
 //!
 //! NOTE: Uses tree depth 4 (16 leaf slots) instead of 20 (~1M) for
 //! faster demo proving times. Production would use depth 20 per SPEC.md.
 
 use anyhow::Result;
 use diy_validium_host::accounts::{Account, AccountStore};
-use diy_validium_host::merkle::account_commitment;
+use diy_validium_host::merkle::{account_commitment, compute_new_root};
+use sha2::{Digest, Sha256};
 
 fn main() -> Result<()> {
     // --- 1. Create sample accounts using AccountStore ---
@@ -139,7 +141,130 @@ fn main() -> Result<()> {
         journal_amount
     );
 
-    println!("\nPhase 1 + Phase 2 proofs complete.");
+    // ===================================================================
+    // Phase 3: Transfer proof
+    // ===================================================================
+    println!("\n--- Phase 3: Transfer Proof ---");
+
+    let sender_idx: usize = 0;
+    let recipient_idx: usize = 1;
+    let amount: u64 = 500;
+
+    let sender = store.get_account(sender_idx);
+    let recipient = store.get_account(recipient_idx);
+
+    // In a real system the sender would hold the secret key; here we derive
+    // it deterministically the same way we created the pubkey in the loop.
+    let sender_sk = {
+        let mut sk = [0u8; 32];
+        sk[0] = sender_idx as u8;
+        sk
+    };
+    // Verify our sender_sk derives the right pubkey
+    let derived_pubkey: [u8; 32] = Sha256::digest(sender_sk).into();
+    assert_eq!(
+        derived_pubkey, sender.pubkey,
+        "Sender SK should derive the stored pubkey"
+    );
+
+    println!(
+        "Transfer: account {} -> account {}, amount = {}",
+        sender_idx, recipient_idx, amount
+    );
+    println!(
+        "  Sender balance:    {} -> {}",
+        sender.balance,
+        sender.balance - amount
+    );
+    println!(
+        "  Recipient balance: {} -> {}",
+        recipient.balance,
+        recipient.balance + amount
+    );
+
+    let sender_proof = tree.prove(sender_idx);
+    let recipient_proof = tree.prove(recipient_idx);
+
+    // Fresh salts for new commitments
+    let new_sender_salt: [u8; 32] = Sha256::digest(b"new_sender_salt_demo").into();
+    let new_recipient_salt: [u8; 32] = Sha256::digest(b"new_recipient_salt_demo").into();
+
+    // Compute expected new root via dual-leaf recomputation (for verification)
+    let sender_new_leaf =
+        account_commitment(&sender.pubkey, sender.balance - amount, &new_sender_salt);
+    let recipient_new_leaf = account_commitment(
+        &recipient.pubkey,
+        recipient.balance + amount,
+        &new_recipient_salt,
+    );
+    let expected_new_root = compute_new_root(
+        sender_new_leaf,
+        &sender_proof.indices,
+        recipient_new_leaf,
+        &recipient_proof.indices,
+        &sender_proof.path,
+        &recipient_proof.path,
+    );
+
+    // Compute expected nullifier: SHA256(sender_sk || old_root || "transfer_v1")
+    let expected_nullifier: [u8; 32] =
+        Sha256::digest([&sender_sk[..], &root[..], b"transfer_v1"].concat()).into();
+
+    // Build ExecutorEnv (must match guest env::read() order in transfer.rs)
+    let env = risc0_zkvm::ExecutorEnv::builder()
+        .write(&sender_sk)?
+        .write(&sender.balance)?
+        .write(&sender.salt)?
+        .write(&sender_proof.path)?
+        .write(&sender_proof.indices)?
+        .write(&amount)?
+        .write(&recipient.pubkey)?
+        .write(&recipient.balance)?
+        .write(&recipient.salt)?
+        .write(&recipient_proof.path)?
+        .write(&recipient_proof.indices)?
+        .write(&new_sender_salt)?
+        .write(&new_recipient_salt)?
+        .build()?;
+
+    println!("Starting transfer proof generation...");
+    let prove_info = prover.prove(env, methods::TRANSFER_ELF)?;
+    let receipt = prove_info.receipt;
+
+    receipt.verify(methods::TRANSFER_ID)?;
+    println!("Transfer proof verified: OK");
+
+    // Extract journal: old_root (32) + new_root (32) + nullifier (32) = 96 bytes
+    let journal_bytes = &receipt.journal.bytes;
+    assert_eq!(
+        journal_bytes.len(),
+        96,
+        "Transfer journal should be 96 bytes"
+    );
+
+    let journal_old_root: [u8; 32] = journal_bytes[..32].try_into()?;
+    let journal_new_root: [u8; 32] = journal_bytes[32..64].try_into()?;
+    let journal_nullifier: [u8; 32] = journal_bytes[64..96].try_into()?;
+
+    assert_eq!(journal_old_root, root, "Journal old_root should match");
+    assert_eq!(
+        journal_new_root, expected_new_root,
+        "Journal new_root should match expected"
+    );
+    assert_eq!(
+        journal_nullifier, expected_nullifier,
+        "Journal nullifier should match expected"
+    );
+
+    println!(
+        "Journal: old_root=0x{}..., new_root=0x{}..., nullifier=0x{}...",
+        hex::encode(&journal_old_root[..4]),
+        hex::encode(&journal_new_root[..4]),
+        hex::encode(&journal_nullifier[..4]),
+    );
+    println!("All journal fields match: OK");
+
+    println!("\nPhase 1 + Phase 2 + Phase 3 proofs complete.");
 
     Ok(())
 }
