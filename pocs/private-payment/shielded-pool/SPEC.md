@@ -257,7 +257,107 @@ interface IUltraVerifier {
 
 ### Flows
 
-> **Architecture Note**: Clients maintain local Merkle trees using the `lean-imt` crate and generate proofs locally. The on-chain contracts only store commitment/nullifier data and verify proofs. 
+> **Architecture Note**: Clients maintain local Merkle trees using the `lean-imt` crate and generate proofs locally. The on-chain contracts only store commitment/nullifier data and verify proofs.
+
+#### Attestation Issuance (KYC Onboarding)
+
+Before a transactor can deposit into the shielded pool, they must be attested by an authorized compliance authority. This flow shows how a participant obtains a KYC attestation that is recorded in the on-chain attestation tree.
+
+```
+┌─────────────┐     ┌──────────────────────┐     ┌───────────────────────┐
+│ Transactor  │     │ Compliance Authority │     │ AttestationRegistry   │
+│  (Subject)  │     │     (Attester)       │     │     (On-Chain)        │
+└──────┬──────┘     └──────────┬───────────┘     └───────────┬───────────┘
+       │                       │                             │
+       │ 1. Submit KYC         │                             │
+       │    documentation      │                             │
+       │──────────────────────►│                             │
+       │                       │                             │
+       │                       │ 2. Verify identity          │
+       │                       │    (off-chain)              │
+       │                       │                             │
+       │                       │ 3. addAttestation(          │
+       │                       │      subjectPubkeyHash,     │
+       │                       │      expiresAt)             │
+       │                       │────────────────────────────►│
+       │                       │                             │ 4. Compute leaf =
+       │                       │                             │    poseidon(pubkeyHash,
+       │                       │                             │    attester, issuedAt,
+       │                       │                             │    expiresAt)
+       │                       │                             │
+       │                       │                             │ 5. Insert leaf into
+       │                       │                             │    attestation tree
+       │                       │                             │
+       │                       │                             │ 6. Emit AttestationAdded
+       │                       │◄────────────────────────────│
+       │                       │                             │
+       │ 7. Index event to     │                             │
+       │    learn leaf index   │                             │
+       │    & build Merkle     │                             │
+       │    proofs             │                             │
+       │◄──────────────────────│                             │
+```
+
+**Steps**:
+
+1. Transactor submits KYC documentation to the Compliance Authority (off-chain process)
+2. Compliance Authority verifies the transactor's identity per institutional and regulatory requirements
+3. Compliance Authority calls `addAttestation(subjectPubkeyHash, expiresAt)` on the AttestationRegistry contract, where `subjectPubkeyHash` is the Poseidon hash of the transactor's spending public key
+4. Contract computes the attestation leaf: `poseidon(subjectPubkeyHash, msg.sender, block.timestamp, expiresAt)`
+5. Contract inserts the leaf into the attestation Merkle tree and records the leaf-to-index mapping
+6. Contract emits `AttestationAdded(leaf, subjectPubkeyHash, attester, issuedAt, expiresAt)`
+7. Transactor's client indexes the event to learn the leaf index, enabling construction of Merkle inclusion proofs for future deposits
+
+**Prerequisites**: The Compliance Authority must be registered as an authorized attester by the contract owner via `addAttester(address)`.
+
+#### Attestation Revocation
+
+When a participant's KYC expires, they become sanctioned, or a regulator directs removal, the compliance authority revokes the attestation. This removes the leaf from the attestation tree, preventing the participant from making new deposits.
+
+```
+┌─────────────┐     ┌──────────────────────┐     ┌───────────────────────┐
+│  Regulator  │     │ Compliance Authority │     │ AttestationRegistry   │
+│             │     │     (Attester)       │     │     (On-Chain)        │
+└──────┬──────┘     └──────────┬───────────┘     └───────────┬───────────┘
+       │                       │                             │
+       │ 1. Direct revocation  │                             │
+       │    (e.g., sanctions   │                             │
+       │    match, KYC expiry) │                             │
+       │──────────────────────►│                             │
+       │                       │                             │
+       │                       │ 2. Compute sibling nodes    │
+       │                       │    for target leaf          │
+       │                       │    (off-chain, from local   │
+       │                       │    tree state)              │
+       │                       │                             │
+       │                       │ 3. revokeAttestation(       │
+       │                       │      oldLeaf,               │
+       │                       │      siblingNodes)          │
+       │                       │────────────────────────────►│
+       │                       │                             │ 4. Mark leaf as revoked
+       │                       │                             │    (attestationLeaves
+       │                       │                             │     [leaf] = false)
+       │                       │                             │
+       │                       │                             │ 5. Remove leaf from
+       │                       │                             │    Merkle tree
+       │                       │                             │    (root updated)
+       │                       │                             │
+       │                       │                             │ 6. Emit
+       │                       │                             │    AttestationRevoked
+       │                       │◄────────────────────────────│
+       │◄──────────────────────│                             │
+```
+
+**Steps**:
+
+1. Regulator directs the Compliance Authority to revoke a participant's attestation (e.g., due to sanctions match, KYC expiry, or compliance violation)
+2. Compliance Authority computes the sibling nodes (Merkle proof path) for the target leaf from their local copy of the attestation tree
+3. Compliance Authority calls `revokeAttestation(oldLeaf, siblingNodes)` on the AttestationRegistry contract
+4. Contract marks the leaf as revoked: `attestationLeaves[leaf] = false`
+5. Contract removes the leaf from the Merkle tree, updating the attestation root
+6. Contract emits `AttestationRevoked(leaf, revokedBy)`
+
+**Note**: After revocation, the participant can no longer produce valid Merkle inclusion proofs against the updated attestation root. This prevents new deposits. However, notes already in the shielded pool remain spendable; the protocol does not freeze in-pool funds.
 
 #### Deposit (Shielding)
 
