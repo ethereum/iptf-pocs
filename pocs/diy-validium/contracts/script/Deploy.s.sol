@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
 import {MembershipVerifier} from "../src/MembershipVerifier.sol";
+import {BalanceVerifier} from "../src/BalanceVerifier.sol";
 import {IRiscZeroVerifier} from "../src/interfaces/IRiscZeroVerifier.sol";
 
 /// @notice Mock RISC Zero verifier for local/testnet use. Accepts all proofs.
@@ -13,15 +14,16 @@ contract MockRiscZeroVerifier is IRiscZeroVerifier {
 }
 
 /// @title Deploy
-/// @notice Deployment script for MembershipVerifier and (optionally) a mock verifier.
+/// @notice Deployment script for Phase 1 + Phase 2 verifier contracts.
 /// @dev Usage: forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
 contract Deploy is Script {
     function run() external {
         // Use existing verifier if VERIFIER_ADDRESS is set, otherwise deploy a mock.
         address verifierAddr = vm.envOr("VERIFIER_ADDRESS", address(0));
 
-        // Default allowlist root is a placeholder (all zeros).
+        // Merkle roots — default to placeholder (all zeros).
         bytes32 allowlistRoot = vm.envOr("ALLOWLIST_ROOT", bytes32(0));
+        bytes32 accountsRoot = vm.envOr("ACCOUNTS_ROOT", bytes32(0));
 
         vm.startBroadcast();
 
@@ -33,9 +35,13 @@ contract Deploy is Script {
             console.log("Using existing verifier at:", verifierAddr);
         }
 
+        // Phase 1: Membership verifier
         MembershipVerifier membershipVerifier = new MembershipVerifier(IRiscZeroVerifier(verifierAddr), allowlistRoot);
         console.log("Deployed MembershipVerifier at:", address(membershipVerifier));
-        console.log("Allowlist root:", vm.toString(allowlistRoot));
+
+        // Phase 2: Balance verifier
+        BalanceVerifier balanceVerifier = new BalanceVerifier(IRiscZeroVerifier(verifierAddr), accountsRoot);
+        console.log("Deployed BalanceVerifier at:", address(balanceVerifier));
 
         vm.stopBroadcast();
     }
