@@ -347,6 +347,142 @@ pub fn verify_transfer(
     );
 }
 
+/// Compute the Merkle root after replacing a leaf with `new_leaf`.
+///
+/// This is a single-leaf root update: hash the new leaf upward through
+/// the same Merkle path, reusing the original siblings. Equivalent to
+/// Merkle membership verification but returns the computed root instead
+/// of asserting equality.
+///
+/// See SPEC.md Phase 4, "Single-Leaf Root Update".
+pub fn compute_single_leaf_root(
+    new_leaf: [u8; 32],
+    path: &[[u8; 32]],
+    indices: &[bool],
+) -> [u8; 32] {
+    let mut current = new_leaf;
+    for (sibling, &is_right) in path.iter().zip(indices.iter()) {
+        current = if is_right {
+            hash_pair(sibling, &current)
+        } else {
+            hash_pair(&current, sibling)
+        };
+    }
+    current
+}
+
+/// Verify a withdrawal proof as specified in SPEC.md Phase 4 circuit logic.
+///
+/// This mirrors the withdrawal circuit: derives the pubkey from the secret
+/// key, verifies account membership in the old tree, checks balance
+/// constraints, verifies the nullifier, computes the new commitment with
+/// reduced balance, and asserts the new root matches via single-leaf update.
+///
+/// The `recipient` parameter is committed to the journal in the guest for
+/// on-chain use but does not affect the circuit's state transition logic.
+///
+/// Panics on any verification failure.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_withdrawal(
+    secret_key: [u8; 32],
+    balance: u64,
+    salt: [u8; 32],
+    path: &[[u8; 32]],
+    indices: &[bool],
+    amount: u64,
+    new_salt: [u8; 32],
+    _recipient: [u8; 20],
+    old_root: [u8; 32],
+    new_root: [u8; 32],
+    nullifier: [u8; 32],
+) {
+    // 1. Derive pubkey from secret key
+    let pubkey = sha256_hash(&secret_key);
+
+    // 2. Compute old leaf commitment
+    let old_leaf = account_commitment(&pubkey, balance, &salt);
+
+    // 3. Verify membership in old tree
+    verify_membership(old_leaf, path, indices, old_root);
+
+    // 4. Check amount > 0
+    assert!(amount > 0, "Withdrawal amount must be positive");
+
+    // 5. Check balance >= amount
+    assert!(balance >= amount, "Insufficient balance");
+
+    // 6. Compute and verify state-bound nullifier
+    let computed_nullifier =
+        sha256_hash(&[&secret_key[..], &old_root[..], b"withdrawal_v1"].concat());
+    assert_eq!(computed_nullifier, nullifier, "Nullifier mismatch");
+
+    // 7. Compute new balance
+    let new_balance = balance - amount;
+
+    // 8. Compute new leaf commitment with reduced balance and fresh salt
+    let new_leaf = account_commitment(&pubkey, new_balance, &new_salt);
+
+    // 9. Compute new root via single-leaf update
+    let computed_new_root = compute_single_leaf_root(new_leaf, path, indices);
+    assert_eq!(
+        computed_new_root, new_root,
+        "New root mismatch: state transition verification failed"
+    );
+}
+
+/// Compute the disclosure key hash as specified in SPEC.md Phase 4:
+/// `SHA256(pubkey || auditor_pubkey || "disclosure_v1")`
+///
+/// The disclosure key binds the proof to a specific account (via pubkey)
+/// and a specific auditor (via auditor_pubkey), with domain separation.
+pub fn compute_disclosure_key_hash(pubkey: &[u8; 32], auditor_pubkey: &[u8; 32]) -> [u8; 32] {
+    sha256_hash(&[&pubkey[..], &auditor_pubkey[..], b"disclosure_v1"].concat())
+}
+
+/// Verify a disclosure proof as specified in SPEC.md Phase 4 circuit logic.
+///
+/// This mirrors the disclosure circuit: derives the pubkey from the secret
+/// key, verifies the account exists in the tree, checks balance >= threshold,
+/// and verifies the disclosure key hash binds to the correct account and auditor.
+///
+/// This is a read-only attestation — no nullifier, no state mutation.
+///
+/// Panics on any verification failure.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_disclosure(
+    secret_key: [u8; 32],
+    balance: u64,
+    salt: [u8; 32],
+    path: &[[u8; 32]],
+    indices: &[bool],
+    threshold: u64,
+    auditor_pubkey: [u8; 32],
+    expected_root: [u8; 32],
+    expected_disclosure_key_hash: [u8; 32],
+) {
+    // 1. Derive pubkey from secret key
+    let pubkey = sha256_hash(&secret_key);
+
+    // 2. Compute leaf commitment
+    let leaf = account_commitment(&pubkey, balance, &salt);
+
+    // 3. Verify Merkle membership (panics on mismatch)
+    verify_membership(leaf, path, indices, expected_root);
+
+    // 4. Assert balance >= threshold
+    assert!(
+        balance >= threshold,
+        "Balance below threshold: balance {balance} < threshold {threshold}"
+    );
+
+    // 5. Compute and verify disclosure key hash
+    let computed_dkh = compute_disclosure_key_hash(&pubkey, &auditor_pubkey);
+    assert_eq!(
+        computed_dkh, expected_disclosure_key_hash,
+        "Disclosure key hash mismatch"
+    );
+}
+
 /// Helper: compute SHA-256 of input bytes.
 fn sha256_hash(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();

@@ -15,10 +15,13 @@ contract MockRiscZeroVerifier is IRiscZeroVerifier {
 }
 
 /// @dev Mock verifier that captures arguments for inspection.
-contract CapturingRiscZeroVerifier is IRiscZeroVerifier {
+/// Note: Does not declare `is IRiscZeroVerifier` because the interface marks
+/// verify as `view`, but this mock needs to write state. ABI-compatible at
+/// runtime when called via CALL (non-view caller).
+contract CapturingRiscZeroVerifier {
     bytes32 public lastJournalDigest;
 
-    function verify(bytes calldata, bytes32, bytes32 journalDigest) external override {
+    function verify(bytes calldata, bytes32, bytes32 journalDigest) external {
         lastJournalDigest = journalDigest;
     }
 }
@@ -75,7 +78,7 @@ contract DisclosureVerifierTest is Test {
     function test_verifyDisclosure_callsVerifierWithCorrectJournal() public {
         // Deploy a capturing verifier to inspect the journal digest
         CapturingRiscZeroVerifier capturingVerifier = new CapturingRiscZeroVerifier();
-        DisclosureVerifier dv = new DisclosureVerifier(capturingVerifier, ROOT);
+        DisclosureVerifier dv = new DisclosureVerifier(IRiscZeroVerifier(address(capturingVerifier)), ROOT);
 
         dv.verifyDisclosure(hex"", ROOT, THRESHOLD, DK_HASH);
 

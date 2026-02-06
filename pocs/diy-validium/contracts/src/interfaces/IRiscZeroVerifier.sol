@@ -9,5 +9,5 @@ interface IRiscZeroVerifier {
     /// @param seal The encoded cryptographic proof (SNARK or otherwise).
     /// @param imageId The identifier for the guest program (ELF binary hash).
     /// @param journalDigest The SHA-256 digest of the journal output.
-    function verify(bytes calldata seal, bytes32 imageId, bytes32 journalDigest) external view;
+    function verify(bytes calldata seal, bytes32 imageId, bytes32 journalDigest) external;
 }

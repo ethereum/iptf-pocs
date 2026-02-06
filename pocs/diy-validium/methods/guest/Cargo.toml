@@ -24,3 +24,11 @@ path = "src/balance.rs"
 [[bin]]
 name = "transfer"
 path = "src/transfer.rs"
+
+[[bin]]
+name = "withdrawal"
+path = "src/withdrawal.rs"
+
+[[bin]]
+name = "disclosure"
+path = "src/disclosure.rs"
