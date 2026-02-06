@@ -38,7 +38,7 @@ This gives you Ethereum's security guarantees while keeping sensitive data priva
 ### Strategy
 
 Build a Validium-style system where:
-- Full account state lives off-chain (SQLite database)
+- Full account state lives off-chain (operator database)
 - Merkle roots of state are committed on-chain
 - Zero-knowledge proofs validate state transitions
 - RISC Zero provides the proving system
@@ -270,6 +270,54 @@ fn verify_balance(
 **Committed Outputs (Journal):**
 - `merkle_root: [u8; 32]`
 - `required_amount: u64`
+
+> **Authentication Note:** Phase 2 balance proofs are unauthenticated — the circuit
+> does not require a secret key. Anyone with the account data (pubkey, balance, salt,
+> Merkle path) can generate a valid balance proof. This is acceptable because balance
+> proofs are read-only attestations ("some account has balance >= X"), not state-changing
+> operations. Authentication via secret keys is introduced in Phase 3 (transfers).
+> The operator is responsible for sharing account data only with the account owner.
+
+### Contract: BalanceVerifier
+
+```solidity
+contract BalanceVerifier {
+    bytes32 public accountsRoot;
+    IRiscZeroVerifier public verifier;
+    bytes32 public constant IMAGE_ID = /* balance proof circuit hash */;
+
+    event BalanceProofVerified(bytes32 indexed root, uint64 requiredAmount);
+
+    function verifyBalance(
+        bytes calldata seal,
+        bytes32 journalRoot,
+        uint64 requiredAmount
+    ) external view returns (bool) {
+        require(journalRoot == accountsRoot, "Root mismatch");
+
+        bytes memory journal = abi.encodePacked(journalRoot, requiredAmount);
+        verifier.verify(seal, IMAGE_ID, sha256(journal));
+
+        return true;
+    }
+}
+```
+
+> **Note on `abi.encodePacked` and endianness:** The journal committed by the RISC Zero
+> guest uses serde/bincode encoding (little-endian for integers). The Solidity
+> `abi.encodePacked` uses big-endian for `uint` types. For `bytes32` values this is
+> not an issue (raw bytes, no endianness). For `required_amount: u64`, the guest must
+> commit the value as big-endian bytes to match Solidity's encoding:
+>
+> ```rust
+> // In guest circuit:
+> env::commit_slice(&root);                          // 32 bytes, no endianness issue
+> env::commit_slice(&required_amount.to_be_bytes()); // 8 bytes, big-endian for Solidity
+> ```
+>
+> Alternatively, the Solidity contract can reverse the byte order. The chosen approach
+> should be consistent across all phases. This PoC uses **big-endian guest commits**
+> to match Solidity's `abi.encodePacked` convention.
 
 ---
 
@@ -547,6 +595,9 @@ contract ValidiumBridge {
 
 - **Fixed tree depth**: 20 levels hardcoded
   - Production: Make configurable
+
+- **In-memory account storage**: PoC uses in-memory data structures
+  - Production: Use a persistent database (SQLite, Postgres, etc.)
 
 ---
 
