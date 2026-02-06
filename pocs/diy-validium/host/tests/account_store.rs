@@ -24,8 +24,8 @@ use diy_validium_host::merkle::{account_commitment, MerkleTree};
 /// reproducible without randomness.
 fn make_test_account(index: u8, balance: u64) -> Account {
     use sha2::{Digest, Sha256};
-    let pubkey: [u8; 32] = Sha256::digest([b"pubkey_", &[index]].concat()).into();
-    let salt: [u8; 32] = Sha256::digest([b"salt_", &[index]].concat()).into();
+    let pubkey: [u8; 32] = Sha256::digest([b"pubkey_".as_slice(), &[index]].concat()).into();
+    let salt: [u8; 32] = Sha256::digest([b"salt_".as_slice(), &[index]].concat()).into();
     Account {
         pubkey,
         balance,
@@ -214,20 +214,20 @@ fn test_store_with_multiple_accounts() {
 
     assert_eq!(commitments.len(), num_accounts as usize);
 
-    for i in 0..num_accounts as usize {
+    for (i, commitment) in commitments.iter().enumerate() {
         let acct = store.get_account(i);
         let expected_commitment = account_commitment(&acct.pubkey, acct.balance, &acct.salt);
 
         // Commitment from store matches manual computation.
         assert_eq!(
-            commitments[i], expected_commitment,
+            *commitment, expected_commitment,
             "Commitment at index {i} should match manual computation"
         );
 
         // Merkle proof verifies.
         let proof = tree.prove(i);
         assert!(
-            proof.verify(commitments[i], root),
+            proof.verify(*commitment, root),
             "Merkle proof for account {i} should verify"
         );
     }

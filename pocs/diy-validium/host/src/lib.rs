@@ -3,6 +3,7 @@
 //! Provides Merkle tree operations and circuit input preparation
 //! for the diy-validium protocol.
 
+pub mod accounts;
 pub mod merkle;
 
 #[cfg(test)]
