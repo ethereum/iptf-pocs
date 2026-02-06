@@ -6,7 +6,6 @@ import {IRiscZeroVerifier} from "./interfaces/IRiscZeroVerifier.sol";
 /// @title BalanceVerifier
 /// @notice On-chain verifier for RISC Zero balance proofs (Phase 2).
 /// @dev See SPEC.md § Phase 2: Balance Proof for the full protocol.
-///      Stub implementation — all functions revert or return defaults.
 contract BalanceVerifier {
     /// @notice The RISC Zero verifier contract used to validate proofs.
     IRiscZeroVerifier public immutable verifier;
@@ -30,12 +29,15 @@ contract BalanceVerifier {
     /// @param journalRoot The Merkle root committed in the proof journal.
     /// @param requiredAmount The minimum balance that must be proven.
     /// @return True if verification succeeds.
-    function verifyBalance(bytes calldata seal, bytes32 journalRoot, uint64 requiredAmount)
-        external
-        view
-        returns (bool)
-    {
-        // Stub: revert so TDD tests fail until implemented.
-        revert("Not implemented");
+    function verifyBalance(bytes calldata seal, bytes32 journalRoot, uint64 requiredAmount) external returns (bool) {
+        require(journalRoot == accountsRoot, "Root mismatch");
+
+        // Journal encodes: root (32 bytes) + required_amount as big-endian u64 (8 bytes)
+        bytes memory journal = abi.encodePacked(journalRoot, requiredAmount);
+        verifier.verify(seal, IMAGE_ID, sha256(journal));
+
+        emit BalanceProofVerified(journalRoot, requiredAmount);
+
+        return true;
     }
 }

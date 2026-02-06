@@ -40,7 +40,7 @@ contract BalanceVerifierTest is Test {
     // ---------------------------------------------------------------
     // 3. verifyBalance succeeds with correct root and amount
     // ---------------------------------------------------------------
-    function test_verifyBalance_succeedsWithCorrectRoot() public view {
+    function test_verifyBalance_succeedsWithCorrectRoot() public {
         uint64 amount = 1000;
         bool result = balanceVerifier.verifyBalance(hex"", ROOT, amount);
         assertTrue(result);
@@ -68,7 +68,7 @@ contract BalanceVerifierTest is Test {
     // ---------------------------------------------------------------
     // 6. verifyBalance can be called multiple times (no state changes)
     // ---------------------------------------------------------------
-    function test_verifyBalance_canBeCalledMultipleTimes() public view {
+    function test_verifyBalance_canBeCalledMultipleTimes() public {
         uint64 amount = 500;
         // Balance proofs are read-only attestations; repeated calls should succeed.
         bool result1 = balanceVerifier.verifyBalance(hex"", ROOT, amount);
@@ -80,7 +80,7 @@ contract BalanceVerifierTest is Test {
     // ---------------------------------------------------------------
     // 7. verifyBalance works with different required amounts
     // ---------------------------------------------------------------
-    function test_verifyBalance_differentAmounts() public view {
+    function test_verifyBalance_differentAmounts() public {
         // Same root, different required_amounts should all succeed.
         bool result1 = balanceVerifier.verifyBalance(hex"", ROOT, 100);
         bool result2 = balanceVerifier.verifyBalance(hex"", ROOT, 999_999);
