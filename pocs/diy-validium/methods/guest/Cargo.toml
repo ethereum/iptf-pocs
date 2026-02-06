@@ -16,3 +16,7 @@ indexmap = "=2.7.1"
 [[bin]]
 name = "membership"
 path = "src/membership.rs"
+
+[[bin]]
+name = "balance"
+path = "src/balance.rs"

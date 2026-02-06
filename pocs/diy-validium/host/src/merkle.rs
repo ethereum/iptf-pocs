@@ -144,6 +144,35 @@ pub fn verify_membership(
     );
 }
 
+/// Verify a balance proof as specified in SPEC.md (lines 244-267).
+///
+/// This mirrors the balance circuit logic: recompute the leaf commitment
+/// from `pubkey`, `balance`, and `salt`, verify Merkle membership against
+/// `expected_root`, and assert `balance >= required_amount`.
+///
+/// Panics on any verification failure (invalid membership or insufficient balance).
+pub fn verify_balance(
+    pubkey: [u8; 32],
+    balance: u64,
+    salt: [u8; 32],
+    path: &[[u8; 32]],
+    indices: &[bool],
+    expected_root: [u8; 32],
+    required_amount: u64,
+) {
+    // 1. Recompute the leaf commitment
+    let leaf = account_commitment(&pubkey, balance, &salt);
+
+    // 2. Verify Merkle membership (panics on mismatch)
+    verify_membership(leaf, path, indices, expected_root);
+
+    // 3. Assert balance >= required_amount
+    assert!(
+        balance >= required_amount,
+        "Balance check failed: balance {balance} < required {required_amount}"
+    );
+}
+
 /// Compute an account commitment as specified in SPEC.md:
 /// `SHA256(pubkey || balance_le_bytes || salt)` — 72 bytes input.
 pub fn account_commitment(pubkey: &[u8; 32], balance: u64, salt: &[u8; 32]) -> [u8; 32] {
