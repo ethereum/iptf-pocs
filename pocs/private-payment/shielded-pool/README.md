@@ -164,7 +164,7 @@ cargo test --test integration -- --nocapture
 
 ## Further development
 
-The PoC is set up to be quite modular, so to take this PoC to production, you can do the following quite easily - 
+The PoC is set up to be quite modular, so to iterate on it, you can do the following quite easily - 
 
 1. Use a different proving backend: swap out the [bb_prover.rs](src/lib/adapters/bb_prover.rs) adapter
 2. Use a secure channel i.e Mixnet / SWIFT for institutions: swap out the [channel.rs](src/lib/adapters/channel.rs) adapter
