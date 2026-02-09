@@ -102,10 +102,10 @@ impl From<&DepositWitness> for DepositProverInput {
 
 #[derive(Serialize)]
 struct TransferProverInput {
+    nullifier_0: String,
     nullifier_1: String,
-    nullifier_2: String,
+    commitment_out_0: String,
     commitment_out_1: String,
-    commitment_out_2: String,
     commitment_root: String,
     spending_key: String,
     token_in_0: String,
@@ -132,10 +132,10 @@ struct TransferProverInput {
 impl From<&TransferWitness> for TransferProverInput {
     fn from(w: &TransferWitness) -> Self {
         Self {
-            nullifier_1: format_field(&w.nullifiers[0]),
-            nullifier_2: format_field(&w.nullifiers[1]),
-            commitment_out_1: format_field(&w.output_commitments[0]),
-            commitment_out_2: format_field(&w.output_commitments[1]),
+            nullifier_0: format_field(&w.nullifiers[0]),
+            nullifier_1: format_field(&w.nullifiers[1]),
+            commitment_out_0: format_field(&w.output_commitments[0]),
+            commitment_out_1: format_field(&w.output_commitments[1]),
             commitment_root: format_field(&w.commitment_root),
             spending_key: format_field(&w.spending_key.0),
             token_in_0: format_field_from_address(&w.input_notes[0].token),
@@ -455,10 +455,10 @@ mod tests {
         let toml = BBProver::format_transfer_prover_toml(&witness);
 
         // Verify the TOML contains expected fields
+        assert!(toml.contains("nullifier_0 = "));
         assert!(toml.contains("nullifier_1 = "));
-        assert!(toml.contains("nullifier_2 = "));
+        assert!(toml.contains("commitment_out_0 = "));
         assert!(toml.contains("commitment_out_1 = "));
-        assert!(toml.contains("commitment_out_2 = "));
         assert!(toml.contains("commitment_root = "));
         assert!(toml.contains("spending_key = "));
         assert!(toml.contains("token_in_0 = "));

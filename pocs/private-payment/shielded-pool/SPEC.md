@@ -563,8 +563,8 @@ All circuits use `binary_merkle_root` from zk-kit.noir for dynamic-depth Merkle 
 #### Transfer Circuit
 
 **Public Inputs**:
-- `nullifier_1`, `nullifier_2`: Nullifiers for spent notes
-- `commitment_out_1`, `commitment_out_2`: New note commitments
+- `nullifier_0`, `nullifier_1`: Nullifiers for spent notes
+- `commitment_out_0`, `commitment_out_1`: New note commitments
 - `commitment_root`: Current commitment tree root
 
 **Private Inputs**:
@@ -579,13 +579,13 @@ All circuits use `binary_merkle_root` from zk-kit.noir for dynamic-depth Merkle 
 2. Input note 0 membership and nullifier:
    - `commitment_in_0 == poseidon4(token_in_0, amount_in_0, owner_pubkey, salt_in_0)`
    - `binary_merkle_root(commitment_in_0, proof_length, indices_0, path_0) == commitment_root`
-   - `nullifier_1 == poseidon2(commitment_in_0, spending_key)`
+   - `nullifier_0 == poseidon2(commitment_in_0, spending_key)`
 3. Input note 1 (skipped if zero-value note):
    - Same verification as input 0
-   - `nullifier_2 == poseidon2(commitment_in_1, spending_key)`
+   - `nullifier_1 == poseidon2(commitment_in_1, spending_key)`
 4. Output commitment formation:
-   - `commitment_out_1 == poseidon4(token_out_0, amount_out_0, owner_out_0, salt_out_0)`
-   - `commitment_out_2 == poseidon4(token_out_1, amount_out_1, owner_out_1, salt_out_1)`
+   - `commitment_out_0 == poseidon4(token_out_0, amount_out_0, owner_out_0, salt_out_0)`
+   - `commitment_out_1 == poseidon4(token_out_1, amount_out_1, owner_out_1, salt_out_1)`
 5. Value preservation: `amount_in_0 + amount_in_1 == amount_out_0 + amount_out_1`
 6. Token consistency: All notes use the same token address
 

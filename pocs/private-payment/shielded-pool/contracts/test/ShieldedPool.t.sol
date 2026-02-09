@@ -18,22 +18,16 @@ contract ShieldedPoolTest is Test {
     address public recipient;
 
     // Use smaller commitment values that fit in BN254 scalar field
-    bytes32 constant COMMITMENT_1 = bytes32(uint256(1));
-    bytes32 constant COMMITMENT_2 = bytes32(uint256(2));
-    bytes32 constant COMMITMENT_3 = bytes32(uint256(3));
-    bytes32 constant COMMITMENT_4 = bytes32(uint256(4));
-    bytes32 constant NULLIFIER_1 = bytes32(uint256(100));
-    bytes32 constant NULLIFIER_2 = bytes32(uint256(101));
-    bytes32 constant NULLIFIER_3 = bytes32(uint256(102));
+    bytes32 constant COMMITMENT_0 = bytes32(uint256(1));
+    bytes32 constant COMMITMENT_1 = bytes32(uint256(2));
+    bytes32 constant COMMITMENT_2 = bytes32(uint256(3));
+    bytes32 constant COMMITMENT_3 = bytes32(uint256(4));
+    bytes32 constant NULLIFIER_0 = bytes32(uint256(100));
+    bytes32 constant NULLIFIER_1 = bytes32(uint256(101));
 
     uint256 constant DEPOSIT_AMOUNT = 1000e6; // 1000 USDC
 
-    event Deposit(
-        bytes32 indexed commitment,
-        address indexed token,
-        uint256 amount,
-        bytes encryptedNote
-    );
+    event Deposit(bytes32 indexed commitment, address indexed token, uint256 amount, bytes encryptedNote);
     event Transfer(
         bytes32 indexed nullifier1,
         bytes32 indexed nullifier2,
@@ -41,12 +35,7 @@ contract ShieldedPoolTest is Test {
         bytes32 commitment2,
         bytes encryptedNotes
     );
-    event Withdraw(
-        bytes32 indexed nullifier,
-        address indexed recipient,
-        address indexed token,
-        uint256 amount
-    );
+    event Withdraw(bytes32 indexed nullifier, address indexed recipient, address indexed token, uint256 amount);
     event TokenAdded(address indexed token);
     event TokenRemoved(address indexed token);
 
@@ -127,20 +116,9 @@ contract ShieldedPoolTest is Test {
 
         vm.prank(user);
         vm.expectEmit(true, true, false, true);
-        emit Deposit(
-            COMMITMENT_1,
-            address(token),
-            DEPOSIT_AMOUNT,
-            encryptedNote
-        );
+        emit Deposit(COMMITMENT_0, address(token), DEPOSIT_AMOUNT, encryptedNote);
 
-        pool.deposit(
-            proof,
-            COMMITMENT_1,
-            address(token),
-            DEPOSIT_AMOUNT,
-            encryptedNote
-        );
+        pool.deposit(proof, COMMITMENT_0, address(token), DEPOSIT_AMOUNT, encryptedNote);
 
         assertEq(pool.getCommitmentCount(), 1);
         assertTrue(pool.commitmentRoot() != bytes32(0));
@@ -152,19 +130,13 @@ contract ShieldedPoolTest is Test {
 
         vm.prank(user);
         vm.expectRevert(ShieldedPool.UnsupportedToken.selector);
-        pool.deposit(
-            "",
-            COMMITMENT_1,
-            address(unsupportedToken),
-            DEPOSIT_AMOUNT,
-            ""
-        );
+        pool.deposit("", COMMITMENT_0, address(unsupportedToken), DEPOSIT_AMOUNT, "");
     }
 
     function testDepositRevertsZeroAmount() public {
         vm.prank(user);
         vm.expectRevert(ShieldedPool.ZeroAmount.selector);
-        pool.deposit("", COMMITMENT_1, address(token), 0, "");
+        pool.deposit("", COMMITMENT_0, address(token), 0, "");
     }
 
     function testDepositRevertsInvalidProof() public {
@@ -172,16 +144,16 @@ contract ShieldedPoolTest is Test {
 
         vm.prank(user);
         vm.expectRevert(ShieldedPool.InvalidProof.selector);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
     }
 
     function testDepositUpdatesRoot() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root1 = pool.commitmentRoot();
 
         vm.prank(user);
-        pool.deposit("", COMMITMENT_2, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root2 = pool.commitmentRoot();
 
         assertTrue(root1 != root2);
@@ -193,33 +165,27 @@ contract ShieldedPoolTest is Test {
     function testTransfer() public {
         // First deposit to get a valid root
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
         bytes memory proof = "";
         bytes memory encryptedNotes = "encrypted_data";
-        bytes32[2] memory nullifiers_ = [NULLIFIER_1, NULLIFIER_2];
-        bytes32[2] memory commitments_ = [COMMITMENT_3, COMMITMENT_4];
+        bytes32[2] memory nullifiers_ = [NULLIFIER_0, NULLIFIER_1];
+        bytes32[2] memory commitments_ = [COMMITMENT_2, COMMITMENT_3];
 
         vm.expectEmit(true, true, false, true);
-        emit Transfer(
-            NULLIFIER_1,
-            NULLIFIER_2,
-            COMMITMENT_3,
-            COMMITMENT_4,
-            encryptedNotes
-        );
+        emit Transfer(NULLIFIER_0, NULLIFIER_1, COMMITMENT_2, COMMITMENT_3, encryptedNotes);
 
         pool.transfer(proof, nullifiers_, commitments_, root, encryptedNotes);
 
+        assertTrue(pool.nullifiers(NULLIFIER_0));
         assertTrue(pool.nullifiers(NULLIFIER_1));
-        assertTrue(pool.nullifiers(NULLIFIER_2));
         assertEq(pool.getCommitmentCount(), 3); // 1 deposit + 2 from transfer
     }
 
     function testTransferRevertsInvalidRoot() public {
-        bytes32[2] memory nullifiers_ = [NULLIFIER_1, NULLIFIER_2];
-        bytes32[2] memory commitments_ = [COMMITMENT_3, COMMITMENT_4];
+        bytes32[2] memory nullifiers_ = [NULLIFIER_0, NULLIFIER_1];
+        bytes32[2] memory commitments_ = [COMMITMENT_2, COMMITMENT_3];
 
         vm.expectRevert(ShieldedPool.InvalidRoot.selector);
         pool.transfer("", nullifiers_, commitments_, bytes32(uint256(999)), "");
@@ -227,11 +193,11 @@ contract ShieldedPoolTest is Test {
 
     function testTransferRevertsNullifierAlreadySpent() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
-        bytes32[2] memory nullifiers_ = [NULLIFIER_1, NULLIFIER_2];
-        bytes32[2] memory commitments_ = [COMMITMENT_3, COMMITMENT_4];
+        bytes32[2] memory nullifiers_ = [NULLIFIER_0, NULLIFIER_1];
+        bytes32[2] memory commitments_ = [COMMITMENT_2, COMMITMENT_3];
 
         // First transfer succeeds
         pool.transfer("", nullifiers_, commitments_, root, "");
@@ -240,21 +206,18 @@ contract ShieldedPoolTest is Test {
         bytes32 newRoot = pool.commitmentRoot();
 
         // Second transfer with same nullifier fails
-        bytes32[2] memory newCommitments = [
-            bytes32(uint256(5)),
-            bytes32(uint256(6))
-        ];
+        bytes32[2] memory newCommitments = [bytes32(uint256(5)), bytes32(uint256(6))];
         vm.expectRevert(ShieldedPool.NullifierAlreadySpent.selector);
         pool.transfer("", nullifiers_, newCommitments, newRoot, "");
     }
 
     function testTransferRevertsIdenticalNullifiers() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
         bytes32[2] memory nullifiers_ = [NULLIFIER_1, NULLIFIER_1]; // Same nullifier
-        bytes32[2] memory commitments_ = [COMMITMENT_3, COMMITMENT_4];
+        bytes32[2] memory commitments_ = [COMMITMENT_2, COMMITMENT_3];
 
         vm.expectRevert(ShieldedPool.IdenticalNullifiers.selector);
         pool.transfer("", nullifiers_, commitments_, root, "");
@@ -262,13 +225,13 @@ contract ShieldedPoolTest is Test {
 
     function testTransferRevertsInvalidProof() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
         verifier.setTransferResult(false);
 
-        bytes32[2] memory nullifiers_ = [NULLIFIER_1, NULLIFIER_2];
-        bytes32[2] memory commitments_ = [COMMITMENT_3, COMMITMENT_4];
+        bytes32[2] memory nullifiers_ = [NULLIFIER_0, NULLIFIER_1];
+        bytes32[2] memory commitments_ = [COMMITMENT_2, COMMITMENT_3];
 
         vm.expectRevert(ShieldedPool.InvalidProof.selector);
         pool.transfer("", nullifiers_, commitments_, root, "");
@@ -276,16 +239,16 @@ contract ShieldedPoolTest is Test {
 
     function testTransferWithHistoricalRoot() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 historicalRoot = pool.commitmentRoot();
 
         // Make another deposit to change the root
         vm.prank(user);
-        pool.deposit("", COMMITMENT_2, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
 
         // Transfer using the historical root should work
-        bytes32[2] memory nullifiers_ = [NULLIFIER_1, NULLIFIER_2];
-        bytes32[2] memory commitments_ = [COMMITMENT_3, COMMITMENT_4];
+        bytes32[2] memory nullifiers_ = [NULLIFIER_0, NULLIFIER_1];
+        bytes32[2] memory commitments_ = [COMMITMENT_2, COMMITMENT_3];
 
         pool.transfer("", nullifiers_, commitments_, historicalRoot, "");
 
@@ -297,7 +260,7 @@ contract ShieldedPoolTest is Test {
     function testWithdraw() public {
         // First deposit to have funds in pool
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
         uint256 recipientBalanceBefore = token.balanceOf(recipient);
@@ -305,83 +268,45 @@ contract ShieldedPoolTest is Test {
         vm.expectEmit(true, true, true, true);
         emit Withdraw(NULLIFIER_1, recipient, address(token), DEPOSIT_AMOUNT);
 
-        pool.withdraw(
-            "",
-            NULLIFIER_1,
-            address(token),
-            DEPOSIT_AMOUNT,
-            recipient,
-            root
-        );
+        pool.withdraw("", NULLIFIER_1, address(token), DEPOSIT_AMOUNT, recipient, root);
 
         assertTrue(pool.nullifiers(NULLIFIER_1));
-        assertEq(
-            token.balanceOf(recipient),
-            recipientBalanceBefore + DEPOSIT_AMOUNT
-        );
+        assertEq(token.balanceOf(recipient), recipientBalanceBefore + DEPOSIT_AMOUNT);
         assertEq(token.balanceOf(address(pool)), 0);
     }
 
     function testWithdrawRevertsInvalidRoot() public {
         vm.expectRevert(ShieldedPool.InvalidRoot.selector);
-        pool.withdraw(
-            "",
-            NULLIFIER_1,
-            address(token),
-            DEPOSIT_AMOUNT,
-            recipient,
-            bytes32(uint256(999))
-        );
+        pool.withdraw("", NULLIFIER_1, address(token), DEPOSIT_AMOUNT, recipient, bytes32(uint256(999)));
     }
 
     function testWithdrawRevertsNullifierAlreadySpent() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT * 2, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT * 2, "");
         bytes32 root = pool.commitmentRoot();
 
         // First withdraw succeeds
-        pool.withdraw(
-            "",
-            NULLIFIER_1,
-            address(token),
-            DEPOSIT_AMOUNT,
-            recipient,
-            root
-        );
+        pool.withdraw("", NULLIFIER_1, address(token), DEPOSIT_AMOUNT, recipient, root);
 
         // Second withdraw with same nullifier fails
         vm.expectRevert(ShieldedPool.NullifierAlreadySpent.selector);
-        pool.withdraw(
-            "",
-            NULLIFIER_1,
-            address(token),
-            DEPOSIT_AMOUNT,
-            recipient,
-            root
-        );
+        pool.withdraw("", NULLIFIER_1, address(token), DEPOSIT_AMOUNT, recipient, root);
     }
 
     function testWithdrawRevertsUnsupportedToken() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
         MockERC20 unsupportedToken = new MockERC20("Unsupported", "UNS", 18);
 
         vm.expectRevert(ShieldedPool.UnsupportedToken.selector);
-        pool.withdraw(
-            "",
-            NULLIFIER_1,
-            address(unsupportedToken),
-            DEPOSIT_AMOUNT,
-            recipient,
-            root
-        );
+        pool.withdraw("", NULLIFIER_1, address(unsupportedToken), DEPOSIT_AMOUNT, recipient, root);
     }
 
     function testWithdrawRevertsZeroAmount() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
         vm.expectRevert(ShieldedPool.ZeroAmount.selector);
@@ -390,36 +315,22 @@ contract ShieldedPoolTest is Test {
 
     function testWithdrawRevertsZeroRecipient() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
         vm.expectRevert(ShieldedPool.ZeroAddress.selector);
-        pool.withdraw(
-            "",
-            NULLIFIER_1,
-            address(token),
-            DEPOSIT_AMOUNT,
-            address(0),
-            root
-        );
+        pool.withdraw("", NULLIFIER_1, address(token), DEPOSIT_AMOUNT, address(0), root);
     }
 
     function testWithdrawRevertsInvalidProof() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root = pool.commitmentRoot();
 
         verifier.setWithdrawResult(false);
 
         vm.expectRevert(ShieldedPool.InvalidProof.selector);
-        pool.withdraw(
-            "",
-            NULLIFIER_1,
-            address(token),
-            DEPOSIT_AMOUNT,
-            recipient,
-            root
-        );
+        pool.withdraw("", NULLIFIER_1, address(token), DEPOSIT_AMOUNT, recipient, root);
     }
 
     // ========== Historical Roots Tests ==========
@@ -428,13 +339,13 @@ contract ShieldedPoolTest is Test {
         assertFalse(pool.isKnownRoot(bytes32(uint256(999))));
 
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root1 = pool.commitmentRoot();
 
         assertTrue(pool.isKnownRoot(root1));
 
         vm.prank(user);
-        pool.deposit("", COMMITMENT_2, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root2 = pool.commitmentRoot();
 
         assertTrue(pool.isKnownRoot(root1)); // Historical root still valid
@@ -443,12 +354,12 @@ contract ShieldedPoolTest is Test {
 
     function testValidRootsMapping() public {
         vm.prank(user);
-        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
         bytes32 root1 = pool.commitmentRoot();
         assertFalse(pool.validRoots(root1)); // Current root not in validRoots
 
         vm.prank(user);
-        pool.deposit("", COMMITMENT_2, address(token), DEPOSIT_AMOUNT, "");
+        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
 
         assertTrue(pool.validRoots(root1)); // Now it's historical
     }

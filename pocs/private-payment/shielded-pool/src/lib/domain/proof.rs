@@ -70,10 +70,10 @@ pub struct TransferProof {
 /// Public inputs for the transfer circuit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferPublicInputs {
+    pub nullifier_0: B256,
     pub nullifier_1: B256,
-    pub nullifier_2: B256,
+    pub commitment_out_0: B256,
     pub commitment_out_1: B256,
-    pub commitment_out_2: B256,
     pub commitment_root: B256,
 }
 
@@ -88,10 +88,10 @@ impl TransferProof {
         Self {
             proof,
             public_inputs: TransferPublicInputs {
-                nullifier_1: nullifiers[0],
-                nullifier_2: nullifiers[1],
-                commitment_out_1: output_commitments[0],
-                commitment_out_2: output_commitments[1],
+                nullifier_0: nullifiers[0],
+                nullifier_1: nullifiers[1],
+                commitment_out_0: output_commitments[0],
+                commitment_out_1: output_commitments[1],
                 commitment_root,
             },
         }
@@ -100,10 +100,10 @@ impl TransferProof {
     /// Get the public inputs as an array of B256 for contract verification.
     pub fn public_inputs_as_array(&self) -> [B256; 5] {
         [
+            self.public_inputs.nullifier_0,
             self.public_inputs.nullifier_1,
-            self.public_inputs.nullifier_2,
+            self.public_inputs.commitment_out_0,
             self.public_inputs.commitment_out_1,
-            self.public_inputs.commitment_out_2,
             self.public_inputs.commitment_root,
         ]
     }
@@ -111,16 +111,16 @@ impl TransferProof {
     /// Get nullifiers as a fixed-size array.
     pub fn nullifiers(&self) -> [B256; 2] {
         [
+            self.public_inputs.nullifier_0,
             self.public_inputs.nullifier_1,
-            self.public_inputs.nullifier_2,
         ]
     }
 
     /// Get output commitments as a fixed-size array.
     pub fn output_commitments(&self) -> [B256; 2] {
         [
+            self.public_inputs.commitment_out_0,
             self.public_inputs.commitment_out_1,
-            self.public_inputs.commitment_out_2,
         ]
     }
 }

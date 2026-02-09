@@ -42,8 +42,8 @@ fn verify_merkle_proof<let MAX_DEPTH: u32>(
 /// 6. All notes use the same token
 ///
 /// Public Inputs:
-/// - nullifier_1, nullifier_2: nullifiers for spent notes
-/// - commitment_out_1, commitment_out_2: new note commitments
+/// - nullifier_0, nullifier_1: nullifiers for spent notes
+/// - commitment_out_0, commitment_out_1: new note commitments
 /// - commitment_root: current commitment tree root
 ///
 /// Private Inputs:
@@ -54,10 +54,10 @@ fn verify_merkle_proof<let MAX_DEPTH: u32>(
 /// - Merkle proofs (2): path_[0,1], indices_[0,1] (padded to MAX_COMMITMENT_TREE_DEPTH)
 fn main(
     // Public inputs
+    nullifier_0: pub Field,
     nullifier_1: pub Field,
-    nullifier_2: pub Field,
+    commitment_out_0: pub Field,
     commitment_out_1: pub Field,
-    commitment_out_2: pub Field,
     commitment_root: pub Field,
     // Private inputs
     spending_key: Field,
@@ -105,7 +105,7 @@ fn main(
     );
     // Verify nullifier derivation
     let computed_nullifier_0 = poseidon2(commitment_in_0, spending_key);
-    assert(nullifier_1 == computed_nullifier_0);
+    assert(nullifier_0 == computed_nullifier_0);
 
     // 3. Verify input note 1
     let is_zero_note = amount_in_1 == 0;
@@ -124,14 +124,14 @@ fn main(
     }
 
     let computed_nullifier_1 = poseidon2(commitment_in_1, spending_key);
-    assert(nullifier_2 == computed_nullifier_1);
+    assert(nullifier_1 == computed_nullifier_1);
 
     // 4. Verify output commitments are correctly formed
     let computed_commitment_out_0 = poseidon4(token_out_0, amount_out_0, owner_out_0, salt_out_0);
-    assert(commitment_out_1 == computed_commitment_out_0);
+    assert(commitment_out_0 == computed_commitment_out_0);
 
     let computed_commitment_out_1 = poseidon4(token_out_1, amount_out_1, owner_out_1, salt_out_1);
-    assert(commitment_out_2 == computed_commitment_out_1);
+    assert(commitment_out_1 == computed_commitment_out_1);
 
     // 5. Value conservation: input amounts = output amounts
     assert(amount_in_0 + amount_in_1 == amount_out_0 + amount_out_1);
@@ -169,12 +169,12 @@ fn test_transfer_valid() {
     let commitment_in_1 = poseidon4(token, amount_in_1, owner_pubkey, salt_in_1);
 
     // Compute nullifiers
-    let nullifier_1 = poseidon2(commitment_in_0, spending_key);
-    let nullifier_2 = poseidon2(commitment_in_1, spending_key);
+    let nullifier_0 = poseidon2(commitment_in_0, spending_key);
+    let nullifier_1 = poseidon2(commitment_in_1, spending_key);
 
     // Compute output commitments
-    let commitment_out_1 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
-    let commitment_out_2 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
+    let commitment_out_0 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
+    let commitment_out_1 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
 
     // Use dynamic depth (tree with 2 leaves needs depth 1)
     let proof_length: u32 = 3;
@@ -201,10 +201,10 @@ fn test_transfer_valid() {
     let commitment_root = current;
 
     main(
+        nullifier_0,
         nullifier_1,
-        nullifier_2,
+        commitment_out_0,
         commitment_out_1,
-        commitment_out_2,
         commitment_root,
         spending_key,
         token,
@@ -251,11 +251,11 @@ fn test_transfer_value_mismatch() {
     let commitment_in_0 = poseidon4(token, amount_in_0, owner_pubkey, salt_in_0);
     let commitment_in_1 = poseidon4(token, amount_in_1, owner_pubkey, salt_in_1);
 
-    let nullifier_1 = poseidon2(commitment_in_0, spending_key);
-    let nullifier_2 = poseidon2(commitment_in_1, spending_key);
+    let nullifier_0 = poseidon2(commitment_in_0, spending_key);
+    let nullifier_1 = poseidon2(commitment_in_1, spending_key);
 
-    let commitment_out_1 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
-    let commitment_out_2 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
+    let commitment_out_0 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
+    let commitment_out_1 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
 
     let proof_length: u32 = 3;
     let mut path_0: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
@@ -275,10 +275,10 @@ fn test_transfer_value_mismatch() {
     let commitment_root = current;
 
     main(
+        nullifier_0,
         nullifier_1,
-        nullifier_2,
+        commitment_out_0,
         commitment_out_1,
-        commitment_out_2,
         commitment_root,
         spending_key,
         token,
@@ -326,11 +326,11 @@ fn test_transfer_token_mismatch() {
     let commitment_in_0 = poseidon4(token_0, amount_in_0, owner_pubkey, salt_in_0);
     let commitment_in_1 = poseidon4(token_1, amount_in_1, owner_pubkey, salt_in_1);
 
-    let nullifier_1 = poseidon2(commitment_in_0, spending_key);
-    let nullifier_2 = poseidon2(commitment_in_1, spending_key);
+    let nullifier_0 = poseidon2(commitment_in_0, spending_key);
+    let nullifier_1 = poseidon2(commitment_in_1, spending_key);
 
-    let commitment_out_1 = poseidon4(token_0, amount_out_0, recipient_pubkey, salt_out_0);
-    let commitment_out_2 = poseidon4(token_0, amount_out_1, owner_pubkey, salt_out_1);
+    let commitment_out_0 = poseidon4(token_0, amount_out_0, recipient_pubkey, salt_out_0);
+    let commitment_out_1 = poseidon4(token_0, amount_out_1, owner_pubkey, salt_out_1);
 
     let proof_length: u32 = 3;
     let mut path_0: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
@@ -350,10 +350,10 @@ fn test_transfer_token_mismatch() {
     let commitment_root = current;
 
     main(
+        nullifier_0,
         nullifier_1,
-        nullifier_2,
+        commitment_out_0,
         commitment_out_1,
-        commitment_out_2,
         commitment_root,
         spending_key,
         token_0,
@@ -404,11 +404,11 @@ fn test_transfer_wrong_spending_key() {
     let commitment_in_1 = poseidon4(token, amount_in_1, owner_pubkey, salt_in_1);
 
     // Attacker tries to use their spending key to derive nullifiers (will fail)
-    let nullifier_1 = poseidon2(commitment_in_0, attacker_spending_key);
-    let nullifier_2 = poseidon2(commitment_in_1, attacker_spending_key);
+    let nullifier_0 = poseidon2(commitment_in_0, attacker_spending_key);
+    let nullifier_1 = poseidon2(commitment_in_1, attacker_spending_key);
 
-    let commitment_out_1 = poseidon4(token, amount_out_0, attacker_pubkey, salt_out_0);
-    let commitment_out_2 = poseidon4(token, amount_out_1, attacker_pubkey, salt_out_1);
+    let commitment_out_0 = poseidon4(token, amount_out_0, attacker_pubkey, salt_out_0);
+    let commitment_out_1 = poseidon4(token, amount_out_1, attacker_pubkey, salt_out_1);
 
     let proof_length: u32 = 3;
     let mut path_0: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
@@ -429,10 +429,10 @@ fn test_transfer_wrong_spending_key() {
 
     // This will fail because attacker_spending_key doesn't derive to owner_pubkey
     main(
+        nullifier_0,
         nullifier_1,
-        nullifier_2,
+        commitment_out_0,
         commitment_out_1,
-        commitment_out_2,
         commitment_root,
         attacker_spending_key,
         token,
@@ -477,11 +477,11 @@ fn test_transfer_invalid_merkle_proof() {
     let commitment_in_0 = poseidon4(token, amount_in_0, owner_pubkey, salt_in_0);
     let commitment_in_1 = poseidon4(token, amount_in_1, owner_pubkey, salt_in_1);
 
-    let nullifier_1 = poseidon2(commitment_in_0, spending_key);
-    let nullifier_2 = poseidon2(commitment_in_1, spending_key);
+    let nullifier_0 = poseidon2(commitment_in_0, spending_key);
+    let nullifier_1 = poseidon2(commitment_in_1, spending_key);
 
-    let commitment_out_1 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
-    let commitment_out_2 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
+    let commitment_out_0 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
+    let commitment_out_1 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
 
     let proof_length: u32 = 3;
     let path_0: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
@@ -493,10 +493,10 @@ fn test_transfer_invalid_merkle_proof() {
     let wrong_root = poseidon2(0x1234, 0x5678);
 
     main(
+        nullifier_0,
         nullifier_1,
-        nullifier_2,
+        commitment_out_0,
         commitment_out_1,
-        commitment_out_2,
         wrong_root,
         spending_key,
         token,
@@ -549,12 +549,12 @@ fn test_transfer_zero_note_valid() {
     let commitment_in_1 = poseidon4(token, amount_in_1, owner_pubkey, salt_in_1);
 
     // Nullifiers: both constrained (even for zero note)
-    let nullifier_1 = poseidon2(commitment_in_0, spending_key);
-    let nullifier_2 = poseidon2(commitment_in_1, spending_key);
+    let nullifier_0 = poseidon2(commitment_in_0, spending_key);
+    let nullifier_1 = poseidon2(commitment_in_1, spending_key);
 
     // Output commitments
-    let commitment_out_1 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
-    let commitment_out_2 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
+    let commitment_out_0 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
+    let commitment_out_1 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
 
     // Build merkle tree with only input 0 (zero note is not in the tree)
     // For this test, use a simple single-leaf tree
@@ -574,10 +574,10 @@ fn test_transfer_zero_note_valid() {
     let indices_1: [u1; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
 
     main(
+        nullifier_0,
         nullifier_1,
-        nullifier_2,
+        commitment_out_0,
         commitment_out_1,
-        commitment_out_2,
         commitment_root,
         spending_key,
         token,
@@ -604,7 +604,7 @@ fn test_transfer_zero_note_valid() {
 
 #[test(should_fail)]
 fn test_transfer_zero_note_wrong_nullifier() {
-    // Verify that nullifier_2 IS constrained for zero notes (cannot use arbitrary value)
+    // Verify that nullifier_1 IS constrained for zero notes (cannot use arbitrary value)
     let spending_key = 0xdeadbeef;
     let owner_pubkey = poseidon1(spending_key);
     let token = 0x1234567890abcdef1234567890abcdef12345678;
@@ -622,12 +622,12 @@ fn test_transfer_zero_note_wrong_nullifier() {
 
     let commitment_in_0 = poseidon4(token, amount_in_0, owner_pubkey, salt_in_0);
 
-    let nullifier_1 = poseidon2(commitment_in_0, spending_key);
-    // Use an arbitrary value for nullifier_2 instead of the correct one
-    let nullifier_2 = 0xdeadbeefcafebabe;
+    let nullifier_0 = poseidon2(commitment_in_0, spending_key);
+    // Use an arbitrary value for nullifier_1 instead of the correct one
+    let nullifier_1 = 0xdeadbeefcafebabe;
 
-    let commitment_out_1 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
-    let commitment_out_2 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
+    let commitment_out_0 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
+    let commitment_out_1 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
 
     let proof_length: u32 = 3;
     let path_0: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
@@ -643,10 +643,10 @@ fn test_transfer_zero_note_wrong_nullifier() {
     let indices_1: [u1; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
 
     main(
+        nullifier_0,
         nullifier_1,
-        nullifier_2,
+        commitment_out_0,
         commitment_out_1,
-        commitment_out_2,
         commitment_root,
         spending_key,
         token,

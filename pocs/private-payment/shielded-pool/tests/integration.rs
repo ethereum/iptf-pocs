@@ -427,8 +427,8 @@ async fn test_full_shielded_pool_flow() {
     commitment_tree.insert(&b256_to_bytes(&output_commitments[1]));
 
     // Verify nullifier is spent
-    let nullifier_1 = transfer_proof.public_inputs.nullifier_1;
-    let is_spent = rpc.is_nullifier_spent(nullifier_1).await.unwrap();
+    let nullifier_0 = transfer_proof.public_inputs.nullifier_0;
+    let is_spent = rpc.is_nullifier_spent(nullifier_0).await.unwrap();
     assert!(is_spent, "Alice's nullifier should be spent");
     println!("  Alice's nullifier spent: {}", is_spent);
 
