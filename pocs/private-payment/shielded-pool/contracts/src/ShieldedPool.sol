@@ -294,6 +294,12 @@ contract ShieldedPool {
         // Store current root as historical before inserting
         bytes32 currentRoot = commitmentRoot();
         if (currentRoot != bytes32(0)) {
+            // Evict the old root being overwritten from the valid set
+            bytes32 evictedRoot = historicalRoots[historicalRootIndex];
+            if (evictedRoot != bytes32(0)) {
+                delete validRoots[evictedRoot];
+            }
+
             validRoots[currentRoot] = true;
             historicalRoots[historicalRootIndex] = currentRoot;
             historicalRootIndex = (historicalRootIndex + 1) % MAX_HISTORICAL_ROOTS;

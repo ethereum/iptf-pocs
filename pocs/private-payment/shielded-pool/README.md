@@ -12,7 +12,6 @@ A proof-of-concept implementation of institutional stablecoin payments with tran
 
 ```bash
 cd pocs/private-payment/shielded-pool
-
 # Install Solidity dependencies
 forge soldeer install
 ```
@@ -146,11 +145,11 @@ The E2E test executes the following flow:
 1. Alice deposits 1000 tokens
 2. Bob deposits 500 tokens
 3. Alice transfers 700 to Bob (keeping 300 as change)
-4. Bob withdraws 1200 (his 500 + 700 from Alice)
+4. Bob withdraws 700 
 
 This test uses the BBProver, and generated on-chain verifiers.
 
-- Ensure that the `USE_MOCK_VERIFIER` in your .env is set to `true`
+- Ensure that the `USE_MOCK_VERIFIER` in your .env is set to `false`
 
 ```bash
 # Start local node in a separate terminal
@@ -167,6 +166,6 @@ cargo test --test integration -- --nocapture
 
 The PoC is set up to be quite modular, so to take this PoC to production, you can do the following quite easily - 
 
-1. Use a different proving backend: swap out the [bb_prover.rs](pocs/private-payment/shielded-pool/src/lib/adapters/bb_prover.rs) adapter
-2. Use a secure channel i.e Mixnet / SWIFT for institutions: swap out the [channel.rs](pocs/private-payment/shielded-pool/src/lib/adapters/channel.rs) adapter
-3. Use a different smart contract language: swap out the [contracts](pocs/private-payment/shielded-pool/contracts)
+1. Use a different proving backend: swap out the [bb_prover.rs](src/lib/adapters/bb_prover.rs) adapter
+2. Use a secure channel i.e Mixnet / SWIFT for institutions: swap out the [channel.rs](src/lib/adapters/channel.rs) adapter
+3. Use a different smart contract language: swap out the [contracts](contracts)

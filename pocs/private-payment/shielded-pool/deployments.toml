@@ -5,13 +5,13 @@ endpoint_url = "http://localhost:8545"
 use_mock_verifier = "${USE_MOCK_VERIFIER}"
 
 [31337.address]
-shielded_pool_address = "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e"
-composite_verifier_address = "0x610178dA211FEF7D417bC0e6FeD39F05609AD788"
-attestation_registry_address = "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318"
-mock_token_address = "0xA51c1fc2f0D1a1b8494Ed1FE312d7C3a78Ed91C0"
-deposit_verifier_address = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
-transfer_verifier_address = "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
-withdraw_verifier_address = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
+shielded_pool_address = "0x1291Be112d480055DaFd8a610b7d1e203891C274"
+composite_verifier_address = "0x4c5859f0F772848b2D91F1D83E2Fe57935348029"
+attestation_registry_address = "0x809d550fca64d94Bd9F66E60752A544199cfAC3D"
+mock_token_address = "0x5f3f1dBD7B74C6B46e8c44f98792A1dAf8d69154"
+deposit_verifier_address = "0x9d4454B023096f34B160D6B654540c56A1F81688"
+transfer_verifier_address = "0x5eb3Bc0a489C5A8288765d2336659EbCA68FCd00"
+withdraw_verifier_address = "0x36C02dA8a0983159322a80FFE9F24b1acfF8B570"
 
 [11155111]
 endpoint_url = "${SEPOLIA_RPC_URL}"

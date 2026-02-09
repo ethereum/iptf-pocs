@@ -39,7 +39,7 @@ for circuit in "${CIRCUITS[@]}"; do
 
     # 3. Generate verification key with keccak hash (required for Solidity)
     echo "  [3/4] Generating verification key..."
-    bb write_vk -b "./target/${circuit}.json" -o ./target --oracle_hash keccak
+    bb write_vk -b "../../target/${circuit}.json" -o ./target --oracle_hash keccak
 
     # 4. Generate Solidity verifier
     # Capitalize first letter for contract name

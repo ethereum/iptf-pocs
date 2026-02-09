@@ -110,10 +110,10 @@ fn main(
     // 3. Verify input note 1
     let is_zero_note = amount_in_1 == 0;
 
-    // Only verify real notes
-    if !is_zero_note {
-        let commitment_in_1 = poseidon4(token_in_1, amount_in_1, owner_pubkey, salt_in_1);
+    let commitment_in_1 = poseidon4(token_in_1, amount_in_1, owner_pubkey, salt_in_1);
 
+    // Only verify merkle inclusion for real notes (zero notes don't exist in the tree)
+    if !is_zero_note {
         verify_merkle_proof(
             commitment_in_1,
             commitment_root,
@@ -121,10 +121,10 @@ fn main(
             indices_1,
             path_1,
         );
-
-        let computed_nullifier_1 = poseidon2(commitment_in_1, spending_key);
-        assert(nullifier_2 == computed_nullifier_1);
     }
+
+    let computed_nullifier_1 = poseidon2(commitment_in_1, spending_key);
+    assert(nullifier_2 == computed_nullifier_1);
 
     // 4. Verify output commitments are correctly formed
     let computed_commitment_out_0 = poseidon4(token_out_0, amount_out_0, owner_out_0, salt_out_0);
@@ -498,6 +498,156 @@ fn test_transfer_invalid_merkle_proof() {
         commitment_out_1,
         commitment_out_2,
         wrong_root,
+        spending_key,
+        token,
+        amount_in_0,
+        salt_in_0,
+        token,
+        amount_in_1,
+        salt_in_1,
+        token,
+        amount_out_0,
+        recipient_pubkey,
+        salt_out_0,
+        token,
+        amount_out_1,
+        owner_pubkey,
+        salt_out_1,
+        proof_length,
+        path_0,
+        indices_0,
+        path_1,
+        indices_1,
+    );
+}
+
+#[test]
+fn test_transfer_zero_note_valid() {
+    // Single-input transfer: input 0 has value, input 1 is a zero note
+    let spending_key = 0xdeadbeef;
+    let owner_pubkey = poseidon1(spending_key);
+    let token = 0x1234567890abcdef1234567890abcdef12345678;
+
+    // Input note 0: real note with 1000
+    let amount_in_0 = 1000;
+    let salt_in_0 = 0xaaaa;
+
+    // Input note 1: zero note (amount = 0)
+    let amount_in_1 = 0;
+    let salt_in_1 = 0xbbbb;
+
+    // Output notes: 700 to recipient, 300 as change
+    let recipient_pubkey = poseidon1(0xcafe);
+    let amount_out_0 = 700;
+    let salt_out_0 = 0xcccc;
+    let amount_out_1 = 300;
+    let salt_out_1 = 0xdddd;
+
+    // Compute input commitments
+    let commitment_in_0 = poseidon4(token, amount_in_0, owner_pubkey, salt_in_0);
+    // Zero note commitment is still deterministically computed
+    let commitment_in_1 = poseidon4(token, amount_in_1, owner_pubkey, salt_in_1);
+
+    // Nullifiers: both constrained (even for zero note)
+    let nullifier_1 = poseidon2(commitment_in_0, spending_key);
+    let nullifier_2 = poseidon2(commitment_in_1, spending_key);
+
+    // Output commitments
+    let commitment_out_1 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
+    let commitment_out_2 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
+
+    // Build merkle tree with only input 0 (zero note is not in the tree)
+    // For this test, use a simple single-leaf tree
+    let proof_length: u32 = 3;
+    let mut path_0: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
+    let indices_0: [u1; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
+
+    // Compute root for a tree with commitment_in_0 at index 0
+    let mut current = poseidon2(commitment_in_0, 0);
+    for _ in 1..proof_length {
+        current = poseidon2(current, 0);
+    }
+    let commitment_root = current;
+
+    // Zero note doesn't need a valid merkle proof (skipped in circuit)
+    let path_1: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
+    let indices_1: [u1; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
+
+    main(
+        nullifier_1,
+        nullifier_2,
+        commitment_out_1,
+        commitment_out_2,
+        commitment_root,
+        spending_key,
+        token,
+        amount_in_0,
+        salt_in_0,
+        token,
+        amount_in_1,
+        salt_in_1,
+        token,
+        amount_out_0,
+        recipient_pubkey,
+        salt_out_0,
+        token,
+        amount_out_1,
+        owner_pubkey,
+        salt_out_1,
+        proof_length,
+        path_0,
+        indices_0,
+        path_1,
+        indices_1,
+    );
+}
+
+#[test(should_fail)]
+fn test_transfer_zero_note_wrong_nullifier() {
+    // Verify that nullifier_2 IS constrained for zero notes (cannot use arbitrary value)
+    let spending_key = 0xdeadbeef;
+    let owner_pubkey = poseidon1(spending_key);
+    let token = 0x1234567890abcdef1234567890abcdef12345678;
+
+    let amount_in_0 = 1000;
+    let salt_in_0 = 0xaaaa;
+    let amount_in_1 = 0;
+    let salt_in_1 = 0xbbbb;
+
+    let recipient_pubkey = poseidon1(0xcafe);
+    let amount_out_0 = 700;
+    let salt_out_0 = 0xcccc;
+    let amount_out_1 = 300;
+    let salt_out_1 = 0xdddd;
+
+    let commitment_in_0 = poseidon4(token, amount_in_0, owner_pubkey, salt_in_0);
+
+    let nullifier_1 = poseidon2(commitment_in_0, spending_key);
+    // Use an arbitrary value for nullifier_2 instead of the correct one
+    let nullifier_2 = 0xdeadbeefcafebabe;
+
+    let commitment_out_1 = poseidon4(token, amount_out_0, recipient_pubkey, salt_out_0);
+    let commitment_out_2 = poseidon4(token, amount_out_1, owner_pubkey, salt_out_1);
+
+    let proof_length: u32 = 3;
+    let path_0: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
+    let indices_0: [u1; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
+
+    let mut current = poseidon2(commitment_in_0, 0);
+    for _ in 1..proof_length {
+        current = poseidon2(current, 0);
+    }
+    let commitment_root = current;
+
+    let path_1: [Field; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
+    let indices_1: [u1; MAX_COMMITMENT_TREE_DEPTH] = [0; MAX_COMMITMENT_TREE_DEPTH];
+
+    main(
+        nullifier_1,
+        nullifier_2,
+        commitment_out_1,
+        commitment_out_2,
+        commitment_root,
         spending_key,
         token,
         amount_in_0,

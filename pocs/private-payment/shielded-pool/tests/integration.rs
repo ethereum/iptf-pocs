@@ -144,7 +144,7 @@ impl DeploymentConfig {
 /// 1. Alice deposits 1000 tokens
 /// 2. Bob deposits 500 tokens
 /// 3. Alice transfers 700 to Bob (keeping 300 as change)
-/// 4. Bob withdraws 1200 (his 500 + 700 from Alice)
+/// 4. Bob withdraws 700
 ///
 /// This test uses the BBProver for real ZK proof generation.
 #[tokio::test]

@@ -550,7 +550,7 @@ All circuits use `binary_merkle_root` from zk-kit.noir for dynamic-depth Merkle 
 - `salt`: Random salt
 - `attester`: Attester address
 - `issued_at`: Attestation timestamp
-- `expires_at`: Expiration (0 = no expiry)
+- `expires_at`: Expiration (0 = no expiry). **NOTE:** we do not enforce the value of `expires_at` in the circuit, it is assumed here that the regulator sets it correctly on-chain, and not to a value in the past.
 - `attestation_proof_length`: Actual depth of the attestation tree proof
 - `attestation_path`: Merkle siblings (padded to MAX_ATTESTATION_TREE_DEPTH = 20)
 - `attestation_indices`: Path direction bits (padded to MAX_ATTESTATION_TREE_DEPTH = 20)

@@ -30,7 +30,6 @@ fn verify_merkle_proof<let MAX_DEPTH: u32>(
 /// Proves that:
 /// 1. The commitment is correctly formed from the note components
 /// 2. The depositor has a valid attestation in the attestation tree
-/// 3. The attestation has not expired
 ///
 /// Public Inputs:
 /// - commitment: the note commitment being created
