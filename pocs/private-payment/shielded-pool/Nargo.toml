@@ -1,0 +1,3 @@
+[workspace]
+members = ["circuits/deposit", "circuits/transfer", "circuits/withdraw"]
+default-member = "circuits/transfer"
