@@ -1,10 +1,10 @@
 ---
-title: "[Protocol Name] Requirements"
+title: "{{poc_name}} Requirements"
 use_case: "[link to iptf-map use case]"
 approach: "[link to iptf-map approach]"
 ---
 
-# [Protocol Name] Requirements
+# {{poc_name}} Requirements
 
 ## 1. Core Problem
 

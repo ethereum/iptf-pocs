@@ -1,0 +1,16 @@
+[template]
+cargo_generate_version = ">=0.20.0"
+
+[placeholders]
+poc_name = { prompt = "Enter PoC name", default = "Shielded Pool", type = "string" }
+use_noir = { prompt = "Include Noir workspace?", default = false, type = "bool" }
+use_foundry = { prompt = "Include Foundry workspace?", default = false, type = "bool" }
+
+[conditional.'!use_foundry']
+ignore = ["foundry.toml", "soldeer.lock", "contracts", ".env.example"]
+
+[conditional.'!use_noir']
+ignore = ["Nargo.toml", "circuits"]
+
+[hooks]
+pre = ["pre-script.rhai"]

@@ -7,6 +7,13 @@
 3. Make your changes
 4. Submit a pull request
 
+### PoC Creation
+
+1. Create a folder in `pocs/` and `cd` into it
+2. Build `REQUIREMENTS.md` and `README.md`
+3. Create a folder with the name of the approach and `cd` into it
+4. Run `cargo generate --path ../../_template --init` and follow the prompts
+
 ## Pull Request Guidelines
 
 - Keep PRs focused on a single change
