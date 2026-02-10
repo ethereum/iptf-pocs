@@ -7,6 +7,11 @@
 3. Make your changes
 4. Submit a pull request
 
+### PoC Creation
+
+1. Create a folder in `pocs/` and `cd` into it
+2. Run `cargo generate --path ../_template --init` and follow the prompts
+
 ## Pull Request Guidelines
 
 - Keep PRs focused on a single change

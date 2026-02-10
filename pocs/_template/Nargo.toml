@@ -1,0 +1,3 @@
+[workspace]
+members = ["circuits/{{project-name}}"]
+default-member = "circuits/{{project-name}}"

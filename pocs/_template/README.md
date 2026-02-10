@@ -1,4 +1,4 @@
-# [PoC Name]
+# {{poc_name}}
 
 > **Status:** Draft | In Progress | Complete
 > **Privacy Primitive:** [e.g., confidential transfers, private voting, anonymous credentials]
@@ -24,10 +24,27 @@ What this does NOT protect against:
 - Side-channel attacks
 - etc.
 
-## Building
+## Prerequisites
+
+- [Rust](https://www.rust-lang.org/tools/install)
+{% if use_foundry %}- [Foundry](https://getfoundry.sh/introduction/installation)
+{% endif %}{% if use_noir %}- [Nargo](https://noir-lang.org/docs/getting_started/noir_installation)
+- [Barretenberg](https://barretenberg.aztec.network/docs/getting_started)
+{% endif %}
+{% if use_foundry %}## Installation
 
 ```bash
-# Installation and build instructions
+cd pocs/{{project-name}}
+# Install Solidity dependencies
+forge soldeer install
+```
+
+{% endif %}## Building
+
+```bash
+{% if use_noir %}nargo compile --workspace
+{% endif %}{% if use_foundry %}forge build
+{% endif %}cargo check
 ```
 
 ## Running
@@ -39,7 +56,9 @@ What this does NOT protect against:
 ## Tests
 
 ```bash
-# How to run tests
+{% if use_noir %}nargo test --workspace
+{% endif %}{% if use_foundry %}forge test
+{% endif %}cargo test --lib
 ```
 
 ## Known Limitations

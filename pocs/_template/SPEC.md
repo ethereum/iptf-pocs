@@ -1,5 +1,5 @@
 ---
-title: "[Protocol Name]"
+title: "{{poc_name}}"
 status: Draft
 version: 0.1.0
 authors: []
