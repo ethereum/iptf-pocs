@@ -39,6 +39,14 @@ Institutions require payment privacy equivalent to traditional banking while ope
 
 ### Strategy
 
+The rollup can be deployed by various entities depending on the use case, for example: 
+1. A single financial institution for internal treasury operations
+2. A consortium of banks for interbank settlement
+3. A payment network operator for merchant payments
+4. A regulated stablecoin issuer for private transfers of their token. 
+
+The deploying entity configures the attestation gating rules: which compliance authorities are authorized to issue attestations, what KYC requirements apply, attestation expiry policy, and revocation procedures.
+
 The protocol implements a **stateless ZK-rollup with attestation-gated entry** using four core mechanisms:
 
 1. **Attestation-Gated Entry**: Deposits require a ZK proof of inclusion in an on-chain KYC attestation tree, preventing unauthorized actor participation.
@@ -48,17 +56,20 @@ The protocol implements a **stateless ZK-rollup with attestation-gated entry** u
 
 ### Why This Approach
 
-| Alternative | Trade-off | Why Not |
-|------------|-----------|---------|
-| Shielded pool (Railgun-style, UTXO on L1) | Proven privacy with mature tooling, but every commitment and nullifier is posted on-chain | Higher gas per transaction;  scalability limited by L1 data |
-| Traditional ZK-rollup (e.g., zkSync, Starknet) | Full transaction data posted to L1 for data availability | Data availability bottleneck limits throughput; all tx data public on L1 |
-| Optimistic rollup | Simpler verification, but relies on fraud proofs and challenge periods | Slower finality (7-day challenge window); less privacy (full tx data on L1) |
-| FHE-based payments | Flexible computation on encrypted data | Higher computational cost; less mature tooling; verification overhead |
-| Intmax2 stateless ZK-rollup | Minimal on-chain data; permissionless aggregation; client-side proof generation | Requires client-side proof generation; newer, less battle-tested |
+Starting from the constraints:
 
-The Intmax2 architecture uniquely satisfies the constraints: near-zero on-chain data per transaction provides privacy and scalability, permissionless aggregation eliminates sequencer trust, and client-side balance proofs enable selective disclosure. The trade-off is shifted computation to clients, which is acceptable for institutional users with adequate hardware.
+1. **Transaction privacy** requires that transaction details (amounts, recipients) are not posted on-chain. This rules out traditional validiums and optimistic rollups, where full transaction data is published to L1 for data availability.
+2. **No trusted sequencer** requires stateless block production, where aggregators do not need to know the previous rollup state to produce new blocks. This rules out designs where a single sequencer maintains global state and becomes a trust bottleneck.
+3. Together, (1) and (2) point to an architecture where only *commitments* (Merkle roots of salted transaction hashes) go on-chain.
+4. **Compliance gating** is layered on top via attestation-gated deposits, orthogonal to the rollup design itself.
+
+Shielded pools (UTXO commitments and nullifiers on L1) satisfy transaction privacy but post every state transition on-chain, limiting scalability.
+FHE-based payments offer flexible encrypted computation but carry higher costs and less mature tooling.
+The stateless ZK-rollup satisfies all four constraints, at the cost of pushing proof generation to clients and relying on a newer, less battle-tested protocol.
 
 ### Tools & Primitives
+
+We use [Intmax2](https://eprint.iacr.org/2025/021) as the concrete instantiation of the above architecture. It is the most mature implementation of a stateless ZK-rollup with permissionless aggregation, client-side balance proofs, and minimal on-chain data. The protocol's fund safety property has been formally verified in the Lean theorem prover.
 
 | Tool | Purpose |
 |------|---------|
