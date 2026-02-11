@@ -66,7 +66,7 @@ cargo test --release test_deposit_transfer_withdraw -- --nocapture
 - **Engineering:** <https://pse.dev/mastermap/pte>
 - **Library:** PlasmaBlind uses [Sonobe](https://sonobe.pse.dev/), a modular folding schemes library.
 
-Folding-based proving may offer efficiency advantages over recursive SNARKs for the balance proof pipeline, making it a promising direction for future iterations of the stateless plasma approach.
+Folding-based (IVC based recursion) proving may offer efficiency advantages over traditional recursive SNARKs for the balance proof pipeline, making it a promising direction for future iterations of the stateless plasma approach.
 
 ## References
 
