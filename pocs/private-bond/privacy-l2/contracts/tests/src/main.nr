@@ -155,6 +155,7 @@ unconstrained fn test_dvp_atomic_swap() {
     let mut env = TestEnvironment::new();
 
     let issuer = env.create_light_account();
+    let stable_admin = env.create_light_account();
     // Contract accounts for seller and buyer required for authwit
     let seller = env.create_contract_account();
     let buyer = env.create_contract_account();
@@ -165,9 +166,9 @@ unconstrained fn test_dvp_atomic_swap() {
         PrivateBonds::interface().constructor(1_000_000, 0),
     );
 
-    // Deploy stablecoin (buyer holds 10M stablecoins)
+    // Deploy stablecoin (admin holds 10M, will distribute to buyer)
     let stable_addr = env.deploy("@stablecoin/Stablecoin").with_private_initializer(
-        buyer,
+        stable_admin,
         Stablecoin::interface().constructor(10_000_000),
     );
 
@@ -178,6 +179,9 @@ unconstrained fn test_dvp_atomic_swap() {
     env.call_public(issuer, PrivateBonds::at(bond_addr).add_to_whitelist(seller));
     env.call_public(issuer, PrivateBonds::at(bond_addr).add_to_whitelist(buyer));
     env.call_private(issuer, PrivateBonds::at(bond_addr).distribute_private(seller, 100_000));
+
+    // Stablecoin admin distributes to buyer (like acquiring USDC from an exchange)
+    env.call_private(stable_admin, Stablecoin::at(stable_addr).transfer_private(buyer, 10_000_000));
 
     // Seller authorizes DvP contract to move 100k bonds to buyer
     let bond_transfer_call = PrivateBonds::at(bond_addr).transfer_from(seller, buyer, 100_000, 0);
@@ -202,7 +206,7 @@ unconstrained fn test_dvp_atomic_swap() {
         ),
     );
 
-    // Verify post-swap balances
+    // Verify post swap balances
     let seller_bonds: u128 =
         env.simulate_utility(PrivateBonds::at(bond_addr).private_balance_of(seller));
     let buyer_bonds: u128 =
@@ -223,6 +227,7 @@ unconstrained fn test_dvp_fails_without_authwit() {
     let mut env = TestEnvironment::new();
 
     let issuer = env.create_light_account();
+    let stable_admin = env.create_light_account();
     let seller = env.create_contract_account();
     let buyer = env.create_contract_account();
 
@@ -232,7 +237,7 @@ unconstrained fn test_dvp_fails_without_authwit() {
     );
 
     let stable_addr = env.deploy("@stablecoin/Stablecoin").with_private_initializer(
-        buyer,
+        stable_admin,
         Stablecoin::interface().constructor(10_000_000),
     );
 
@@ -241,8 +246,9 @@ unconstrained fn test_dvp_fails_without_authwit() {
     env.call_public(issuer, PrivateBonds::at(bond_addr).add_to_whitelist(seller));
     env.call_public(issuer, PrivateBonds::at(bond_addr).add_to_whitelist(buyer));
     env.call_private(issuer, PrivateBonds::at(bond_addr).distribute_private(seller, 100_000));
+    env.call_private(stable_admin, Stablecoin::at(stable_addr).transfer_private(buyer, 10_000_000));
 
-    // No authwits created this should fail
+    // No authwits created; this should fail
     env.call_private(
         seller,
         DvP::at(dvp_addr).execute_swap(

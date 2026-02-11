@@ -73,7 +73,7 @@ Average proving time: **~9.8 seconds** per transaction
 | Redeem               | 1,327-1,347      | 8,268-8,377    | 9,615-9,704   |
 
 Machine: MacBook Pro M1 Pro - 16GB
-Source: [privacy-l2/contracts/logs/test-logs.txt](./privacy-l2/contracts/logs/test-logs.txt)
+Source: [privacy-l2/test.sh](./privacy-l2/test.sh) using `aztec-wallet profile`
 
 ### Zama FHE
 

@@ -34,7 +34,7 @@ Full specification covering identity model, storage structure, protocol flow, se
 
 #### `/test.sh`
 
-End-to-end demo script demonstrating the complete bond lifecycle.
+Profiling script that deploys all contracts, runs the full bond lifecycle, and reports per-circuit gate counts using `aztec-wallet profile`.
 
 ## How It Works: Aztec Privacy Model
 
@@ -120,7 +120,7 @@ Wait for "Aztec Sandbox is now ready". The sandbox provides pre-funded test acco
 ```bash
 aztec-wallet deploy private_bonds-PrivateBonds.json \
   --from accounts:test0 \
-  --init initialize \
+  --init constructor \
   --args 1000000 0
 ```
 
