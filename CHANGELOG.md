@@ -25,6 +25,10 @@ Use `[repo]` for repository-wide changes (CI, templates, docs).
 ## Unreleased
 
 ### [private-bond]
+- **Added**: `privacy-l2` — Stablecoin contract (minimal private ERC20 for DvP payment leg)
+- **Added**: `privacy-l2` — DvP contract (atomic bond↔stablecoin swap via authwit)
+- **Added**: `privacy-l2` — Noir-native tests using Aztec `TestEnvironment` (8 tests)
+- **Changed**: `privacy-l2` — Restructured `contracts/` into Nargo workspace
 - Pending: `fhe` approach
 
 ---

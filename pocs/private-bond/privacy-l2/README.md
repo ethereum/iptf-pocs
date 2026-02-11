@@ -21,9 +21,12 @@ This is a proof-of-concept implementation of a privacy-preserving bond protocol 
 
 #### `/contracts`
 
-Aztec smart contract implementing the bond protocol.
+Nargo workspace containing three Aztec smart contracts and a test suite:
 
-- `src/main.nr` — Main contract (Noir)
+- `private_bonds/` — Bond token contract with private balances, whitelist, maturity
+- `stablecoin/` — Minimal private ERC20 stablecoin (payment leg for DvP)
+- `dvp/` — Stateless DvP coordinator (atomic bond↔stablecoin swap via authwit)
+- `tests/` — Noir-native tests using Aztec's `TestEnvironment` (run with `aztec test`)
 
 #### `/SPEC.md`
 
@@ -31,7 +34,7 @@ Full specification covering identity model, storage structure, protocol flow, se
 
 #### `/test.sh`
 
-End-to-end demo script demonstrating the complete bond lifecycle.
+Profiling script that deploys all contracts, runs the full bond lifecycle, and reports per-circuit gate counts using `aztec-wallet profile`.
 
 ## How It Works: Aztec Privacy Model
 
@@ -81,9 +84,17 @@ aztec start --local-network
 # 2. Import test accounts (in a new terminal)
 aztec-wallet import-test-accounts
 
-# 3. Compile contract
+# 3. Compile all contracts (workspace)
 cd contracts
 aztec compile
+```
+
+### Run Tests
+
+```bash
+# Noir-native tests (requires TXE — no sandbox needed)
+cd contracts
+aztec test
 ```
 
 ## Demo: Full Bond Lifecycle
@@ -109,7 +120,7 @@ Wait for "Aztec Sandbox is now ready". The sandbox provides pre-funded test acco
 ```bash
 aztec-wallet deploy private_bonds-PrivateBonds.json \
   --from accounts:test0 \
-  --init initialize \
+  --init constructor \
   --args 1000000 0
 ```
 
@@ -236,8 +247,8 @@ This repository is a proof-of-concept. The following simplifications were made:
 
 | Spec Feature                          | PoC Implementation                     | Rationale                                            |
 | ------------------------------------- | -------------------------------------- | ---------------------------------------------------- |
-| Atomic DvP with stablecoin            | Simple `transfer_private` + off-chain  | No stablecoin contract on Aztec testnet              |
-| Atomic redemption (bond ↔ stablecoin) | Simple `redeem` burn + off-chain fiat  | No stablecoin contract on Aztec testnet              |
+| Atomic DvP with stablecoin            | DvP contract + Stablecoin contract     | Atomic swap via authwit and cross-contract calls     |
+| Atomic redemption (bond ↔ stablecoin) | Simple `redeem` burn + off-chain fiat  | DvP available but redemption kept simple for demo    |
 | Bond attributes (ISIN/Asset ID)       | Single asset type assumed              | Simplifies contract for PoC                          |
 | Key rotation support                  | Not implemented                        | Aztec account abstraction handles keys               |
 | Per-note selective disclosure         | Per-contract viewing keys (app-siloed) | Native Aztec granularity; per-note needs custom ECDH |
@@ -245,7 +256,7 @@ This repository is a proof-of-concept. The following simplifications were made:
 
 ### Known Limitations
 
-- **No stablecoin integration**: Redemption burns bonds; fiat settlement happens off-chain
+- **Redemption without DvP**: Redemption burns bonds directly; fiat settlement happens off-chain (DvP contract available but not used for redemption flow)
 - **Public whitelist**: Participants are linkable via whitelist reads (acceptable for KYC compliance)
 - **Single bond type**: No multi-tranche or multi-maturity support
 - **Viewing key scope**: App-siloed (per-contract) granularity; per-note disclosure requires custom implementation

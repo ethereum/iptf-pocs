@@ -1,0 +1,9 @@
+[package]
+name = "dvp"
+type = "contract"
+authors = [""]
+
+[dependencies]
+aztec = { git="https://github.com/AztecProtocol/aztec-nr/", tag="v3.0.0-devnet.6-patch.1", directory="aztec" }
+private_bonds = { path = "../private_bonds" }
+stablecoin = { path = "../stablecoin" }

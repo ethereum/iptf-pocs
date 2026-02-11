@@ -1,8 +1,2 @@
-[package]
-name = "private_bonds"
-type = "contract"
-authors = [""]
-
-[dependencies]
-aztec = { git="https://github.com/AztecProtocol/aztec-nr/", tag="v3.0.0-devnet.6-patch.1", directory="aztec" }
-balance_set = { git="https://github.com/AztecProtocol/aztec-nr/", tag="v3.0.0-devnet.6-patch.1", directory="balance-set" }
+[workspace]
+members = ["private_bonds", "stablecoin", "dvp", "tests"]

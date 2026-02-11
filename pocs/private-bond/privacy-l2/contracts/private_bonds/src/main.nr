@@ -8,6 +8,7 @@ pub contract PrivateBonds {
         state_vars::{Map, Owned, public_mutable::PublicMutable},
     };
     use aztec::messages::message_delivery::MessageDelivery;
+    use aztec::test::helpers::test_environment::TestEnvironment;
     use balance_set::BalanceSet;
 
     #[storage]
@@ -21,7 +22,7 @@ pub contract PrivateBonds {
 
     #[initializer]
     #[external("private")]
-    fn initialize(total_supply: u64, maturity: u64) {
+    fn constructor(total_supply: u64, maturity: u64) {
         let issuer = self.msg_sender().unwrap();
 
         // Set public state via enqueued calls
@@ -193,6 +194,21 @@ pub contract PrivateBonds {
         let block_timestamp = self.context.timestamp();
         let maturity_date = self.storage.maturity_date.read();
         assert(block_timestamp >= maturity_date, "Bond has not reached maturity yet");
+    }
+
+    #[test]
+    unconstrained fn test_initialize_and_balance() {
+        let mut env = TestEnvironment::new();
+        let issuer = env.create_light_account();
+
+        let bond_addr = env.deploy("PrivateBonds").with_private_initializer(
+            issuer,
+            PrivateBonds::interface().constructor(1_000_000, 0),
+        );
+
+        let balance: u128 =
+            env.simulate_utility(PrivateBonds::at(bond_addr).private_balance_of(issuer));
+        assert_eq(balance, 1_000_000 as u128);
     }
 
 }
