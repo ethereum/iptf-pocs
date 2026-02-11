@@ -60,11 +60,12 @@ cargo test --release test_deposit_transfer_withdraw -- --nocapture
 
 ## Upcoming work: PlasmaBlind
 
-[PlasmaBlind](https://pse.dev/mastermap/ptr) is an alternative approach to stateless plasma ZK-rollups using [folding schemes](https://github.com/lurk-lab/awesome-folding). It is under active R&D by PSE and has not been audited.
+[PlasmaBlind](https://pse.dev/mastermap/ptr) is another approach of stateless plasma ZK-rollups using [folding schemes](https://github.com/lurk-lab/awesome-folding). It is under active R&D by PSE and has not been audited.
 
 - **Research:** <https://pse.dev/mastermap/ptr>
 - **Engineering:** <https://pse.dev/mastermap/pte>
 - **Library:** PlasmaBlind uses [Sonobe](https://sonobe.pse.dev/), a modular folding schemes library.
+- **Implementation:** https://github.com/winderica/plasma-blind
 
 Folding-based (IVC based recursion) proving may offer efficiency advantages over traditional recursive SNARKs for the balance proof pipeline, making it a promising direction for future iterations of the stateless plasma approach.
 
