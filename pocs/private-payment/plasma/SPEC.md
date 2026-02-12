@@ -12,7 +12,13 @@ iptf_approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/appr
 
 ## Executive Summary
 
-This protocol enables institutional stablecoin payments with transaction-level privacy using a stateless ZK-rollup architecture based on [Intmax2](https://eprint.iacr.org/2025/021). Unlike shielded-pool approaches that publish encrypted commitments and nullifiers on L1, this design achieves privacy *architecturally*: transaction details are never posted on-chain. Only block commitments and aggregated BLS signatures are recorded by the rollup contract. Users maintain their own balance proofs client-side using recursive zero-knowledge proofs, and transaction data is exchanged directly between sender and recipient off-chain. Compliance is enforced through attestation-gated entry: only KYC-verified participants can deposit into the system, verified via zero-knowledge proofs against an on-chain attestation registry. A dual-key architecture (spending key for transfers, viewing key for audits) enables selective regulatory disclosure without compromising spending authority.
+This specification describes how to deploy and configure a private payment system using the [Intmax2](https://eprint.iacr.org/2025/021) stateless ZK-rollup. The core rollup protocol (block production, signature aggregation, balance proofs, withdrawal mechanics) is defined by the Intmax2 paper and is not re-specified here. This document focuses on:
+
+1. **Deployment models**: How institutions can use the system, either by deploying a private Intmax2 instance or by using the public Intmax network.
+2. **Attestation-gated entry**: How KYC verification is enforced at the deposit layer via zero-knowledge proofs against an on-chain attestation registry. This is the main protocol addition on top of Intmax2.
+3. **Operational configuration**: Key derivation, contract layout, service topology, and compliance integration.
+
+Privacy is achieved architecturally: transaction details never appear on-chain. The rollup contract stores only block commitments (Merkle roots of salted transaction batch hashes) and aggregated BLS signatures. Users maintain their own balance proofs client-side via recursive ZK proofs. A dual-key architecture (spending key for transfers, viewing key for audits) enables selective regulatory disclosure without compromising spending authority.
 
 ## Problem Statement
 
@@ -23,44 +29,39 @@ Institutional payment flows on public blockchains expose sensitive operational d
 - **Settlement patterns**: Timing and frequency expose trading strategies
 - **Competitive intelligence**: Aggregated on-chain data enables competitor analysis
 
-Institutions require payment privacy equivalent to traditional banking while operating on public infrastructure.
+Institutions need private payment rails that satisfy AML/KYC requirements. Two paths exist: deploy a dedicated private instance with custom compliance rules, or use the public Intmax network under Intmax's compliance framework.
 
 ### Constraints
 
 | Category | Requirement |
 |----------|-------------|
 | **Privacy** | Transaction amounts, counterparties, and patterns hidden from public observers. Transaction *existence* may be visible (block commitments are public), but contents are not. |
-| **Regulatory** | Only KYC-verified participants. Viewing keys enable selective disclosure for AML/CFT monitoring. |
-| **Operational** | Near real-time settlement. High throughput (hundreds of transaction batches per second theoretically). Compatible with existing ERC-20 stablecoins and native ETH. |
-| **Trust** | Aggregators cannot steal funds, link transactions, or censor selectively (permissionless aggregation). No centralized sequencer. |
-| **Scalability** | On-chain data usage scales with the number of *senders* per block, not the number of transactions. Each sender can batch unlimited recipients into a single block entry. |
+| **Regulatory** | Only KYC-verified participants can deposit. Viewing keys enable selective disclosure for AML/CFT monitoring. |
+| **Operational** | Near real-time settlement. Compatible with existing ERC-20 stablecoins and native ETH. On-chain data scales with number of *senders* per block, not number of transactions. |
+| **Trust** | Aggregators cannot steal funds, link transactions, or censor selectively. No centralized sequencer. Permissionless aggregation. |
 
 ## Approach
 
 ### Strategy
 
-The rollup can be deployed by various entities depending on the use case, for example: 
-1. A single financial institution for internal treasury operations
-2. A consortium of banks for interbank settlement
-3. A payment network operator for merchant payments
-4. A regulated stablecoin issuer for private transfers of their token. 
+Two deployment models are supported:
 
-The deploying entity configures the attestation gating rules: which compliance authorities are authorized to issue attestations, what KYC requirements apply, attestation expiry policy, and revocation procedures.
+**Private deployment**: An institution deploys its own Intmax2 rollup contracts, block builder(s), and supporting services. It uses an existing token on L1 (e.g., USDC) and controls the full stack, including which compliance authorities are authorized to issue attestations, what KYC requirements apply, attestation expiry policy, and revocation procedures. Examples include a single bank for internal treasury operations, a consortium for interbank settlement, or a payment network operator for merchant payments.
 
-The protocol implements a **stateless ZK-rollup with attestation-gated entry** using four core mechanisms:
+**Public network**: An institution's customers use the public Intmax deployment. AML permitter rules are set by Intmax (the network operator); individual institutions cannot configure their own attestation rules. The institution's role is limited to ensuring its customers are attested under Intmax's compliance framework before they deposit.
 
-1. **Attestation-Gated Entry**: Deposits require a ZK proof of inclusion in an on-chain KYC attestation tree, preventing unauthorized actor participation.
-2. **Stateless ZK-Rollup**: Transaction details stay entirely off-chain. The rollup contract stores only block commitments (Merkle roots of transaction batch hashes) and aggregated BLS signatures of the senders. Aggregators are stateless and permissionless.
-3. **Client-Side Balance Proofs**: Each user maintains a recursive ZK proof of their balance, constructed from received transaction data and on-chain block history. This shifts computation from L1/aggregator to the client.
-4. **Dual-Key Architecture**: Separate spending keys (BLS, for signing block commitments and authorizing transfers) and viewing keys (for decrypting transaction data stored in the store vault), supporting institutional key management and regulatory disclosure.
+In both models:
+- Attestation gating controls who can deposit into the rollup
+- Transactions are private by architecture: only commitments on-chain
+- Customers bridge tokens into the rollup for private transfers, and withdraw back to L1
 
 ### Why This Approach
 
 Starting from the constraints:
 
 1. **Transaction privacy** requires that transaction details (amounts, recipients) are not posted on-chain. This rules out traditional validiums and optimistic rollups, where full transaction data is published to L1 for data availability.
-2. **No trusted sequencer** requires stateless block production, where aggregators do not need to know the previous rollup state to produce new blocks. This rules out designs where a single sequencer maintains global state and becomes a trust bottleneck.
-3. Together, (1) and (2) point to an architecture where only *commitments* (Merkle roots of salted transaction hashes) go on-chain.
+2. **No trusted sequencer** requires stateless block production, where aggregators do not need to know the previous rollup state to produce new blocks. This rules out designs where a single sequencer maintains global state.
+3. Together, (1) and (2) point to an architecture where only *commitments* (Merkle roots of salted transaction hashes) go on-chain, and users maintain their own balance state.
 4. **Compliance gating** is layered on top via attestation-gated deposits, orthogonal to the rollup design itself.
 
 Shielded pools (UTXO commitments and nullifiers on L1) satisfy transaction privacy but post every state transition on-chain, limiting scalability.
@@ -73,10 +74,10 @@ We use [Intmax2](https://eprint.iacr.org/2025/021) as the concrete instantiation
 
 | Tool | Purpose |
 |------|---------|
-| **BLS Signatures** | Aggregatable signatures for block commitment signing; enables compact on-chain representation of sender consent |
-| **Plonky2** | Recursive ZK proof system for balance proofs and validity proofs; enables efficient proof composition |
+| **BLS Signatures** | Aggregatable signatures for block commitment signing; compact on-chain representation of sender consent |
+| **Plonky2** | Recursive ZK proof system (FRI-based, no trusted setup) for balance proofs and validity proofs |
 | **Poseidon Hash** | ZK-friendly hash function for Merkle trees, transaction batch hashing, and attestation leaves |
-| **Sparse Merkle Trees** | Authenticated dictionary scheme for transaction batch commitments (binding property ensures security) |
+| **Sparse Merkle Trees** | Authenticated dictionary for transaction batch commitments (binding property ensures security) |
 | **Solidity** | On-chain contracts: Rollup, Liquidity, Withdrawal, BlockBuilderRegistry, AttestationRegistry |
 
 ## Protocol Design
@@ -85,18 +86,19 @@ We use [Intmax2](https://eprint.iacr.org/2025/021) as the concrete instantiation
 
 | Role | Description | Keys Held |
 |------|-------------|-----------|
-| **Transactor** | Institutional user performing deposits, transfers, and withdrawals | BLS keypair (L2 spending), ETH keypair (L1), Viewing key |
-| **Aggregator (Block Builder)** | Collects transaction batch hashes, constructs Merkle trees, aggregates BLS signatures, posts transfer blocks to rollup contract | L1 signing key, optional BLS key |
+| **Deployer / Operator** | Entity that deploys and configures the rollup contracts and services. In a private deployment, this is the institution. On the public network, this is Intmax. | L1 deployer key |
+| **Transactor** | End-user performing deposits, transfers, and withdrawals | BLS keypair (L2 spending), ETH keypair (L1), Viewing key |
+| **Aggregator (Block Builder)** | Collects transaction batch hashes, constructs Merkle trees, aggregates BLS signatures, posts transfer blocks to rollup contract. Stateless and permissionless. | L1 signing key |
 | **Validity Prover** | Observes on-chain events, generates validity proofs for posted blocks via recursive ZK circuits | None (stateless service) |
-| **Store Vault Server** | Stores encrypted transaction data (deposits, transfers, withdrawals) for clients to retrieve and decrypt with their viewing key | None (untrusted storage) |
-| **Compliance Authority (Attester)** | Issues KYC attestations to verified participants, stored in on-chain attestation tree | Attestation signing key (ETH account) |
+| **Store Vault Server** | Stores encrypted transaction data for clients to retrieve and decrypt with their viewing key | None (untrusted storage) |
+| **Attestation Issuer** | Issues KYC attestations to verified participants, stored in on-chain attestation tree | Attestation signing key (ETH account) |
 | **Regulator** | Observer granted viewing keys by transactors for audit purposes | Granted viewing keys |
 
 ### Key Derivation
 
 ```
 spending_key  = random(Zq)                    // BLS secret key
-spending_pubkey = g1^spending_key ∈ G1         // BLS public key = L2 address
+spending_pubkey = g1^spending_key in G1        // BLS public key = L2 address
 viewing_key   = random()                       // Separate key for decrypting stored data
 ```
 
@@ -108,19 +110,21 @@ viewing_key   = random()                       // Separate key for decrypting st
 
 ### Data Structures
 
+> The following structures are defined by the Intmax2 protocol ([paper](https://eprint.iacr.org/2025/021), Sections 2.3-2.7). They are summarized here to establish the vocabulary used in the rest of this spec.
+
 #### Transaction Batch
 
 A transaction batch is a mapping from recipients to amounts, representing all payments a sender wants to make in a single block:
 
 ```
-TransactionBatch = { recipient → amount }
+TransactionBatch = { recipient -> amount }
 
 where:
-  recipient ∈ K = K1 ⨿ K2    // L1 address or L2 address
-  amount    ∈ V+              // Positive value (supports multi-token)
+  recipient in K = K1 + K2    // L1 address or L2 address
+  amount    in V+              // Positive value (supports multi-token)
 ```
 
-A sender can include an arbitrary number of recipients in a single batch. The batch is hashed with a random salt before being sent to the aggregator, hiding the contents:
+A sender can include an arbitrary number of recipients in a single batch. The batch is hashed with a random salt before being sent to the aggregator:
 
 ```
 batch_hash = H(transaction_batch, salt)
@@ -128,7 +132,7 @@ batch_hash = H(transaction_batch, salt)
 
 #### Transfer Block
 
-A transfer block is the on-chain record of a set of transactions, containing only commitments and signatures:
+The on-chain record of a set of transactions. Contains only commitments and signatures:
 
 ```
 TransferBlock {
@@ -140,11 +144,11 @@ TransferBlock {
 }
 ```
 
-**On-chain size**: `|senders| × 96 + 132` bytes (uncompressed). With ID-based sender compression: `|senders| × ~4 + 132` bytes.
+On-chain size: `|senders| * 96 + 132` bytes (uncompressed). With ID-based sender compression: `|senders| * ~4 + 132` bytes.
 
 #### Deposit Block
 
-A deposit block records a single deposit from L1 to L2:
+Records a single deposit from L1 to L2:
 
 ```
 DepositBlock {
@@ -156,21 +160,21 @@ DepositBlock {
 
 #### Balance Proof
 
-A balance proof is the client-side data structure that enables a user to prove their balance. It is a collection of entries, each linking a block commitment to a sender's transaction:
+Client-side data structure that enables a user to prove their balance:
 
 ```
 BalanceProof = Dict(
-    (commitment, sender) → ((merkle_proof, salt), transaction_batch)
+    (commitment, sender) -> ((merkle_proof, salt), transaction_batch)
 )
 ```
 
-A balance proof is **valid** if every entry's Merkle proof verifies against the corresponding block commitment. Users update their balance proof by:
-1. Adding their own sent transactions (with the Merkle proof received from the aggregator)
-2. Merging balance proofs received from senders (after verifying validity)
+A balance proof is valid if every entry's Merkle proof verifies against the corresponding block commitment. Users update their balance proof by adding their own sent transactions and merging balance proofs received from senders.
+
+For the formal definition and the balance computation function `Bal`, see the Intmax2 paper, Appendix B.
 
 #### Validity Proof
 
-A validity proof is a recursive ZK proof attesting that a sender had sufficient balance for a transaction:
+A recursive ZK proof attesting that a sender had sufficient balance for a transaction:
 
 ```
 ValidityProof {
@@ -186,7 +190,7 @@ The recipient only learns the specific transaction details and gains zero knowle
 
 ### Attestation-Gated Entry
 
-Before a transactor can deposit funds, they must be attested by an authorized compliance authority. The attestation mechanism ensures that only KYC-verified entities can enter the system.
+Before a transactor can deposit funds, they must be attested by an authorized attestation issuer. This is the compliance integration layer on top of Intmax2.
 
 #### Attestation Registry Contract
 
@@ -209,12 +213,14 @@ contract AttestationRegistry {
 }
 ```
 
+In a private deployment, the deploying institution controls which attesters are authorized. On the public network, Intmax controls this.
+
 #### Attestation Leaf
 
 ```
 AttestationLeaf {
     subject_addr:     address   // L2 address (BLS public key hash) of attested party
-    attester:         address   // Compliance authority L1 address
+    attester:         address   // Attestation issuer L1 address
     issued_at:        uint64    // Timestamp of attestation issuance
     expires_at:       uint64    // Expiration timestamp (0 = no expiry)
 }
@@ -227,7 +233,7 @@ leaf_hash = poseidon(subject_addr, attester, issued_at, expires_at)
 ```mermaid
 sequenceDiagram
     participant T as Transactor
-    participant CA as Compliance Authority
+    participant CA as Attestation Issuer
     participant AR as AttestationRegistry
 
     T->>CA: 1. Submit KYC documentation (off-chain)
@@ -240,7 +246,7 @@ sequenceDiagram
     T->>T: 8. Index event to learn leaf index for future Merkle proofs
 ```
 
-**Prerequisites**: The Compliance Authority must be registered as an authorized attester by the contract owner via `addAttester(address)`.
+**Prerequisites**: The Attestation Issuer must be registered as an authorized attester by the contract owner via `addAttester(address)`.
 
 #### Attestation Revocation
 
@@ -249,7 +255,7 @@ When a participant's KYC expires, they become sanctioned, or a regulator directs
 ```mermaid
 sequenceDiagram
     participant R as Regulator
-    participant CA as Compliance Authority
+    participant CA as Attestation Issuer
     participant AR as AttestationRegistry
 
     R->>CA: 1. Direct revocation (sanctions match, KYC expiry, etc.)
@@ -261,7 +267,7 @@ sequenceDiagram
     CA-->>R: 7. Confirm revocation
 ```
 
-After revocation, the participant can no longer produce valid Merkle inclusion proofs against the updated attestation root, preventing new deposits. Notes already in the rollup remain spendable; the protocol does not freeze in-flight funds.
+After revocation, the participant can no longer produce valid Merkle inclusion proofs against the updated attestation root, preventing new deposits. Funds already in the rollup remain spendable; the protocol does not freeze in-flight funds.
 
 #### Deposit Attestation Proof
 
@@ -275,75 +281,24 @@ This is verified without revealing *which* attestation leaf was used, preserving
 
 ### On-Chain State
 
-#### Rollup Contract
+#### Intmax2 Contracts
 
-The rollup contract is deployed on an L2 (e.g., Scroll) and manages the rollup state:
+The following contracts are defined by the Intmax2 protocol. See the [paper](https://eprint.iacr.org/2025/021), Section 2 for full specifications.
 
-```
-State {
-    history_roots:          bytes32[]        // Hash chain of block commitments
-    withdrawn:              mapping(address → uint256)  // Total withdrawn per L1 address
-    deposit_tree:           MerkleTree       // Tree of processed deposit leaves
-    block_count:            uint256          // Number of transfer blocks posted
-    last_deposit_id:        uint256          // Last processed deposit ID
-}
-```
+**Rollup Contract** (deployed on L2, e.g., Scroll): Stores the hash chain of block commitments (`history_roots`), the deposit Merkle tree, and cumulative withdrawal amounts per L1 address. Verifies aggregated BLS signatures for transfer blocks. Accepts deposit relay calls only from the cross-chain messenger authenticated as the Liquidity contract (`onlyLiquidityContract` modifier).
 
-When a new block `B` is added:
-- **Deposit or transfer block**: `new_root = H(latest_root, B)`, appended to `history_roots`
-- **Withdrawal block**: `withdrawn[addr] += amount` for each withdrawal in the block
+**Liquidity Contract** (deployed on L1 or L2): Accepts deposits (native ETH or ERC-20), maintains a 1-indexed deposit queue, and relays deposit data to the Rollup contract via the cross-chain messenger. This is where the attestation proof verification integrates: the contract references an `aml_permitter` address that verifies the depositor's attestation proof before accepting the deposit.
 
-The rollup contract verifies:
-- Transfer blocks: aggregated BLS signature over `(commitment, aggregator, extradata)` against the sender set
-- Deposit processing: only accepts calls from the cross-chain messenger with the liquidity contract as the original sender (`onlyLiquidityContract` modifier)
+**Block Builder Registry**: Tracks registered block builders with their stake, heartbeat timestamps, and API endpoints. Provides a discovery mechanism for clients to find active builders.
 
-#### Liquidity Contract
+**Withdrawal Contract**: Processes withdrawal claims by verifying that the claimed history root exists in the Rollup contract, verifying the ZK balance proof, computing withdrawable amounts (proven balance minus previously withdrawn), and transferring tokens.
 
-The liquidity contract handles deposits from L1/L2 into the rollup:
+#### Attestation Integration
 
-```
-State {
-    deposit_queue:          DepositData[]    // 1-indexed queue of pending deposits
-    last_deposit_id:        uint256          // Monotonically increasing deposit counter
-    scroll_messenger:       address          // Cross-chain relay contract
-    rollup:                 address          // Rollup contract address
-    aml_permitter:          address          // Attestation verification contract
-}
-```
+The attestation layer adds one contract and one integration point:
 
-The deposit queue stores `DepositData` hashes. When deposits are relayed to the rollup (via the cross-chain messenger), the rollup processes them by inserting deposit leaves into its deposit tree and emitting `DepositLeafInserted` events.
-
-#### Block Builder Registry
-
-Tracks registered block builders:
-
-```
-State {
-    builders:               mapping(address → BuilderInfo)
-    stake_amount:           uint256          // Required stake
-}
-
-BuilderInfo {
-    stake:                  uint256
-    last_heartbeat:         uint256          // Timestamp of last heartbeat
-    url:                    string           // Builder's API endpoint
-}
-```
-
-Block builders register by staking and periodically sending heartbeats. The registry provides a discovery mechanism for clients to find active builders.
-
-#### Withdrawal Contract
-
-Processes withdrawal claims:
-
-```
-State {
-    liquidity:              address
-    rollup:                 address
-    direct_withdrawal_fee:  uint256
-    claimable_withdrawal_fee: uint256
-}
-```
+- **AttestationRegistry**: Described in the Attestation-Gated Entry section above.
+- **Liquidity contract integration**: The Liquidity contract's `aml_permitter` field references the attestation verification logic. On deposit, it calls the permitter to verify the ZK proof of attestation inclusion before enqueuing the deposit.
 
 ### Flows
 
@@ -384,18 +339,18 @@ sequenceDiagram
 4. Liquidity contract verifies the attestation proof against the current attestation tree root
 5. Liquidity contract enqueues the deposit and computes a deposit data hash
 6. Liquidity contract emits a `Deposited` event with the deposit ID and hash
-7. Deposits are relayed from L1/L2 to the rollup via the cross-chain messenger (Scroll Messenger)
+7. Deposits are relayed from L1/L2 to the rollup via the cross-chain messenger
 8. The messenger calls `processDeposits()` on the rollup contract (authenticated via `onlyLiquidityContract` modifier)
 9. Rollup inserts deposit leaves into its deposit Merkle tree
 10. Rollup emits `DepositLeafInserted` events
 11. The validity prover observes these events, syncs witnesses, and generates a validity proof for the new block state
-12. Client polls the validity prover until the deposit is confirmed (appears in a proven block)
+12. Client polls the validity prover until the deposit is confirmed
 13. Validity prover returns the block number containing the deposit
 14. Client updates their local balance proof to include the deposit
 
 #### Private Transfer
 
-Transfers value between L2 accounts. The transfer protocol has two phases, following the Intmax2 design.
+Transfers value between L2 accounts. The transfer protocol follows the Intmax2 design ([paper](https://eprint.iacr.org/2025/021), Section 2.6) and is described here for completeness.
 
 ##### Phase 1: Block Construction
 
@@ -406,22 +361,22 @@ sequenceDiagram
     participant R as Rollup Contract
     participant SV as Store Vault
 
-    S->>S: 1. Construct transaction batch {recipient → amount}
+    S->>S: 1. Construct transaction batch {recipient -> amount}
     S->>S: 2. Choose random salt, compute batch_hash = H(batch, salt)
     S->>A: 3. Send batch_hash (not the batch itself)
     A->>A: 4. Collect batch hashes from all senders
     A->>A: 5. Build Merkle tree of batch hashes, compute commitment C
     A->>S: 6. Send (C, merkle_proof) to each sender
     S->>S: 7. Verify merkle_proof against C
-    S->>S: 8. Sign σ = BLS.Sign(sk, (C, aggregator, extradata))
-    S->>A: 9. Send signature σ
-    A->>A: 10. Collect valid signatures, aggregate: σ_agg = BLS.Aggregate(σ₁...σₙ)
-    A->>R: 11. Post transfer block (aggregator, extradata, C, senders, σ_agg)
-    R->>R: 12. Verify BLS.Verify(senders, (C, aggregator, extradata), σ_agg)
+    S->>S: 8. Sign sig = BLS.Sign(sk, (C, aggregator, extradata))
+    S->>A: 9. Send signature sig
+    A->>A: 10. Collect valid signatures, aggregate: sig_agg = BLS.Aggregate(sig_1...sig_n)
+    A->>R: 11. Post transfer block (aggregator, extradata, C, senders, sig_agg)
+    R->>R: 12. Verify BLS.Verify(senders, (C, aggregator, extradata), sig_agg)
     R->>R: 13. Compute new_root = H(latest_root, block), store in history_roots
 ```
 
-**Key privacy property**: The aggregator receives only salted hashes of transaction batches (step 3). The aggregator cannot determine who is paying whom or how much. The transaction contents are never revealed to the aggregator.
+**Key privacy property**: The aggregator receives only salted hashes of transaction batches (step 3). The aggregator cannot determine who is paying whom or how much.
 
 ##### Phase 2: Balance Proof Distribution
 
@@ -431,20 +386,20 @@ sequenceDiagram
     participant SV as Store Vault
     participant Rec as Recipient
 
-    S->>S: 14. Generate validity proof π (ZK proof of sufficient balance)
-    S->>SV: 15. Encrypt and store (history_root, sender, recipient, amount, π, batch, salt, merkle_proof)
+    S->>S: 14. Generate validity proof (ZK proof of sufficient balance)
+    S->>SV: 15. Encrypt and store (history_root, sender, recipient, amount, proof, batch, salt, merkle_proof)
     Rec->>SV: 16. Retrieve encrypted data using viewing key
-    Rec->>Rec: 17. Decrypt and verify validity proof π
+    Rec->>Rec: 17. Decrypt and verify validity proof
     Rec->>Rec: 18. Merge received balance proof into own balance proof
 ```
 
 **Steps**:
 
-14. After the transfer block is posted on-chain, the sender generates a validity proof: a recursive ZK proof attesting that the sender had sufficient balance for the transaction at the given history root
+14. After the transfer block is posted on-chain, the sender generates a validity proof: a recursive ZK proof attesting that the sender had sufficient balance at the given history root
 15. The sender encrypts the transaction data (including the validity proof, transaction batch, salt, and Merkle proof from the aggregator) and stores it in the store vault server
 16. The recipient retrieves the encrypted data from the store vault using their viewing key
-17. The recipient decrypts and verifies the validity proof. The proof reveals only the specific transaction details (sender, recipient, amount) and nothing else about the sender's balance or other transactions
-18. The recipient merges the received balance proof into their own, using the `Merge` operation on balance proof dictionaries
+17. The recipient decrypts and verifies the validity proof. The proof reveals only the specific transaction details (sender, recipient, amount)
+18. The recipient merges the received balance proof into their own
 
 **Zero-knowledge property**: The recipient learns only `(history_root, sender, recipient, amount)` for their specific transaction. They gain zero knowledge about the sender's total balance, other transactions in the same block, or any other user's activity.
 
@@ -479,13 +434,13 @@ sequenceDiagram
 3. The aggregator posts the transfer block to the rollup contract
 4. Transactor stores withdrawal proof data in the store vault
 5. Transactor waits for the validity prover to generate a proof for the block containing the withdrawal
-6. Transactor submits a withdrawal claim to the Withdrawal contract, providing their L1 address, claimed amount, the history root of the block, and a ZK balance proof
-7. The Withdrawal contract verifies that the history root exists in the rollup's list of history roots
-8. The contract verifies the balance proof (ZK proof that the L1 address has received at least the claimed amount at the given history root)
-9. The contract computes the withdrawable amount by subtracting any previously withdrawn amounts: `withdrawable = proven_balance - withdrawn[address]`
-10. The contract transfers the withdrawable amount to the L1 address and updates the withdrawn mapping
+6. Transactor submits a withdrawal claim to the Withdrawal contract
+7. The Withdrawal contract verifies that the history root exists in the rollup
+8. The contract verifies the balance proof
+9. The contract computes the withdrawable amount: `withdrawable = proven_balance - withdrawn[address]`
+10. The contract transfers the withdrawable amount to the L1 address
 
-**Double-spend prevention**: The `withdrawn` mapping tracks cumulative withdrawals per L1 address. Even if a user submits multiple withdrawal claims using different history roots, the total withdrawn amount is always deducted, preventing double-spending.
+**Double-spend prevention**: The `withdrawn` mapping tracks cumulative withdrawals per L1 address. Even if a user submits multiple withdrawal claims using different history roots, the total withdrawn amount is always deducted.
 
 ## Cryptographic Details
 
@@ -493,41 +448,43 @@ sequenceDiagram
 
 | Primitive | Specification | Usage |
 |-----------|---------------|-------|
-| **Signature Aggregation** | Modified BLS | Block commitment signing; compact on-chain representation |
+| **Signature Aggregation** | Modified BLS (Boneh-Drijvers-Neven, rogue-key protection) | Block commitment signing; compact on-chain representation |
 | **Hash Function** | Poseidon (BN254 scalar field) | Merkle trees, transaction batch hashing, attestation leaves |
 | **Authenticated Dictionary** | Sparse Merkle Tree | Transaction batch commitments (binding property ensures security) |
-| **ZK Proof System** | Plonky2 (recursive, FRI-based) | Balance proofs, validity proofs, validity transition proofs |
-| **Collision-Resistant Hash** | `H: {0,1}* → {0,1}^n` | Block history chain (`new_root = H(latest_root, block)`) |
-| **Encryption** | ECIES / AEAD | Note encryption for store vault (viewing key decryption) |
+| **ZK Proof System** | Plonky2 (recursive, FRI-based, no trusted setup) | Balance proofs, validity proofs |
+| **Collision-Resistant Hash** | `H: {0,1}* -> {0,1}^n` | Block history chain (`new_root = H(latest_root, block)`) |
+| **Encryption** | ECIES / AEAD | Store vault encryption (viewing key decryption) |
 
 ### BLS Signature Scheme
 
-The protocol uses a modified BLS signature scheme with rogue-key protection:
+The protocol uses a modified BLS signature scheme with rogue-key protection (Boneh-Drijvers-Neven):
 
-- **KeyGen**: `sk ← random(Zq)`, `pk ← g1^sk ∈ G1`
-- **Sign**: `σ ← H0(m)^sk ∈ G0`
-- **Aggregate**: `σ_agg ← Π(σi^ti)` where `ti = H1(pki, {pk1,...,pkn})`
-- **Verify**: Check `e(g1, σ_agg) == e(pk_agg, H0(m))` where `pk_agg = Π(pki^ti)`
+- **KeyGen**: `sk <- random(Zq)`, `pk <- g1^sk in G1`
+- **Sign**: `sig <- H0(m)^sk in G0`
+- **Aggregate**: `sig_agg <- Product(sig_i^t_i)` where `t_i = H1(pk_i, {pk_1,...,pk_n})`
+- **Verify**: Check `e(g1, sig_agg) == e(pk_agg, H0(m))` where `pk_agg = Product(pk_i^t_i)`
 
-The rogue-key mitigation factor `ti` prevents an adversary from constructing a public key that cancels out honest signers' contributions.
+The rogue-key mitigation factor `t_i` prevents an adversary from constructing a public key that cancels out honest signers' contributions. For full details, see the Intmax2 paper, Section 2.5, and the [Boneh-Drijvers-Neven paper](https://doi.org/10.1007/978-3-030-03329-3_15).
 
 ### Balance Proof Computation
 
-Given a balance proof `π ∈ Π` and the current rollup state `B* ∈ B*`, the balance function `Bal(π, B*)` computes account balances in two steps:
+Given a balance proof and the current rollup state, the balance function `Bal` computes account balances in two steps:
 
-1. **Extract partial transactions**: For each block in `B*`, extract transactions from the balance proof. For deposit blocks, extract the deposit amount credited to the recipient. For transfer blocks, look up the sender's transaction batch in the balance proof and extract each payment. If the balance proof does not contain an entry for a sender in a transfer block, the transaction amount is treated as unknown (`⊥`).
+1. **Extract partial transactions**: For each block, extract transactions from the balance proof. For deposit blocks, extract the deposit amount. For transfer blocks, look up the sender's transaction batch. If the balance proof does not contain an entry for a sender in a transfer block, the transaction amount is treated as unknown.
 
-2. **Apply transition function**: Starting from zero balances, apply each partial transaction sequentially. For complete transactions (known amount), transfer the minimum of the stated amount and the sender's current balance from sender to recipient. For incomplete transactions (unknown amount, `⊥`), set the sender's balance to zero (conservative lower bound) and leave other balances unchanged.
+2. **Apply transition function**: Starting from zero balances, apply each partial transaction sequentially. For known amounts, transfer the minimum of the stated amount and the sender's current balance. For unknown amounts, set the sender's balance to zero (conservative lower bound).
 
-This produces a **lower bound** on each account's true balance. The key insight is that unknown transactions can only *reduce* a sender's provable balance, never inflate anyone's balance beyond what can be proven.
+This produces a lower bound on each account's true balance. Unknown transactions can only reduce a sender's provable balance, never inflate anyone's balance beyond what can be proven.
+
+For the formal definition, see the Intmax2 paper, Appendix B.
 
 ### Validity Proof Pipeline
 
-The validity prover service maintains a continuous pipeline to generate proofs for new blocks:
+The validity prover service maintains a continuous pipeline:
 
-1. **Event observation**: An observer monitors L1/L2 for `Deposited`, `DepositLeafInserted`, and `BlockPosted` events from the rollup and liquidity contracts
-2. **Witness construction**: `sync_validity_witness` processes observed events into structured witness data for proof generation
-3. **Proof generation**: `generate_validity_proof` dispatches proof tasks to a worker pool (via Redis queue). Each task produces a Plonky2 proof attesting to the validity of a block transition
+1. **Event observation**: Monitors L1/L2 for `Deposited`, `DepositLeafInserted`, and `BlockPosted` events
+2. **Witness construction**: Processes observed events into structured witness data
+3. **Proof generation**: Dispatches proof tasks to a worker pool (via task queue). Each task produces a Plonky2 proof attesting to the validity of a block transition
 4. **Proof availability**: Completed proofs are stored and made available to block builders (who wait for validity prover sync before posting new blocks) and to clients (who poll for proof availability to confirm deposits and transfers)
 
 ## Security Model
@@ -537,35 +494,24 @@ The validity prover service maintains a continuous pipeline to generate proofs f
 | Adversary | Capabilities | Mitigations |
 |-----------|--------------|-------------|
 | **Public Observer** | Sees all on-chain data: block commitments, sender lists (BLS public keys), deposit amounts, withdrawal amounts | Transaction details (recipient, amount per recipient) never posted on-chain; observer sees only Merkle roots and aggregated signatures |
-| **Malicious Aggregator** | Can delay block publication, attempt replay attacks, selectively censor senders, or refuse to relay Merkle proofs | Relayer contracts enforce deadlines (extradata field); aggregation is permissionless; Users can switch aggregators or run their own; replay protection via monotonic timestamps |
+| **Malicious Aggregator** | Can delay block publication, attempt replay attacks, selectively censor senders, or refuse to relay Merkle proofs | Relayer contracts enforce deadlines (extradata field); aggregation is permissionless; users can switch aggregators or run their own; replay protection via monotonic timestamps |
 | **Compromised Recipient** | Receives sender's validity proof for their specific transaction | Zero-knowledge: validity proof reveals only `(sender, recipient, amount)` for that transaction; no information about sender's balance or other transactions |
 | **Colluding Aggregator + Recipient** | Aggregator knows sender's BLS public key; recipient knows transaction amount | Aggregator only sees salted hash of transaction batch, not contents; cannot link sender identity to specific payment amounts or recipients |
-| **Compromised Viewing Key** | Can decrypt all historical and future transaction data for that key from the store vault server | Cannot spend funds, viewing key grants read-only access; key rotation recommended |
-| **Malicious Compliance Authority** | Can issue attestations to unauthorized parties | Requires governance controls (multi-sig, DAO) for attester authorization in production |
-| **Malicious Store Vault Operator** | Learns viewing public key (stable identifier) on every request; observes which topics are accessed, request timing, frequency, and data digests queried; can correlate activity patterns across sessions; data is encrypted client-side (BLS encryption) so content is opaque, but metadata is fully visible | Client-side BLS encryption protects data confidentiality; all topics enforce AuthRead so only the key holder can read their own data; no PIR is employed: the server learns **who** is accessing **which** topic and **when**, but not the plaintext content; production should consider PIR or oblivious access patterns to reduce metadata leakage, or operating the service exclusively within your own organization. |
+| **Compromised Viewing Key** | Can decrypt all historical and future transaction data for that key from the store vault server | Cannot spend funds; viewing key grants read-only access; key rotation recommended |
+| **Malicious Store Vault Operator** | Learns viewing public key (stable identifier) on every request; observes which topics are accessed, request timing, frequency, and data digests queried; can correlate activity patterns across sessions; data is encrypted client-side (BLS encryption) so content is opaque, but metadata is fully visible | Client-side BLS encryption protects data confidentiality; all topics enforce AuthRead so only the key holder can read their own data; no PIR is employed: the server learns **who** is accessing **which** topic and **when**, but not the plaintext content; production should consider PIR or oblivious access patterns to reduce metadata leakage, or operating the service exclusively within your own organization |
 | **Network Observer** | Monitors IP addresses, timing of requests to aggregators and store vault | Out of scope for PoC; production should use Tor/mixnet for client-aggregator communication |
-
-### Security Theorem
-
-The rollup contract's fund safety is formally proven in the Intmax2 paper (Theorem 1, formally verified in Lean):
-
-> **Theorem (Fund Safety)**: The rollup contract is *secure*: winning the attack game (draining the contract balance below zero) is at least as hard as breaking the binding property of the authenticated dictionary scheme or finding a collision of the hash function H.
-
-**Attack game**: A PPT adversary interacts with the rollup contract by submitting an arbitrary sequence of deposit, transfer, and withdrawal requests. The adversary wins if the contract's balance becomes negative (i.e., more funds have been withdrawn than deposited).
-
-**Proof sketch**: The proof proceeds by showing that the balance function `Bal` is monotone in the balance proof argument (Lemma 4), and that the source account's balance is always non-positive (Lemma 3), which together imply that total withdrawals cannot exceed total deposits. The key technical step handles the case where multiple withdrawal proofs share overlapping transaction data; The Merge operation on balance proofs preserves validity, and the binding property of the authenticated dictionary prevents conflicting entries.
 
 ### Guarantees
 
 | Property | Description |
 |----------|-------------|
-| **Confidentiality** | Transaction details (amounts, recipients per sender) never posted on-chain. The rollup stores only block commitments and sender lists. |
+| **Confidentiality** | Transaction details (amounts, recipients per sender) never posted on-chain. Only block commitments and sender lists are stored. |
 | **Unlinkability** | Aggregator receives only salted hashes of transaction batches. Cannot determine who is paying whom or how much within a block. |
 | **Double-Spend Prevention** | The balance function computes conservative lower bounds. Withdrawals deduct from proven balances via the `withdrawn` mapping. Formally proven secure (Theorem 1). |
 | **Compliance Gating** | Attestation proof required at deposit. Unauthorized parties cannot enter the system. Revocation prevents future deposits but does not freeze in-flight funds. |
-| **Selective Disclosure** | Viewing key decrypts deposit, transfer, and withdrawal data from the store vault server. Enables regulatory audit of a specific transactor's full history without compromising spending authority or other users' privacy. |
+| **Selective Disclosure** | Viewing key decrypts deposit, transfer, and withdrawal data from the store vault. Enables regulatory audit of a specific transactor's full history without compromising spending authority or other users' privacy. |
 | **Liveness** | Permissionless aggregation: anyone can become an aggregator. Users can withdraw even if all aggregators disappear (by running their own aggregator or submitting balance proofs directly). |
-| **Fund Safety** | Formally verified (Lean theorem prover): the rollup contract balance is always non-negative for any valid execution trace. |
+| **Fund Safety** | Formally verified in Lean: the rollup contract balance is always non-negative for any valid execution trace. |
 | **Sender Privacy from Aggregator** | The aggregator learns only the set of sender public keys and salted transaction hashes. Transaction contents are hidden. |
 
 ### Limitations & Shortcuts (PoC Scope)
@@ -586,9 +532,9 @@ The rollup contract's fund safety is formally proven in the Intmax2 paper (Theor
 | **Balance Proof** | A client-side data structure mapping block commitments and senders to their transaction batches with Merkle proofs. Used to prove account balances. |
 | **Validity Proof** | A recursive ZK proof (Plonky2) attesting that a sender had sufficient balance for a specific transaction at a given history root. Sent to the recipient as proof of payment. |
 | **History Root** | A hash in the rollup's hash chain of block commitments. Each new block extends the chain: `new_root = H(previous_root, block)`. Used as an anchor for balance and withdrawal proofs. |
-| **Aggregator (Block Builder)** | An entity that collects transaction batch hashes from senders, builds a Merkle tree, distributes proofs, collects and aggregates BLS signatures, and posts the resulting transfer block to the rollup contract. Stateless and permissionless. |
-| **Authenticated Dictionary** | A cryptographic data structure (sparse Merkle tree) that commits to a set of key-value pairs and provides lookup proofs. The binding property ensures that no two different values can be proven for the same key under the same commitment. |
-| **Attestation** | A signed statement from a compliance authority that an L2 address belongs to a KYC-verified entity, stored as a leaf in the on-chain attestation Merkle tree. |
+| **Aggregator (Block Builder)** | An entity that collects transaction batch hashes, builds a Merkle tree, aggregates BLS signatures, and posts the resulting transfer block to the rollup contract. Stateless and permissionless. |
+| **Authenticated Dictionary** | A cryptographic data structure (sparse Merkle tree) that commits to a set of key-value pairs with lookup proofs. The binding property ensures no two different values can be proven for the same key under the same commitment. |
+| **Attestation** | A signed statement from an attestation issuer that an L2 address belongs to a KYC-verified entity, stored as a leaf in the on-chain attestation Merkle tree. |
 | **Store Vault** | An untrusted server that stores encrypted transaction data. Clients encrypt data with recipients' viewing keys before upload. The server cannot read the contents. |
 | **Viewing Key** | A cryptographic key that decrypts transaction data stored in the store vault. Grants read-only access to a user's deposit, transfer, and withdrawal history without spending authority. |
 | **Spending Key** | The BLS secret key that authorizes transfers and withdrawals. Required to sign block commitments and generate balance proofs. |
@@ -603,4 +549,3 @@ The rollup contract's fund safety is formally proven in the Intmax2 paper (Theor
 - [Plonky2](https://github.com/0xPolygonZero/plonky2): Recursive ZK proof system (FRI-based) used for balance and validity proofs.
 - [Poseidon Hash Function](https://www.poseidon-hash.info/): ZK-friendly hash for Merkle trees and commitments.
 - [Plasma Prime Design Proposal](https://ethresear.ch/t/plasma-prime-design-proposal/4222): Predecessor design incorporating RSA accumulators and UTXO model.
-- [Springrollup](https://github.com/adompeldorius/springrollup): Earlier Layer 2 design with on-chain/off-chain state split.
