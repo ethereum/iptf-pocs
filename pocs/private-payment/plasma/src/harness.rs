@@ -35,6 +35,7 @@ use intmax2_client_sdk::{
         block_builder::BlockBuilderClient,
         contract::{
             block_builder_registry::BlockBuilderRegistryContract,
+            erc20_contract::ERC20Contract,
             liquidity_contract::LiquidityContract,
             rollup_contract::RollupContract,
             utils::{
@@ -201,6 +202,7 @@ pub struct DeployedContracts {
     pub block_builder_registry: Address,
     pub withdrawal: Address,
     pub test_messenger: Address,
+    pub test_erc20: Address,
 }
 
 pub async fn deploy_contracts(anvil: &AnvilInstance) -> Result<DeployedContracts> {
@@ -221,6 +223,14 @@ pub async fn deploy_contracts(anvil: &AnvilInstance) -> Result<DeployedContracts
         .context("deploy test scroll messenger")?;
     let test_messenger_addr = *test_messenger.address();
     log::info!("Test scroll messenger: {:?}", test_messenger_addr);
+
+    // Deploy test ERC20 token (mints 1e36 raw tokens to deployer)
+    let erc20_contract =
+        ERC20Contract::deploy(provider.clone(), deployer_key, deployer_addr)
+            .await
+            .context("deploy test ERC20")?;
+    let erc20_addr = erc20_contract.address;
+    log::info!("Test ERC20: {:?}", erc20_addr);
 
     // Deploy all intmax2 contracts
     let rollup_contract = RollupContract::deploy(provider.clone(), deployer_key)
@@ -263,7 +273,7 @@ pub async fn deploy_contracts(anvil: &AnvilInstance) -> Result<DeployedContracts
             random_addr,
             random_addr,
             random_addr,
-            vec![],
+            vec![erc20_addr],
         )
         .await
         .context("initialize liquidity")?;
@@ -311,6 +321,7 @@ pub async fn deploy_contracts(anvil: &AnvilInstance) -> Result<DeployedContracts
         block_builder_registry: registry_contract.address,
         withdrawal: withdrawal_contract.address,
         test_messenger: test_messenger_addr,
+        test_erc20: erc20_addr,
     })
 }
 
@@ -717,8 +728,8 @@ pub async fn start_block_builder(
         gas_limit_for_block_post: Some(400000),
         nonce_waiting_time: None,
         beneficiary: None,
-        registration_fee: Some("0:2500000000000".parse().unwrap()),
-        non_registration_fee: Some("0:2000000000000".parse().unwrap()),
+        registration_fee: Some("0:0".parse().unwrap()),
+        non_registration_fee: Some("0:0".parse().unwrap()),
         registration_collateral_fee: None,
         non_registration_collateral_fee: None,
     };
@@ -815,6 +826,14 @@ impl TestEnv {
     }
     pub fn block_builder_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.ports.block_builder)
+    }
+
+    /// Create an ERC20Contract instance for the test token.
+    pub fn erc20_contract(&self) -> Result<ERC20Contract> {
+        let provider =
+            get_provider_with_fallback(std::slice::from_ref(&self.anvil.endpoint()))
+                .context("create erc20 provider")?;
+        Ok(ERC20Contract::new(provider, self.contracts.test_erc20))
     }
 
     /// Build an intmax2 client SDK `Client` wired to

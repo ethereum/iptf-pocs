@@ -56,7 +56,6 @@ cargo test --release test_deposit_transfer_withdraw -- --nocapture
 - **Attestation registry not deployed:** The SPEC requires attestation-gated deposits (KYC verification via ZK proof of inclusion in an on-chain attestation tree). The current implementation does not deploy an AML permitter contract, but the mechanism is compatible and will work when integrated. See [AttestationRegistry](pocs/private-payment/shielded-pool/contracts/src/AttestationRegistry.sol) for a compatible implementation.
 - **Single Anvil for L1+L2:** Deposit relay is simulated via a test Scroll Messenger contract rather than real cross-chain messaging.
 - **Single block builder:** Only one block builder is registered; production would use multiple builders with stake and heartbeat monitoring.
-- **Uses Native ETH instead of ERC-20 token:** An erc-20 token can be deployed and used instead.
 
 ## Upcoming work: PlasmaBlind
 

@@ -1,12 +1,12 @@
 //! Integration test: deposit → transfer → withdraw.
 //!
 //! Demonstrates the full private payment flow using the
-//! intmax2 plasma architecture:
+//! intmax2 plasma architecture with ERC20 tokens:
 //!
-//! 1. Alice deposits native ETH
-//! 2. Bob deposits native ETH
-//! 3. Alice transfers to Bob (private L2 transfer)
-//! 4. Bob withdraws to L1
+//! 1. Alice deposits 1000 ERC20 tokens
+//! 2. Bob deposits 1000 ERC20 tokens
+//! 3. Alice transfers 200 tokens to Bob (private L2 transfer)
+//! 4. Bob withdraws 1100 tokens to L1
 
 use alloy::primitives::B256;
 use anyhow::{
@@ -125,26 +125,36 @@ struct TxInfo {
     tx_index: u32,
 }
 
-/// Execute a single deposit (prepare → on-chain tx → relay →
-/// poll → sync).
+/// Execute a single ERC20 deposit (approve → prepare → on-chain
+/// tx → relay → poll → sync).
 async fn do_deposit(
     env: &TestEnv,
     client: &Client,
     eth_key: B256,
     depositor: alloy::primitives::Address,
     key_pair: KeyPair,
-    amount_wei: alloy::primitives::U256,
+    amount: alloy::primitives::U256,
+    token_address: alloy::primitives::Address,
 ) -> Result<DepositInfo> {
     let pubkey_pair = intmax2_interfaces::utils::key::PublicKeyPair::from(&key_pair);
+    let intmax_token_addr = convert_address_to_intmax(token_address);
 
-    // 1. Prepare deposit (saves encrypted data to store vault)
+    // 1. Approve liquidity contract to spend ERC20 tokens
+    let erc20 = env.erc20_contract()?;
+    erc20
+        .approve(eth_key, None, env.contracts.liquidity, amount)
+        .await
+        .context("approve ERC20 for liquidity")?;
+    log::info!("ERC20 approved for liquidity contract");
+
+    // 2. Prepare deposit (saves encrypted data to store vault)
     let deposit_result = client
         .prepare_deposit(
             convert_address_to_intmax(depositor),
             pubkey_pair,
-            convert_u256_to_intmax(amount_wei),
-            TokenType::NATIVE,
-            intmax2_zkp::ethereum_types::address::Address::default(),
+            convert_u256_to_intmax(amount),
+            TokenType::ERC20,
+            intmax_token_addr,
             ZkpU256::default(),
             false,
         )
@@ -155,30 +165,31 @@ async fn do_deposit(
     let deposit_digest = deposit_result.deposit_digest;
     log::info!("Deposit prepared, pubkey_salt_hash={psh}");
 
-    // 2. On-chain deposit (no AML/eligibility permitters)
+    // 3. On-chain ERC20 deposit (no AML/eligibility permitters)
     client
         .liquidity_contract
-        .deposit_native(
+        .deposit_erc20(
             eth_key,
             None,
             psh,
-            convert_u256_to_intmax(amount_wei),
+            convert_u256_to_intmax(amount),
+            intmax_token_addr,
             &[],
             &[],
         )
         .await
-        .context("deposit_native")?;
-    log::info!("On-chain deposit tx sent");
+        .context("deposit_erc20")?;
+    log::info!("On-chain ERC20 deposit tx sent");
 
-    // 3. Relay deposit to rollup via test scroll messenger
+    // 4. Relay deposit to rollup via test scroll messenger
     let relay_tx_hash = relay_pending_deposits(&env.anvil, &env.contracts)
         .await
         .context("relay deposits")?;
 
-    // 4. Wait for validity prover to sync the deposit
+    // 5. Wait for validity prover to sync the deposit
     poll_deposit_synced(client, psh).await?;
 
-    // 5. Sync client balance
+    // 6. Sync client balance
     client
         .sync(key_pair.into())
         .await
@@ -198,6 +209,7 @@ async fn do_transfer(
     block_builder_url: &str,
     sender_kp: KeyPair,
     recipient_kp: KeyPair,
+    token_index: u32,
     amount: ZkpU256,
 ) -> Result<TxInfo> {
     let recipient_pubkey_pair =
@@ -206,7 +218,7 @@ async fn do_transfer(
 
     let transfer = TransferRequest {
         recipient: GenericRecipient::IntmaxAddress(recipient_addr),
-        token_index: 0,
+        token_index,
         amount,
         description: None,
     };
@@ -275,8 +287,13 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
     let alice_kp = keypair_from_eth_key(alice_eth_key);
     let bob_kp = keypair_from_eth_key(bob_eth_key);
 
-    // Deposit amount: 0.1 ETH each
-    let deposit_amount = alloy::primitives::U256::from(100_000_000_000_000_000u128);
+    // ERC20 token index (native ETH = 0, first registered ERC20 = 1)
+    let erc20_token_index: u32 = 1;
+
+    // Token amounts (18 decimals)
+    let one_token =
+        alloy::primitives::U256::from(10u64).pow(alloy::primitives::U256::from(18u64));
+    let deposit_amount = alloy::primitives::U256::from(1_000u64) * one_token;
 
     // Compute intmax addresses for the summary
     let alice_pubkey_pair =
@@ -285,8 +302,25 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
     let alice_intmax_addr = client.get_address(alice_pubkey_pair);
     let bob_intmax_addr = client.get_address(bob_pubkey_pair);
 
-    // ---- Phase 1: Alice deposits ----
-    log::info!("=== Phase 1: Alice deposits ===");
+    // ---- Setup: distribute ERC20 tokens from deployer ----
+    log::info!("=== Setup: distributing ERC20 tokens ===");
+    let deployer_key = B256::from_slice(&env.anvil.keys()[0].to_bytes());
+    let erc20 = env.erc20_contract()?;
+
+    erc20
+        .transfer(deployer_key, None, alice_addr, deposit_amount)
+        .await
+        .context("transfer ERC20 to Alice")?;
+    log::info!("Transferred 1000 tokens to Alice");
+
+    erc20
+        .transfer(deployer_key, None, bob_addr, deposit_amount)
+        .await
+        .context("transfer ERC20 to Bob")?;
+    log::info!("Transferred 1000 tokens to Bob");
+
+    // ---- Phase 1: Alice deposits 1000 ERC20 tokens ----
+    log::info!("=== Phase 1: Alice deposits 1000 ERC20 tokens ===");
     let alice_deposit = do_deposit(
         &env,
         &client,
@@ -294,24 +328,31 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         alice_addr,
         alice_kp,
         deposit_amount,
+        env.contracts.test_erc20,
     )
     .await
     .context("Alice deposit")?;
     log::info!("Alice deposit complete");
 
-    // ---- Phase 2: Bob deposits ----
-    log::info!("=== Phase 2: Bob deposits ===");
-    let bob_deposit =
-        do_deposit(&env, &client, bob_eth_key, bob_addr, bob_kp, deposit_amount)
-            .await
-            .context("Bob deposit")?;
+    // ---- Phase 2: Bob deposits 1000 ERC20 tokens ----
+    log::info!("=== Phase 2: Bob deposits 1000 ERC20 tokens ===");
+    let bob_deposit = do_deposit(
+        &env,
+        &client,
+        bob_eth_key,
+        bob_addr,
+        bob_kp,
+        deposit_amount,
+        env.contracts.test_erc20,
+    )
+    .await
+    .context("Bob deposit")?;
     log::info!("Bob deposit complete");
 
-    // ---- Phase 3: Alice transfers to Bob ----
-    log::info!("=== Phase 3: Alice transfers to Bob ===");
-    // Transfer 0.01 ETH (after fees)
+    // ---- Phase 3: Alice transfers 200 tokens to Bob ----
+    log::info!("=== Phase 3: Alice transfers 200 tokens to Bob ===");
     let transfer_amount = ZkpU256::from_bytes_be(
-        &alloy::primitives::U256::from(10_000_000_000_000_000u128).to_be_bytes_vec(),
+        &(alloy::primitives::U256::from(200u64) * one_token).to_be_bytes_vec(),
     )
     .expect("convert transfer amount");
 
@@ -320,6 +361,7 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         &block_builder_url,
         alice_kp,
         bob_kp,
+        erc20_token_index,
         transfer_amount,
     )
     .await
@@ -336,14 +378,17 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("bob sync: {e:?}"))?;
     log::info!("Bob balance synced after transfer");
 
-    // ---- Phase 4: Bob withdraws ----
-    log::info!("=== Phase 4: Bob withdraws ===");
+    // ---- Phase 4: Bob withdraws 1100 tokens ----
+    log::info!("=== Phase 4: Bob withdraws 1100 tokens ===");
 
-    // Bob withdraws to his L1 address
-    let withdrawal_amount = transfer_amount;
+    // Bob has 1000 (deposit) + 200 (received) = 1200 tokens. Withdraw 1100.
+    let withdrawal_amount = ZkpU256::from_bytes_be(
+        &(alloy::primitives::U256::from(1_100u64) * one_token).to_be_bytes_vec(),
+    )
+    .expect("convert withdrawal amount");
     let withdrawal_transfer = TransferRequest {
         recipient: GenericRecipient::Address(convert_address_to_intmax(bob_addr)),
-        token_index: 0,
+        token_index: erc20_token_index,
         amount: withdrawal_amount,
         description: None,
     };
@@ -434,6 +479,7 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
     );
     log::info!("  Withdrawal:          {:?}", env.contracts.withdrawal);
     log::info!("  Test Messenger:      {:?}", env.contracts.test_messenger);
+    log::info!("  Test ERC20:          {:?}", env.contracts.test_erc20);
     log::info!("");
     log::info!("--- Participants ---");
     log::info!("  Alice (L1 addr):     {:?}", alice_addr);
@@ -441,7 +487,7 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
     log::info!("  Bob   (L1 addr):     {:?}", bob_addr);
     log::info!("  Bob   (intmax addr): {}", bob_intmax_addr);
     log::info!("");
-    log::info!("--- Phase 1: Alice Deposit (0.1 ETH) ---");
+    log::info!("--- Phase 1: Alice Deposit (1000 Tokens) ---");
     log::info!("  Pubkey salt hash:    {}", alice_deposit.pubkey_salt_hash);
     log::info!("  Deposit digest:      {}", alice_deposit.deposit_digest);
     log::info!(
@@ -449,7 +495,7 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         relay_hash_str(&alice_deposit.relay_tx_hash)
     );
     log::info!("");
-    log::info!("--- Phase 2: Bob Deposit (0.1 ETH) ---");
+    log::info!("--- Phase 2: Bob Deposit (1000 Tokens) ---");
     log::info!("  Pubkey salt hash:    {}", bob_deposit.pubkey_salt_hash);
     log::info!("  Deposit digest:      {}", bob_deposit.deposit_digest);
     log::info!(
@@ -457,12 +503,12 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         relay_hash_str(&bob_deposit.relay_tx_hash)
     );
     log::info!("");
-    log::info!("--- Phase 3: Alice -> Bob Transfer (0.01 ETH, private L2) ---");
+    log::info!("--- Phase 3: Alice -> Bob Transfer (200 Tokens, private L2) ---");
     log::info!("  Tx tree root:        {}", transfer_info.tx_tree_root);
     log::info!("  Tx digest:           {}", transfer_info.tx_digest);
     log::info!("  Tx index:            {}", transfer_info.tx_index);
     log::info!("");
-    log::info!("--- Phase 4: Bob Withdrawal (0.01 ETH to L1) ---");
+    log::info!("--- Phase 4: Bob Withdrawal (1100 Tokens to L1) ---");
     log::info!("  Tx tree root:        {}", wd_info.tx_tree_root);
     log::info!("  Tx digest:           {}", wd_info.tx_digest);
     log::info!("  Tx index:            {}", wd_info.tx_index);
