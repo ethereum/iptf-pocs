@@ -33,6 +33,28 @@ Compare this to ~80 lines of Circom constraint wiring or a full zkEVM opcode tab
 
 See [SPEC.md](SPEC.md) for the full protocol specification, including a side-by-side comparison of the disclosure circuit in Rust, Circom, and Noir.
 
+### How Does This Compare to Aztec?
+
+Aztec is the most prominent privacy-native L2, using Noir as its circuit language. Different architecture, different tradeoffs:
+
+| Dimension | DIY Validium (RISC Zero) | Aztec (Noir) |
+|-----------|--------------------------|--------------|
+| **Architecture** | Validium: off-chain data, on-chain proofs on L1 | Privacy-native L2 rollup with its own sequencer and DA |
+| **Circuit Language** | Rust (general-purpose, large ecosystem) | Noir (ZK-specific DSL, growing ecosystem) |
+| **Compliance Logic** | Custom Rust functions -- institutions write their own rules | Platform-level privacy; custom compliance requires Noir expertise |
+| **Deployment Target** | Ethereum L1 directly (Solidity verifier contracts) | Aztec L2 (separate network, bridges to Ethereum) |
+| **Gas Cost** | High per-proof (~200K--400K gas for STARK verification on L1) | Amortized across L2 block; users pay L2 fees |
+| **Bridging** | Native -- ERC20 deposits/withdrawals directly on L1 | Requires L1-L2 bridge with messaging delay |
+| **Privacy Model** | Selective: operator sees everything, users prove to auditors | Default encrypted notes; viewing keys for selective disclosure |
+| **Data Availability** | Operator-held (trust assumption) | L2 DA layer with encrypted note storage |
+| **Auditability** | Rust circuits readable by any engineer | Noir readable but requires ZK-DSL familiarity |
+
+**DIY Validium wins on:** direct L1 settlement (no bridge delay), custom compliance in a mainstream language, simpler trust model to reason about, standard Solidity/Foundry tooling.
+
+**Aztec wins on:** default privacy at scale, lower per-transaction cost (L2 amortization), mature privacy primitives (note discovery, encrypted memos), decentralized sequencing roadmap.
+
+**The core tradeoff:** DIY Validium trades platform maturity and cost efficiency for direct L1 deployment and custom compliance logic in Rust. For institutions evaluating privacy, this PoC demonstrates the building blocks work -- the question is whether to build bespoke or adopt a platform.
+
 ## Architecture
 
 ```

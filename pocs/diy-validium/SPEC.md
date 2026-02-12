@@ -115,6 +115,8 @@ IERC20 public token;
 bytes32 public allowlistRoot;
 ```
 
+**Token Conservation Invariant:** The bridge contract's ERC20 balance must always equal the sum of all private account balances. This is maintained by construction: deposits increase both the bridge balance and one private balance; withdrawals decrease both. The invariant is not enforced by an on-chain check — it follows from the proof structure (withdrawal amounts are public in the journal and verified by the bridge).
+
 ---
 
 ## Operation 1: Transfer
@@ -183,6 +185,8 @@ function executeTransfer(bytes seal, bytes32 oldRoot, bytes32 newRoot, bytes32 n
 ### Deposit Flow
 
 Deposits are gated by an allowlist membership proof: only pubkeys in the allowlist Merkle tree can deposit ERC20 tokens into the private system.
+
+The allowlist is a separate Merkle tree (same SHA-256 binary structure) whose leaves are SHA-256 hashes of authorized public keys. The operator maintains this tree off-chain and sets the `allowlistRoot` on the bridge contract. To authorize a new depositor, the operator adds their pubkey hash as a leaf, rebuilds the tree, and updates the on-chain root. The membership proof proves "my pubkey hash is a leaf in this tree" without revealing which leaf.
 
 ```
 User                    Contract                 Operator
@@ -300,6 +304,8 @@ function verifyDisclosure(bytes seal, bytes32 root, uint64 threshold,
 
 > Read-only contract: no nullifiers, no root updates. Disclosure proofs are attestations, not state transitions.
 
+**Proof Freshness:** A disclosure proof is bound to a specific Merkle root. If the operator updates state (via transfer or withdrawal) between proof generation and auditor verification, the on-chain `stateRoot` will have moved and the `DisclosureVerifier` will reject the proof with "Root mismatch". In practice, the auditor should verify the proof promptly, or the user must regenerate the proof against the current root. Off-chain verification (without the contract) avoids this issue since the auditor can accept any recent root.
+
 ---
 
 ## Why Rust for ZK Circuits
@@ -390,6 +396,8 @@ fn main(secret_key: [u8; 32], ...) -> pub ([u8; 32], u64, [u8; 32]) {
 - Maps pubkeys to real identities
 - Controls data availability
 
+**Liveness risk:** If the operator goes offline, no new proofs can be submitted and no withdrawals can be processed. Funds remain locked in the bridge contract indefinitely. This is the primary operational risk of the centralized operator model. Production mitigations: DA committee, on-chain calldata fallback, or an escape hatch that allows users to withdraw after a timeout by proving their last known balance against the last committed root.
+
 **Enforced by ZK + on-chain verification:**
 - Cannot forge a transfer or withdrawal without the sender's secret key
 - Cannot double-spend (nullifiers recorded on-chain)
@@ -403,9 +411,10 @@ fn main(secret_key: [u8; 32], ...) -> pub ([u8; 32], u64, [u8; 32]) {
 - **Hash-based disclosure keys** — Production: threshold decryption or verifiable encryption (Penumbra, Aztec)
 - **Simple key derivation** (`pubkey = SHA256(sk)`) — Production: EC key derivation (ed25519)
 - **In-memory storage** — Production: persistent database
-- **IMAGE_ID placeholders** (`bytes32(0)`) — Must be set to real guest image IDs
+- **IMAGE_ID placeholders** (`bytes32(0)`) — Contracts use placeholder image IDs because guest ELF compilation requires the riscv32im target. In production: compile guest programs (`cargo risczero build`), extract the image IDs from the generated `methods/src/lib.rs`, and pass them as constructor arguments during deployment. The deploy script (`Deploy.s.sol`) would read these from environment variables.
 - **No batching** — One proof per operation; production would batch
 - **Single ERC20** — Production: add `asset_id` to commitment scheme
+- **No access control on contract functions** — Any address can submit a valid proof. Production: restrict `executeTransfer` / `withdraw` to an operator address or multisig to prevent front-running and ordering manipulation.
 - **Dev mode for tests** — Rust tests use `RISC0_DEV_MODE` (fake proofs)
 
 ## Future Work
