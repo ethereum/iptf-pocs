@@ -117,17 +117,8 @@ impl MerkleProof {
     }
 }
 
-/// Verify membership by recomputing the Merkle root from a leaf and proof,
-/// then asserting it matches `expected_root`.
-///
-/// This mirrors the circuit logic from SPEC.md (lines 172-193): the circuit
-/// performs the same recomputation inside the zkVM and panics on mismatch.
-pub fn verify_membership(
-    leaf: [u8; 32],
-    path: &[[u8; 32]],
-    indices: &[bool],
-    expected_root: [u8; 32],
-) {
+/// Verify Merkle membership by recomputing root from leaf and proof path.
+fn verify_membership(leaf: [u8; 32], path: &[[u8; 32]], indices: &[bool], expected_root: [u8; 32]) {
     let mut current = leaf;
 
     for (sibling, &is_right) in path.iter().zip(indices.iter()) {
@@ -141,35 +132,6 @@ pub fn verify_membership(
     assert_eq!(
         current, expected_root,
         "Merkle root mismatch: membership verification failed"
-    );
-}
-
-/// Verify a balance proof as specified in SPEC.md (lines 244-267).
-///
-/// This mirrors the balance circuit logic: recompute the leaf commitment
-/// from `pubkey`, `balance`, and `salt`, verify Merkle membership against
-/// `expected_root`, and assert `balance >= required_amount`.
-///
-/// Panics on any verification failure (invalid membership or insufficient balance).
-pub fn verify_balance(
-    pubkey: [u8; 32],
-    balance: u64,
-    salt: [u8; 32],
-    path: &[[u8; 32]],
-    indices: &[bool],
-    expected_root: [u8; 32],
-    required_amount: u64,
-) {
-    // 1. Recompute the leaf commitment
-    let leaf = account_commitment(&pubkey, balance, &salt);
-
-    // 2. Verify Merkle membership (panics on mismatch)
-    verify_membership(leaf, path, indices, expected_root);
-
-    // 3. Assert balance >= required_amount
-    assert!(
-        balance >= required_amount,
-        "Balance check failed: balance {balance} < required {required_amount}"
     );
 }
 

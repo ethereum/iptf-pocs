@@ -3,8 +3,6 @@ pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
-import {MembershipVerifier} from "../src/MembershipVerifier.sol";
-import {BalanceVerifier} from "../src/BalanceVerifier.sol";
 import {TransferVerifier} from "../src/TransferVerifier.sol";
 import {ValidiumBridge} from "../src/ValidiumBridge.sol";
 import {DisclosureVerifier} from "../src/DisclosureVerifier.sol";
@@ -18,7 +16,7 @@ contract MockRiscZeroVerifier is IRiscZeroVerifier {
 }
 
 /// @title Deploy
-/// @notice Deployment script for all verifier contracts (Phases 1-4).
+/// @notice Deployment script for verifier contracts (Transfer, Bridge, Disclosure).
 /// @dev Usage: forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
 contract Deploy is Script {
     function run() external {
@@ -42,19 +40,11 @@ contract Deploy is Script {
             console.log("Using existing verifier at:", verifierAddr);
         }
 
-        // Phase 1: Membership verifier
-        MembershipVerifier membershipVerifier = new MembershipVerifier(IRiscZeroVerifier(verifierAddr), allowlistRoot);
-        console.log("Deployed MembershipVerifier at:", address(membershipVerifier));
-
-        // Phase 2: Balance verifier
-        BalanceVerifier balanceVerifier = new BalanceVerifier(IRiscZeroVerifier(verifierAddr), accountsRoot);
-        console.log("Deployed BalanceVerifier at:", address(balanceVerifier));
-
-        // Phase 3: Transfer verifier (uses accountsRoot as initial state root)
+        // Transfer verifier
         TransferVerifier transferVerifier = new TransferVerifier(IRiscZeroVerifier(verifierAddr), accountsRoot);
         console.log("Deployed TransferVerifier at:", address(transferVerifier));
 
-        // Phase 4: ValidiumBridge (ERC20 bridge with membership-gated deposit)
+        // ValidiumBridge (ERC20 bridge with membership-gated deposit)
         if (tokenAddr != address(0)) {
             ValidiumBridge bridge =
                 new ValidiumBridge(IERC20(tokenAddr), IRiscZeroVerifier(verifierAddr), accountsRoot, allowlistRoot);
@@ -63,7 +53,7 @@ contract Deploy is Script {
             console.log("Skipping ValidiumBridge (set TOKEN_ADDRESS to deploy)");
         }
 
-        // Phase 4: DisclosureVerifier (compliance disclosure)
+        // DisclosureVerifier (compliance disclosure)
         DisclosureVerifier disclosureVerifier = new DisclosureVerifier(IRiscZeroVerifier(verifierAddr), accountsRoot);
         console.log("Deployed DisclosureVerifier at:", address(disclosureVerifier));
 

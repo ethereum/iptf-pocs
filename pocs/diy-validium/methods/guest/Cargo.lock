@@ -599,9 +599,17 @@ dependencies = [
 name = "guest"
 version = "0.1.0"
 dependencies = [
+ "guest-crypto",
  "indexmap",
  "risc0-zkvm",
  "serde",
+ "sha2",
+]
+
+[[package]]
+name = "guest-crypto"
+version = "0.1.0"
+dependencies = [
  "sha2",
 ]
 

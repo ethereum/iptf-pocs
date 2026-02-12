@@ -4,42 +4,48 @@ A proof of concept for private institutional payments on Ethereum using a validi
 
 ## What This Demonstrates
 
-Institutions need blockchain guarantees -- immutability, settlement finality, auditability -- without exposing balances, transfer amounts, or counterparties to public observers. This PoC demonstrates a validium pattern: account state lives off-chain in the operator's database, while only Merkle roots and ZK validity proofs are posted on-chain. The result is Ethereum's security model with database-level privacy.
+Institutions need blockchain guarantees -- immutability, settlement finality, auditability -- without exposing balances, transfer amounts, or counterparties. This PoC demonstrates a validium pattern: account state lives off-chain, while only Merkle roots and ZK validity proofs are posted on-chain.
 
-The full lifecycle demonstrates the **Prividium pattern** -- privacy by default, transparency by choice:
-1. **Permissioned deposit** (allowlist membership proof gates ERC20 bridge entry)
-2. **Private transfers** (ZK-proven state transitions, hidden from everyone)
-3. **Selective disclosure** (prove compliance to regulators without revealing balances)
-4. **Proven withdrawal** (ZK-proven exit back to on-chain ERC20)
+Three operations cover the institutional lifecycle:
 
-Five ZK circuits, all written in standard Rust, covering the complete institutional privacy workflow.
+| Operation | What It Does | Business Use |
+|-----------|-------------|-------------|
+| **Transfer** | Private payment between accounts | Institutional settlements, stablecoin transfers |
+| **Bridge** | ERC20 deposit (gated) + withdrawal (proven exit) | On/off ramp between public and private systems |
+| **Disclosure** | Prove compliance without revealing data | Regulatory attestations, capital adequacy proofs |
 
-See [SPEC.md](SPEC.md) for the full protocol specification.
+### Why Not Just Use Prividium?
 
-## Architecture Overview
+Prividium (ZKSync) is a full L2 -- you get privacy, but compliance logic is baked into the platform. **DIY Validium shows custom ZK compliance proofs as Rust functions.** The disclosure circuit is 40 lines of readable Rust that any engineer can audit:
+
+```rust
+// The full business logic of a disclosure proof:
+let pubkey = sha256(&secret_key);
+let leaf = account_commitment(&pubkey, balance, &salt);
+let merkle_root = compute_root(leaf, &path, &indices);
+
+assert!(balance >= threshold, "Balance below threshold");
+let disclosure_key_hash =
+    sha256(&[&pubkey[..], &auditor_pubkey[..], b"disclosure_v1"].concat());
+```
+
+Compare this to ~80 lines of Circom constraint wiring or a full zkEVM opcode table. For institutional auditors reviewing compliance logic, readability matters.
+
+See [SPEC.md](SPEC.md) for the full protocol specification, including a side-by-side comparison of the disclosure circuit in Rust, Circom, and Noir.
+
+## Architecture
 
 ```
 Off-chain (Operator)          ZK Layer (RISC Zero)         On-chain (Ethereum)
 +-----------------------+     +---------------------+     +---------------------+
 | Account database      | --> | Prove state valid   | --> | Verify proof        |
-| - pubkeys, balances   |     | - Membership        |     | - Store Merkle root |
-| - salts, Merkle tree  |     | - Balance >= X      |     | - Record nullifiers |
-|                       |     | - Transfer correct   |     | - Bridge ERC20      |
-|                       |     | - Withdrawal valid   |     | - Emit events       |
-|                       |     | - Disclosure valid   |     |                     |
+| - pubkeys, balances   |     | - Transfer correct   |     | - Store Merkle root |
+| - salts, Merkle tree  |     | - Withdrawal valid   |     | - Record nullifiers |
+|                       |     | - Disclosure valid   |     | - Bridge ERC20      |
 +-----------------------+     +---------------------+     +---------------------+
 ```
 
 Data stays private. Only roots and proofs touch the chain.
-
-## Phases
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| **1. Allowlist Membership** | Prove you belong to an approved set without revealing your identity | Implemented |
-| **2. Private Balance Proofs** | Prove balance >= X without revealing actual balance | Implemented |
-| **3. Private Transfers** | Transfer value between accounts with ZK-proven state transitions | Implemented |
-| **4. Institutional Lifecycle** | ERC20 bridge (deposit/withdraw) + compliance disclosure proofs | Implemented |
 
 ## Prerequisites
 
@@ -50,8 +56,6 @@ Data stays private. Only roots and proofs touch the chain.
   rzup install
   ```
 - **Foundry** (`forge`, `cast`) -- install via [foundryup](https://book.getfoundry.sh/getting-started/installation)
-
-No Node.js required.
 
 ## Build and Run
 
@@ -73,7 +77,7 @@ cargo build
 # Rust tests (Merkle tree, account store, circuit tests via dev mode)
 RISC0_SKIP_BUILD=1 cargo test -p diy-validium-host
 
-# Solidity tests (all verifiers + bridge + disclosure)
+# Solidity tests (transfer verifier, bridge, disclosure verifier)
 cd contracts && forge test --offline
 ```
 
@@ -87,7 +91,7 @@ RISC0_DEV_MODE=1 cargo run
 cargo run
 ```
 
-The demo creates sample accounts, builds a Merkle tree, then runs all five proof types end-to-end: membership, balance, transfer, withdrawal, and disclosure.
+The demo creates sample accounts, builds a Merkle tree, then runs all three operations end-to-end: transfer, withdrawal, and disclosure.
 
 ### Deploy Contracts
 
@@ -102,8 +106,6 @@ VERIFIER_ADDRESS=0x... TOKEN_ADDRESS=0x... ALLOWLIST_ROOT=0x... ACCOUNTS_ROOT=0x
   forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
 ```
 
-If `VERIFIER_ADDRESS` is not set, the script deploys a `MockRiscZeroVerifier` that accepts all proofs (suitable for testing only). The bridge requires `TOKEN_ADDRESS` to be set; otherwise bridge deployment is skipped.
-
 ## Project Structure
 
 ```
@@ -113,33 +115,30 @@ diy-validium/
 ├── Cargo.toml                       # Rust workspace root
 ├── host/
 │   ├── src/
-│   │   ├── main.rs                  # E2E demo (Phases 1-4)
+│   │   ├── main.rs                  # E2E demo (Transfer + Withdrawal + Disclosure)
 │   │   ├── merkle.rs                # Merkle tree + proof generation
 │   │   └── accounts.rs              # Account model + store
 │   └── tests/                       # Integration tests
-│       ├── membership_circuit.rs    # Phase 1 circuit tests
-│       ├── balance_circuit.rs       # Phase 2 circuit tests
-│       ├── account_store.rs         # Account store tests
-│       ├── transfer_circuit.rs      # Phase 3 circuit tests
-│       ├── withdrawal_circuit.rs    # Phase 4 withdrawal tests
-│       └── disclosure_circuit.rs    # Phase 4 disclosure tests
+│       ├── transfer_circuit.rs      # Transfer circuit tests
+│       ├── withdrawal_circuit.rs    # Withdrawal circuit tests
+│       ├── disclosure_circuit.rs    # Disclosure circuit tests
+│       └── account_store.rs         # Account store tests
 ├── methods/
-│   ├── guest/src/
-│   │   ├── membership.rs            # Phase 1 ZK circuit
-│   │   ├── balance.rs               # Phase 2 ZK circuit
-│   │   ├── transfer.rs              # Phase 3 ZK circuit
-│   │   ├── withdrawal.rs            # Phase 4 withdrawal circuit
-│   │   └── disclosure.rs            # Phase 4 disclosure circuit
+│   ├── guest/
+│   │   ├── crypto/                  # Shared crypto primitives (sha256, Merkle ops)
+│   │   └── src/
+│   │       ├── membership.rs        # Membership circuit (used by bridge deposit)
+│   │       ├── transfer.rs          # Transfer circuit
+│   │       ├── withdrawal.rs        # Withdrawal circuit
+│   │       └── disclosure.rs        # Disclosure circuit (THE differentiator)
 │   └── src/lib.rs                   # ELF + image ID exports
 └── contracts/
     ├── src/
-    │   ├── MembershipVerifier.sol    # Phase 1 on-chain verifier
-    │   ├── BalanceVerifier.sol       # Phase 2 on-chain verifier
-    │   ├── TransferVerifier.sol      # Phase 3 on-chain verifier
-    │   ├── ValidiumBridge.sol        # Phase 4 ERC20 bridge
-    │   └── DisclosureVerifier.sol    # Phase 4 disclosure verifier
-    ├── test/                         # Foundry tests
-    └── script/Deploy.s.sol           # Deployment script
+    │   ├── TransferVerifier.sol     # Transfer on-chain verifier
+    │   ├── ValidiumBridge.sol       # ERC20 bridge (deposit + withdrawal)
+    │   └── DisclosureVerifier.sol   # Disclosure on-chain verifier
+    ├── test/                        # Foundry tests
+    └── script/Deploy.s.sol          # Deployment script
 ```
 
 ## Cryptographic Assumptions and Threat Model
@@ -152,24 +151,22 @@ diy-validium/
 **What is protected:**
 - Individual account balances are hidden from public observers
 - Transfer amounts and sender/recipient links are not revealed on-chain
-- Allowlist membership can be proven without disclosing identity
 - Compliance can be proven without revealing exact balances (disclosure proofs)
 
 **What is NOT protected:**
-- Malicious operator -- the operator is trusted to maintain correct off-chain state and data availability
+- Malicious operator -- trusted to maintain correct off-chain state and data availability
 - Traffic analysis and timing correlation
-- Side-channel attacks on proof generation
 - Deposits and withdrawals are public -- privacy exists only between them
 
 ## Known Limitations
 
 - **Centralized operator**: Single operator holds all account data. Production would use a DA committee or post calldata on-chain.
-- **Hash-based disclosure keys**: Disclosure uses `SHA256(pubkey || auditor_pubkey || "disclosure_v1")`, not encryption-based viewing keys. Production would use threshold decryption or verifiable encryption (see Penumbra, Aztec).
+- **Hash-based disclosure keys**: Uses `SHA256(pubkey || auditor_pubkey || "disclosure_v1")`, not encryption-based viewing keys. Production would use threshold decryption or verifiable encryption.
 - **Simple key derivation**: `pubkey = SHA256(secret_key)`. Production would use proper elliptic curve key derivation.
 - **In-memory storage**: Account state is held in memory. Production would use a persistent database.
-- **IMAGE_ID placeholders**: On-chain contracts use `bytes32(0)` as the guest image ID. Must be updated with real compiled image IDs before testnet deployment.
-- **No transaction batching**: Each operation requires a separate proof. Production would batch multiple transfers.
-- **Single ERC20**: Bridge supports one token. Production would add `asset_id` to the commitment scheme.
+- **IMAGE_ID placeholders**: On-chain contracts use `bytes32(0)` as the guest image ID.
+- **No transaction batching**: Each operation requires a separate proof.
+- **Single ERC20**: Bridge supports one token.
 - **Dev mode for tests**: Rust integration tests use `RISC0_DEV_MODE` (fake proofs) for speed.
 
 ## Security Disclaimer
