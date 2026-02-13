@@ -31,9 +31,13 @@ contract ValidiumBridge {
     bytes32 public allowlistRoot;
 
     /// @notice Image ID for the membership proof guest program. Placeholder until guest ELF is compiled.
+    /// @dev Placeholder — real image ID requires `cargo risczero build` with riscv32im target.
+    ///      See SPEC.md Limitations section for the production deployment path.
     bytes32 public constant MEMBERSHIP_IMAGE_ID = bytes32(0);
 
     /// @notice Image ID for the withdrawal proof guest program. Placeholder until guest ELF is compiled.
+    /// @dev Placeholder — real image ID requires `cargo risczero build` with riscv32im target.
+    ///      See SPEC.md Limitations section for the production deployment path.
     bytes32 public constant WITHDRAWAL_IMAGE_ID = bytes32(0);
 
     /// @notice Emitted when oldRoot does not match the current stateRoot.

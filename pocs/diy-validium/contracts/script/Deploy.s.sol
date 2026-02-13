@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/src/Script.sol";
+import {stdToml} from "forge-std/src/StdToml.sol";
 import {IERC20} from "forge-std/src/interfaces/IERC20.sol";
 import {TransferVerifier} from "../src/TransferVerifier.sol";
 import {ValidiumBridge} from "../src/ValidiumBridge.sol";
@@ -17,9 +18,25 @@ contract MockRiscZeroVerifier is IRiscZeroVerifier {
 
 /// @title Deploy
 /// @notice Deployment script for verifier contracts (Transfer, Bridge, Disclosure).
-/// @dev Usage: forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
+/// @dev Configuration: all deployment parameters are read from environment variables
+///      with sensible defaults using vm.envOr(). For TOML-based config, see
+///      forge-std's StdToml / Config pattern used in pocs/private-payment/.
+///
+///      Environment variables:
+///        VERIFIER_ADDRESS — existing RISC Zero verifier (deploys MockRiscZeroVerifier if unset)
+///        TOKEN_ADDRESS    — ERC20 token for bridge (skips bridge deployment if unset)
+///        ALLOWLIST_ROOT   — Merkle root for bridge allowlist (defaults to bytes32(0))
+///        ACCOUNTS_ROOT    — initial account state root (defaults to bytes32(0))
+///
+///      Usage: forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
 contract Deploy is Script {
+    using stdToml for string;
+
     function run() external {
+        // ── Configuration ──────────────────────────────────────────────
+        // All params read from env vars; defaults are zero-value placeholders
+        // suitable for local/testnet deployments.
+
         // Use existing verifier if VERIFIER_ADDRESS is set, otherwise deploy a mock.
         address verifierAddr = vm.envOr("VERIFIER_ADDRESS", address(0));
 

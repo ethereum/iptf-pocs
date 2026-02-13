@@ -14,6 +14,8 @@ contract DisclosureVerifier {
     bytes32 public stateRoot;
 
     /// @notice Image ID of the guest program. Placeholder until guest ELF is compiled.
+    /// @dev Placeholder — real image ID requires `cargo risczero build` with riscv32im target.
+    ///      See SPEC.md Limitations section for the production deployment path.
     bytes32 public constant IMAGE_ID = bytes32(0);
 
     /// @notice Emitted when a disclosure proof is successfully verified.
