@@ -12,13 +12,16 @@ iptf_approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/appr
 
 ## Executive Summary
 
-This specification describes how to deploy and configure a private payment system using the [Intmax2](https://eprint.iacr.org/2025/021) stateless ZK-rollup. The core rollup protocol (block production, signature aggregation, balance proofs, withdrawal mechanics) is defined by the Intmax2 paper and is not re-specified here. This document focuses on:
+This specification describes how to deploy and configure a private payment system using the [Intmax2](https://eprint.iacr.org/2025/021) stateless ZK-plasma. The core plasma protocol (block production, signature aggregation, balance proofs, withdrawal mechanics) is defined by the Intmax2 paper and is not re-specified here. This document focuses on:
 
 1. **Deployment models**: How institutions can use the system, either by deploying a private Intmax2 instance or by using the public Intmax network.
 2. **Attestation-gated entry**: How KYC verification is enforced at the deposit layer via zero-knowledge proofs against an on-chain attestation registry. This is the main protocol addition on top of Intmax2.
 3. **Operational configuration**: Key derivation, contract layout, service topology, and compliance integration.
 
-Privacy is achieved architecturally: transaction details never appear on-chain. The rollup contract stores only block commitments (Merkle roots of salted transaction batch hashes) and aggregated BLS signatures. Users maintain their own balance proofs client-side via recursive ZK proofs. A dual-key architecture (spending key for transfers, viewing key for audits) enables selective regulatory disclosure without compromising spending authority.
+> [!NOTE]
+> Intmax2 designates its plasma contracts as “Rollup” contracts; this specification uses plasma terminology for architectural clarity while preserving those original names for consistency with the reference implementation.
+
+Privacy is achieved architecturally: transaction details never appear on-chain. The Rollup contract stores only block commitments (Merkle roots of salted transaction batch hashes) and aggregated BLS signatures. Users maintain their own balance proofs client-side via recursive ZK proofs. A dual-key architecture (spending key for transfers, viewing key for audits) enables selective regulatory disclosure without compromising spending authority.
 
 ## Problem Statement
 
@@ -46,31 +49,31 @@ Institutions need private payment rails that satisfy AML/KYC requirements. Two p
 
 Two deployment models are supported:
 
-**Private deployment**: An institution deploys its own Intmax2 rollup contracts, block builder(s), and supporting services. It uses an existing token on L1 (e.g., USDC) and controls the full stack, including which compliance authorities are authorized to issue attestations, what KYC requirements apply, attestation expiry policy, and revocation procedures. Examples include a single bank for internal treasury operations, a consortium for interbank settlement, or a payment network operator for merchant payments.
+**Private deployment**: An institution deploys its own Intmax2 plasma contracts, block builder(s), and supporting services. It uses an existing token on L1 (e.g., USDC) and controls the full stack, including which compliance authorities are authorized to issue attestations, what KYC requirements apply, attestation expiry policy, and revocation procedures. Examples include a single bank for internal treasury operations, a consortium for interbank settlement, or a payment network operator for merchant payments.
 
 **Public network**: An institution's customers use the public Intmax deployment. AML permitter rules are set by Intmax (the network operator); individual institutions cannot configure their own attestation rules. The institution's role is limited to ensuring its customers are attested under Intmax's compliance framework before they deposit.
 
 In both models:
-- Attestation gating controls who can deposit into the rollup
+- Attestation gating controls who can deposit into the plasma chain
 - Transactions are private by architecture: only commitments on-chain
-- Customers bridge tokens into the rollup for private transfers, and withdraw back to L1
+- Customers bridge tokens into the plasma chain for private transfers, and withdraw back to L1
 
 ### Why This Approach
 
 Starting from the constraints:
 
 1. **Transaction privacy** requires that transaction details (amounts, recipients) are not posted on-chain. This rules out optimistic rollups, where full transaction data is published to L1 for data availability.
-2. **No trusted sequencer** requires stateless block production, where aggregators do not need to know the previous rollup state to produce new blocks. This rules out designs where a single sequencer maintains global state.
+2. **No trusted sequencer** requires stateless block production, where aggregators do not need to know the previous plasma state to produce new blocks. This rules out designs where a single sequencer maintains global state.
 3. Together, (1) and (2) point to an architecture where only *commitments* (Merkle roots of salted transaction hashes) go on-chain, and users maintain their own balance state.
-4. **Compliance gating** is layered on top via attestation-gated deposits, orthogonal to the rollup design itself.
+4. **Compliance gating** is layered on top via attestation-gated deposits, orthogonal to the plasma design itself.
 
 Shielded pools (UTXO commitments and nullifiers on L1) satisfy transaction privacy but post every state transition on-chain, limiting scalability.
 FHE-based payments offer flexible encrypted computation but carry higher costs and less mature tooling.
-The stateless ZK-rollup satisfies all four constraints, at the cost of pushing proof generation to clients and relying on a newer, less battle-tested protocol.
+The stateless ZK-plasma satisfies all four constraints, at the cost of pushing proof generation to clients and relying on a newer, less battle-tested protocol.
 
 ### Tools & Primitives
 
-We use [Intmax2](https://eprint.iacr.org/2025/021) as the concrete instantiation of the above architecture. It is the most mature implementation of a stateless ZK-rollup with permissionless aggregation, client-side balance proofs, and minimal on-chain data. The protocol's fund safety property has been formally verified in the Lean theorem prover.
+We use [Intmax2](https://eprint.iacr.org/2025/021) as the concrete instantiation of the above architecture. It is the most mature implementation of a stateless ZK-plasma with permissionless aggregation, client-side balance proofs, and minimal on-chain data. The protocol's fund safety property has been formally verified in the Lean theorem prover.
 
 | Tool | Purpose |
 |------|---------|
@@ -86,9 +89,9 @@ We use [Intmax2](https://eprint.iacr.org/2025/021) as the concrete instantiation
 
 | Role | Description | Keys Held |
 |------|-------------|-----------|
-| **Deployer / Operator** | Entity that deploys and configures the rollup contracts and services. In a private deployment, this is the institution. On the public network, this is Intmax. | L1 deployer key |
+| **Deployer / Operator** | Entity that deploys and configures the plasma contracts and services. In a private deployment, this is the institution. On the public network, this is Intmax. | L1 deployer key |
 | **Transactor** | End-user performing deposits, transfers, and withdrawals | BLS keypair (L2 spending), ETH keypair (L1), Viewing key |
-| **Aggregator (Block Builder)** | Collects transaction batch hashes, constructs Merkle trees, aggregates BLS signatures, posts transfer blocks to rollup contract. Stateless and permissionless. | L1 signing key |
+| **Aggregator (Block Builder)** | Collects transaction batch hashes, constructs Merkle trees, aggregates BLS signatures, posts transfer blocks to Rollup contract. Stateless and permissionless. | L1 signing key |
 | **Validity Prover** | Observes on-chain events, generates validity proofs for posted blocks via recursive ZK circuits | None (stateless service) |
 | **Store Vault Server** | Stores encrypted transaction data for clients to retrieve and decrypt with their viewing key | None (untrusted storage) |
 | **Attestation Issuer** | Issues KYC attestations to verified participants, stored in on-chain attestation tree | Attestation signing key (ETH account) |
@@ -102,7 +105,7 @@ spending_pubkey = g1^spending_key in G1        // BLS public key = L2 address
 viewing_key   = random()                       // Separate key for decrypting stored data
 ```
 
-- **L2 address**: The BLS public key uniquely identifies the user on the rollup.
+- **L2 address**: The BLS public key uniquely identifies the user on the plasma chain.
 - **Spending authority**: The BLS secret key signs block commitments during the transfer protocol and is used to generate balance proofs. Only the spending key holder can authorize transfers or withdrawals.
 - **Viewing key**: Decrypts deposit, transfer, and withdrawal data stored in the store vault server. Grants read-only audit access without spending authority. Institutions should manage viewing key distribution carefully, potentially using threshold schemes for regulator access in production.
 
@@ -178,7 +181,7 @@ A recursive ZK proof attesting that a sender had sufficient balance for a transa
 
 ```
 ValidityProof {
-    history_root:   bytes32   // History root of the rollup block containing the transaction
+    history_root:   bytes32   // History root of the plasma block containing the transaction
     sender:         address   // L2 address of the sender
     recipient:      address   // L2 or L1 address of the recipient
     amount:         uint256   // Transaction amount
@@ -267,7 +270,7 @@ sequenceDiagram
     CA-->>R: 7. Confirm revocation
 ```
 
-After revocation, the participant can no longer produce valid Merkle inclusion proofs against the updated attestation root, preventing new deposits. Funds already in the rollup remain spendable; the protocol does not freeze in-flight funds.
+After revocation, the participant can no longer produce valid Merkle inclusion proofs against the updated attestation root, preventing new deposits. Funds already in the plasma chain remain spendable; the protocol does not freeze in-flight funds.
 
 #### Deposit Attestation Proof
 
@@ -339,8 +342,8 @@ sequenceDiagram
 4. Liquidity contract verifies the attestation proof against the current attestation tree root
 5. Liquidity contract enqueues the deposit and computes a deposit data hash
 6. Liquidity contract emits a `Deposited` event with the deposit ID and hash
-7. Deposits are relayed from L1/L2 to the rollup via the cross-chain messenger
-8. The messenger calls `processDeposits()` on the rollup contract (authenticated via `onlyLiquidityContract` modifier)
+7. Deposits are relayed from L1/L2 to the plasma chain via the cross-chain messenger
+8. The messenger calls `processDeposits()` on the Rollup contract (authenticated via `onlyLiquidityContract` modifier)
 9. Rollup inserts deposit leaves into its deposit Merkle tree
 10. Rollup emits `DepositLeafInserted` events
 11. The validity prover observes these events, syncs witnesses, and generates a validity proof for the new block state
@@ -405,7 +408,7 @@ sequenceDiagram
 
 #### Withdrawal
 
-Converts a private L2 balance back to public L1 tokens. Withdrawal is a two-step process: first a transfer to an L1 address within the rollup, then a claim on L1.
+Converts a private L2 balance back to public L1 tokens. Withdrawal is a two-step process: first a transfer to an L1 address within the plasma chain, then a claim on L1.
 
 ```mermaid
 sequenceDiagram
@@ -421,7 +424,7 @@ sequenceDiagram
     T->>SV: 4. Store withdrawal proof data
     T->>T: 5. Wait for block to be proven by validity prover
     T->>W: 6. Submit withdrawal claim (address, amount, history_root, balance_proof)
-    W->>R: 7. Verify history_root exists in rollup's history_roots
+    W->>R: 7. Verify history_root exists in Rollup's history_roots
     W->>W: 8. Verify balance proof
     W->>W: 9. Compute withdrawable = proven_balance - previously_withdrawn
     W->>T: 10. Transfer tokens to L1 address
@@ -431,11 +434,11 @@ sequenceDiagram
 
 1. Transactor constructs a transaction batch with the recipient set to an L1 address (indicating withdrawal intent)
 2. The transaction goes through the standard transfer protocol (Phase 1: block construction with aggregator)
-3. The aggregator posts the transfer block to the rollup contract
+3. The aggregator posts the transfer block to the Rollup contract
 4. Transactor stores withdrawal proof data in the store vault
 5. Transactor waits for the validity prover to generate a proof for the block containing the withdrawal
 6. Transactor submits a withdrawal claim to the Withdrawal contract
-7. The Withdrawal contract verifies that the history root exists in the rollup
+7. The Withdrawal contract verifies that the history root exists in the Rollup contract
 8. The contract verifies the balance proof
 9. The contract computes the withdrawable amount: `withdrawable = proven_balance - withdrawn[address]`
 10. The contract transfers the withdrawable amount to the L1 address
@@ -468,7 +471,7 @@ The rogue-key mitigation factor `t_i` prevents an adversary from constructing a 
 
 ### Balance Proof Computation
 
-Given a balance proof and the current rollup state, the balance function `Bal` computes account balances in two steps:
+Given a balance proof and the current plasma state, the balance function `Bal` computes account balances in two steps:
 
 1. **Extract partial transactions**: For each block, extract transactions from the balance proof. For deposit blocks, extract the deposit amount. For transfer blocks, look up the sender's transaction batch. If the balance proof does not contain an entry for a sender in a transfer block, the transaction amount is treated as unknown.
 
@@ -511,7 +514,7 @@ The validity prover service maintains a continuous pipeline:
 | **Compliance Gating** | Attestation proof required at deposit. Unauthorized parties cannot enter the system. Revocation prevents future deposits but does not freeze in-flight funds. |
 | **Selective Disclosure** | Viewing key decrypts deposit, transfer, and withdrawal data from the store vault. Enables regulatory audit of a specific transactor's full history without compromising spending authority or other users' privacy. |
 | **Liveness** | Permissionless aggregation: anyone can become an aggregator. Users can withdraw even if all aggregators disappear (by running their own aggregator or submitting balance proofs directly). |
-| **Fund Safety** | Formally verified in Lean: the rollup contract balance is always non-negative for any valid execution trace. |
+| **Fund Safety** | Formally verified in Lean: the Rollup contract balance is always non-negative for any valid execution trace. |
 | **Sender Privacy from Aggregator** | The aggregator learns only the set of sender public keys and salted transaction hashes. Transaction contents are hidden. |
 
 ### Limitations & Shortcuts (PoC Scope)
@@ -528,11 +531,11 @@ The validity prover service maintains a continuous pipeline:
 |------|------------|
 | **Transaction Batch** | A mapping from recipients to amounts, representing all payments a sender makes in a single block. Hashed with a random salt before submission to the aggregator. |
 | **Transfer Block** | The on-chain record of a set of transactions: contains a Merkle root of transaction batch hashes, the set of sender public keys, and an aggregated BLS signature. |
-| **Deposit Block** | An on-chain record of a deposit from L1/L2 into the rollup, specifying the recipient L2 address and amount. |
+| **Deposit Block** | An on-chain record of a deposit from L1/L2 into the plasma chain, specifying the recipient L2 address and amount. |
 | **Balance Proof** | A client-side data structure mapping block commitments and senders to their transaction batches with Merkle proofs. Used to prove account balances. |
 | **Validity Proof** | A recursive ZK proof (Plonky2) attesting that a sender had sufficient balance for a specific transaction at a given history root. Sent to the recipient as proof of payment. |
-| **History Root** | A hash in the rollup's hash chain of block commitments. Each new block extends the chain: `new_root = H(previous_root, block)`. Used as an anchor for balance and withdrawal proofs. |
-| **Aggregator (Block Builder)** | An entity that collects transaction batch hashes, builds a Merkle tree, aggregates BLS signatures, and posts the resulting transfer block to the rollup contract. Stateless and permissionless. |
+| **History Root** | A hash in the Rollup contract's hash chain of block commitments. Each new block extends the chain: `new_root = H(previous_root, block)`. Used as an anchor for balance and withdrawal proofs. |
+| **Aggregator (Block Builder)** | An entity that collects transaction batch hashes, builds a Merkle tree, aggregates BLS signatures, and posts the resulting transfer block to the Rollup contract. Stateless and permissionless. |
 | **Authenticated Dictionary** | A cryptographic data structure (sparse Merkle tree) that commits to a set of key-value pairs with lookup proofs. The binding property ensures no two different values can be proven for the same key under the same commitment. |
 | **Attestation** | A signed statement from an attestation issuer that an L2 address belongs to a KYC-verified entity, stored as a leaf in the on-chain attestation Merkle tree. |
 | **Store Vault** | An untrusted server that stores encrypted transaction data. Clients encrypt data with recipients' viewing keys before upload. The server cannot read the contents. |
