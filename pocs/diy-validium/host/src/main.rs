@@ -19,8 +19,7 @@ fn main() -> Result<()> {
     // --- Setup: Create sample accounts ---
     let mut store = AccountStore::new();
     for i in 0..6u8 {
-        let mut sk = [0u8; 32];
-        sk[0] = i;
+        let sk = [i; 32];
         let pubkey: [u8; 32] = Sha256::digest(sk).into();
         let balance = 1000 * (i as u64 + 1);
         let mut salt = [0u8; 32];
@@ -51,11 +50,7 @@ fn main() -> Result<()> {
     let sender = store.get_account(sender_idx);
     let recipient = store.get_account(recipient_idx);
 
-    let sender_sk = {
-        let mut sk = [0u8; 32];
-        sk[0] = sender_idx as u8;
-        sk
-    };
+    let sender_sk = [sender_idx as u8; 32];
 
     println!(
         "Transfer: account {} -> account {}, amount = {}",
@@ -97,6 +92,8 @@ fn main() -> Result<()> {
     let expected_nullifier: [u8; 32] =
         Sha256::digest([&sender_sk[..], &root[..], b"transfer_v1"].concat()).into();
 
+    // NOTE: Each env.write() is a separate syscall. Production code should batch
+    // these into a single struct to minimize overhead.
     let env = risc0_zkvm::ExecutorEnv::builder()
         .write(&sender_sk)?
         .write(&sender.balance)?
@@ -114,6 +111,8 @@ fn main() -> Result<()> {
         .build()?;
 
     println!("Starting transfer proof generation (set RISC0_DEV_MODE=1 for fast dev mode)...");
+    // RISC Zero supports multiple proof types via ProverOpts: composite (default),
+    // succinct (smaller), and groth16 (on-chain verifiable). See ProverOpts docs.
     let prover = risc0_zkvm::default_prover();
     let prove_info = prover.prove(env, methods::TRANSFER_ELF)?;
     let receipt = prove_info.receipt;
@@ -152,11 +151,7 @@ fn main() -> Result<()> {
     let withdraw_idx: usize = 2;
     let withdraw_acct = store.get_account(withdraw_idx);
     let withdraw_amount: u64 = 500;
-    let withdraw_sk = {
-        let mut sk = [0u8; 32];
-        sk[0] = withdraw_idx as u8;
-        sk
-    };
+    let withdraw_sk = [withdraw_idx as u8; 32];
     let eth_recipient: [u8; 20] = [0xAB; 20];
     let new_withdraw_salt: [u8; 32] = Sha256::digest(b"new_withdrawal_salt_demo").into();
 
@@ -239,11 +234,7 @@ fn main() -> Result<()> {
     let disclosure_idx: usize = 3;
     let disclosure_acct = store.get_account(disclosure_idx);
     let threshold: u64 = 2000;
-    let disclosure_sk = {
-        let mut sk = [0u8; 32];
-        sk[0] = disclosure_idx as u8;
-        sk
-    };
+    let disclosure_sk = [disclosure_idx as u8; 32];
     let auditor_pubkey: [u8; 32] = Sha256::digest(b"auditor_pubkey_demo").into();
 
     println!(

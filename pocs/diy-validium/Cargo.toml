@@ -28,3 +28,10 @@ thiserror = "1.0"
 
 # Hex encoding
 hex = "0.4"
+
+# Patch sha2 for RISC Zero guest acceleration (precompile support).
+# NOTE: The guest crate (methods/guest/) has its own workspace and needs a
+# separate [patch.crates-io] entry in methods/guest/Cargo.toml for this to
+# take effect inside the zkVM guest.
+[patch.crates-io]
+sha2 = { git = "https://github.com/risc0/RustCrypto-hashes", tag = "sha2-v0.10.8-risczero.0" }
