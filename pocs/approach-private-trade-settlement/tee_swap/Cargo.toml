@@ -1,0 +1,8 @@
+[package]
+name = "tee_swap"
+version = "0.1.0"
+authors = ["Meyanis95 <yanis.meziane@essec.edu>"]
+edition = "2024"
+
+[lib]
+path = "src/lib/lib.rs"
