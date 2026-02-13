@@ -45,8 +45,10 @@ cargo check
 
 ## Running
 
+> Ensure that the docker engine / equivalent container runtime is running. See instructions [here](https://docs.docker.com/engine/daemon/troubleshoot/) to check.
+
 ```bash
-cargo test --release test_deposit_transfer_withdraw -- --nocapture
+cargo test --release -- --nocapture
 ```
 
 `--release` is recommended for faster proof generation
