@@ -1,0 +1,39 @@
+[package]
+name = "private-payment-plasma"
+version = "0.1.0"
+authors = ["rymnc <43716372+rymnc@users.noreply.github.com>"]
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+legacy-store-vault-server = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+balance-prover = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+validity-prover = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+validity-prover-worker = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+withdrawal-server = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+block-builder = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+server-common = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+intmax2-client-sdk = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+intmax2-interfaces = { git = "https://github.com/InternetMaximalism/intmax2", branch = "dev" }
+intmax2-zkp = { git = "https://github.com/InternetMaximalism/intmax2-zkp", branch = "dev" }
+plonky2 = { git = "https://github.com/InternetMaximalism/polygon-plonky2.git", branch = "intmax2-dev" }
+actix-web = "4.11"
+actix-cors = "0.7"
+tracing-actix-web = "0.7"
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-native-tls",
+    "postgres",
+    "migrate",
+] }
+alloy = { version = "1.0", features = ["node-bindings", "contract"] }
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+log = "0.4"
+reqwest = { version = "0.12", features = ["json"] }
+testcontainers = "0.27"
+env_logger = "0.11"

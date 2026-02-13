@@ -1,0 +1,26 @@
+CREATE TABLE IF NOT EXISTS cutoff (
+    singleton_key BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton_key = TRUE),
+    block_number INTEGER NOT NULL
+);
+
+-- Partition tables for backup Merkle tree tables
+CREATE TABLE IF NOT EXISTS hash_nodes_tag11 PARTITION OF hash_nodes FOR VALUES IN (11);
+CREATE TABLE IF NOT EXISTS hash_nodes_tag12 PARTITION OF hash_nodes FOR VALUES IN (12);
+CREATE TABLE IF NOT EXISTS hash_nodes_tag13 PARTITION OF hash_nodes FOR VALUES IN (13);
+
+CREATE TABLE IF NOT EXISTS leaves_tag11 PARTITION OF leaves
+    FOR VALUES IN (11);
+CREATE TABLE IF NOT EXISTS leaves_tag12 PARTITION OF leaves
+    FOR VALUES IN (12);
+CREATE TABLE IF NOT EXISTS leaves_tag13 PARTITION OF leaves
+    FOR VALUES IN (13);
+
+CREATE TABLE IF NOT EXISTS leaves_len_tag11 PARTITION OF leaves_len
+    FOR VALUES IN (11);
+CREATE TABLE IF NOT EXISTS leaves_len_tag12 PARTITION OF leaves_len
+    FOR VALUES IN (12);
+CREATE TABLE IF NOT EXISTS leaves_len_tag13 PARTITION OF leaves_len
+    FOR VALUES IN (13);
+    
+CREATE TABLE IF NOT EXISTS indexed_leaves_tag11 PARTITION OF indexed_leaves
+    FOR VALUES IN (11);
