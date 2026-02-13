@@ -18,12 +18,29 @@ A protocol for atomic cross-chain swaps of private UTXO notes using stealth addr
 
 ---
 
+## Hash Domain Separation
+
+All hashes use an explicit domain tag as the first argument to prevent cross-purpose collisions in a cross-chain context:
+
+| Domain | Tag | Purpose |
+|--------|-----|---------|
+| Commitment | `"tee_swap.commitment"` | Note commitment derivation |
+| Nullifier | `"tee_swap.nullifier"` | Nullifier derivation |
+| Stealth | `"tee_swap.stealth"` | Stealth address key derivation |
+
+Convention: `H(domain, ...)` denotes `Hash(domain_tag ‖ ...)` where `‖` is concatenation.
+
+> **Why domain separation?** Without it, a hash computed for one purpose (e.g., a commitment) could collide with a hash computed for another purpose (e.g., a nullifier or stealth key). In a cross-chain protocol, this risk is amplified — domain tags ensure each hash is unambiguously scoped to its intended use.
+
+---
+
 ## Data Types
 
 ### Time-Locked Note
 
 ```
 Note {
+    chainId: uint256,         // Network identifier (binds note to a specific chain)
     value: uint64,            // Amount
     assetId: bytes32,         // Asset identifier (USD, BOND, etc.)
     owner: bytes32,           // Primary owner (stealth address)
@@ -33,16 +50,27 @@ Note {
 }
 ```
 
+**Derived values:**
+- `commitment = H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt)`
+- `nullifier = H("tee_swap.nullifier", commitment, salt)`
+
 **Spending conditions (enforced by circuit):**
+
+The circuit proves ALL of the following:
 ```
-Can spend if EITHER:
-  1. Know sk_owner (stealth key) — normal claim path
-  2. Know sk_fallback AND block.timestamp > timeout — refund path
+1. Commitment preimage: commitment == H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt)
+2. Merkle inclusion: commitment exists in the commitment tree at the given root
+3. Nullifier correctness: nullifier == H("tee_swap.nullifier", commitment, salt)
+4. Ownership — EITHER:
+   a. Know sk_owner where sk_owner·G == owner       (claim path)
+   b. Know sk_fallback where sk_fallback·G == fallbackOwner
+      AND current_timestamp > timeout                (refund path)
+      where current_timestamp is a PUBLIC INPUT
 ```
 
-**Derived values:**
-- `commitment = Hash(value, assetId, owner, fallbackOwner, timeout, salt)`
-- `nullifier = Hash(commitment, spendingKey)` where spendingKey is either sk_owner or sk_fallback
+**Circuit timeout validation:** The circuit cannot read `block.timestamp` directly. Instead, `current_timestamp` is passed as a **public input** to the proof. The circuit checks `current_timestamp > timeout` internally. The on-chain verifier contract enforces that the public input matches `block.timestamp` at verification time. This splits the check: the circuit proves the timeout relationship, the contract guarantees the timestamp is real.
+
+> **Why `H("tee_swap.nullifier", commitment, salt)` and not `Hash(commitment, spendingKey)`?** The nullifier must be unique per note AND independent of which spending path is used. If the nullifier varied by spending key, the owner path and fallback path would produce different nullifiers for the same note — enabling a double-spend where Party B claims and Party A refunds the same note. With `H("tee_swap.nullifier", commitment, salt)`, the nullifier is canonical: whichever path is used first, the second attempt is rejected by the nullifier set.
 
 ---
 
@@ -69,12 +97,35 @@ StealthAddress {
 ```
 Sender (knows pk_meta_recipient, generates r):
   shared_secret = ECDH(r, pk_meta_recipient) = r·pk_meta
-  pk_stealth = pk_meta + Hash(shared_secret)·G
+  pk_stealth = pk_meta + H("tee_swap.stealth", shared_secret)·G
 
 Recipient (knows sk_meta, receives R):
   shared_secret = ECDH(sk_meta, R) = sk_meta·R
-  sk_stealth = sk_meta + Hash(shared_secret)
+  sk_stealth = sk_meta + H("tee_swap.stealth", shared_secret)
 ```
+
+---
+
+### On-Chain State (per network)
+
+Each network maintains:
+
+```
+CommitmentTree {
+    tree: MerkleTree,          // Append-only Merkle tree of all note commitments
+    roots: bytes32[]           // History of recent roots (for proof flexibility)
+}
+
+NullifierSet {
+    nullifiers: Set<bytes32>   // All nullifiers ever submitted (spent notes)
+}
+```
+
+**Invariant:** Each commitment in the tree maps to exactly one nullifier (`H("tee_swap.nullifier", commitment, salt)`). Once that nullifier appears in the set, the note cannot be spent again via any path.
+
+**Transaction flow:**
+1. **Create note:** insert `commitment` into `CommitmentTree`
+2. **Spend note:** verify ZK proof, check `nullifier ∉ NullifierSet`, add `nullifier` to `NullifierSet`
 
 ---
 
@@ -87,6 +138,8 @@ SwapIntent {
     partyB_commitment: bytes32,         // B's locked note commitment
     partyA_ephemeralKey: Point,         // R_A (for B to derive sk_stealth)
     partyB_ephemeralKey: Point,         // R_B (for A to derive sk_stealth)
+    encryptedNoteA_forB: bytes,         // Note_A details (incl. salt_A), encrypted to pk_meta_B
+    encryptedNoteB_forA: bytes,         // Note_B details (incl. salt_B), encrypted to pk_meta_A
     timeout: uint256,                   // Swap expiry
     revealed: bool                      // TEE has revealed ephemeral keys
 }
@@ -100,33 +153,43 @@ SwapIntent {
 
 **Party A (swapping USD for BOND):**
 ```
-1. Generate ephemeral key: r_A
+1. Generate ephemeral key: r_A, random salt_A
 2. Compute:
    - shared_secret_AB = ECDH(r_A, pk_meta_B)
-   - pk_stealth_B = pk_meta_B + Hash(shared_secret_AB)·G
+   - pk_stealth_B = pk_meta_B + H("tee_swap.stealth", shared_secret_AB)·G
 3. Create time-locked note:
-   - owner = pk_stealth_B (B can claim with ephemeral key)
+   - chainId = Network 1 chain ID
+   - owner = pk_stealth_B (B can claim with stealth key)
    - fallbackOwner = pk_A (A can refund after timeout)
    - timeout = now + 48h
-4. Generate ZK proof: spend USD note → create time-locked note
+   - salt = salt_A
+4. Generate ZK proof: spend existing USD note → create time-locked note
+   - Nullifies old note (old nullifier added to NullifierSet)
+   - Inserts new commitment into CommitmentTree
 5. Submit proof on Network 1 (USD chain)
-6. Send to TEE (encrypted): (swapId, r_A·G, Note details)
+6. Send to TEE (encrypted): (swapId, R_A, Note_A details including salt_A)
 ```
 
 **Party B (swapping BOND for USD):**
 ```
-1. Generate ephemeral key: r_B
+1. Generate ephemeral key: r_B, random salt_B
 2. Compute:
    - shared_secret_BA = ECDH(r_B, pk_meta_A)
-   - pk_stealth_A = pk_meta_A + Hash(shared_secret_BA)·G
+   - pk_stealth_A = pk_meta_A + H("tee_swap.stealth", shared_secret_BA)·G
 3. Create time-locked note:
+   - chainId = Network 2 chain ID
    - owner = pk_stealth_A
    - fallbackOwner = pk_B
    - timeout = now + 48h
-4. Generate ZK proof: spend BOND note → create time-locked note
+   - salt = salt_B
+4. Generate ZK proof: spend existing BOND note → create time-locked note
+   - Nullifies old note (old nullifier added to NullifierSet)
+   - Inserts new commitment into CommitmentTree
 5. Submit proof on Network 2 (BOND chain)
-6. Send to TEE (encrypted): (swapId, r_B·G, Note details)
+6. Send to TEE (encrypted): (swapId, R_B, Note_B details including salt_B)
 ```
+
+> **Salt communication:** Each party needs the counterparty's note details (including salt) to eventually claim. The TEE relays these during Phase 3 alongside the ephemeral keys—encrypted so only the intended recipient can read them. Party B receives Note_A details (including salt_A), Party A receives Note_B details (including salt_B).
 
 ---
 
@@ -141,8 +204,8 @@ TEE verifies:
   1. Both commitments exist on their respective chains ✓
   2. Commitments match provided note details ✓
   3. Stealth addresses correctly derived:
-     - pk_stealth_B = pk_meta_B + Hash(ECDH(R_A, pk_meta_B))·G ✓
-     - pk_stealth_A = pk_meta_A + Hash(ECDH(R_B, pk_meta_A))·G ✓
+     - pk_stealth_B = pk_meta_B + H("tee_swap.stealth", ECDH(R_A, pk_meta_B))·G ✓
+     - pk_stealth_A = pk_meta_A + H("tee_swap.stealth", ECDH(R_B, pk_meta_A))·G ✓
   4. Swap terms match (amounts, assets) ✓
   5. Both notes have same timeout ✓
   6. Timeout hasn't expired ✓
@@ -152,17 +215,21 @@ TEE verifies:
 
 ### Phase 3: Atomic Revelation
 
-**TEE atomically publishes both ephemeral keys:**
+**TEE atomically publishes both ephemeral keys and encrypted note details:**
 
 ```solidity
 function announceSwap(
     bytes32 swapId,
-    bytes32 ephemeralKey_A,  // R_A for Party B
-    bytes32 ephemeralKey_B   // R_B for Party A
+    bytes32 ephemeralKey_A,       // R_A — Party B uses to derive sk_stealth
+    bytes32 ephemeralKey_B,       // R_B — Party A uses to derive sk_stealth
+    bytes encryptedNoteA_forB,    // Note_A details (incl. salt_A), encrypted to pk_meta_B
+    bytes encryptedNoteB_forA     // Note_B details (incl. salt_B), encrypted to pk_meta_A
 ) external onlyTEE {
     announcements[swapId] = SwapAnnouncement({
         ephemKey_A: ephemeralKey_A,
         ephemKey_B: ephemeralKey_B,
+        encNoteA: encryptedNoteA_forB,
+        encNoteB: encryptedNoteB_forA,
         timestamp: block.timestamp
     });
     emit SwapRevealed(swapId);
@@ -171,38 +238,61 @@ function announceSwap(
 
 **Both parties monitor announcement location (contract on either network, or off-chain service).**
 
+**What each party receives from the announcement:**
+- Party A: `R_B` (to derive sk_stealth_A) + encrypted Note_B details including `salt_B` (to compute nullifier)
+- Party B: `R_A` (to derive sk_stealth_B) + encrypted Note_A details including `salt_A` (to compute nullifier)
+
 **Atomicity:** TEE reveals both keys in a single operation, or neither. This guarantees both parties can claim their notes, or both can refund. Works identically for same-network and cross-chain swaps.
 
 ---
 
 ### Phase 4: Claim or Refund
 
+> **Privacy note:** Parties should stagger their claim transactions with a random delay after the announcement (see T7). Claiming simultaneously creates a timing correlation that links both legs of the swap.
+
 **Party B claims USD (normal path):**
 ```
-1. Reads R_A from announcement contract
-2. Derives: sk_stealth_B = sk_meta_B + Hash(ECDH(sk_meta_B, R_A))
-3. Generates ZK proof: spend note with sk_stealth_B
-4. Submits to Network 1 → receives USD
+1. Reads R_A and encrypted Note_A details from announcement contract
+2. Decrypts Note_A details with sk_meta_B → obtains (value, assetId, salt_A, owner, fallbackOwner, timeout)
+3. Derives: sk_stealth_B = sk_meta_B + H("tee_swap.stealth", ECDH(sk_meta_B, R_A))
+4. Computes: commitment_A = H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt_A)
+5. Computes: nullifier = H("tee_swap.nullifier", commitment_A, salt_A)
+6. Generates ZK proof:
+   - Proves knowledge of commitment preimage (with domain tag)
+   - Proves Merkle inclusion of commitment_A in Network 1's CommitmentTree
+   - Proves nullifier == H("tee_swap.nullifier", commitment_A, salt_A)
+   - Proves knowledge of sk_stealth_B where sk_stealth_B·G == owner
+7. Submits proof to Network 1 → nullifier added to NullifierSet → receives USD
 ```
 
 **Party A claims BOND (normal path):**
 ```
-1. Reads R_B from announcement contract
-2. Derives: sk_stealth_A = sk_meta_A + Hash(ECDH(sk_meta_A, R_B))
-3. Generates ZK proof: spend note with sk_stealth_A
-4. Submits to Network 2 → receives BOND
+1. Reads R_B and encrypted Note_B details from announcement contract
+2. Decrypts Note_B details with sk_meta_A → obtains (value, assetId, salt_B, owner, fallbackOwner, timeout)
+3. Derives: sk_stealth_A = sk_meta_A + H("tee_swap.stealth", ECDH(sk_meta_A, R_B))
+4. Computes: commitment_B, nullifier (same derivation as above)
+5. Generates ZK proof (same structure as above, proving sk_stealth_A)
+6. Submits proof to Network 2 → nullifier added to NullifierSet → receives BOND
 ```
 
 **Refund scenario (TEE failed to reveal before timeout):**
 ```
 Party A refunds USD:
   1. Wait until block.timestamp > timeout
-  2. Generate ZK proof: spend note with sk_fallback_A (original key)
-  3. Circuit validates: timeout expired ✓
-  4. Reclaim USD note
+  2. Party A already knows salt_A (they created the note)
+  3. Compute: nullifier = H("tee_swap.nullifier", commitment_A, salt_A)
+  4. Generate ZK proof:
+     - Proves knowledge of commitment preimage (with domain tag)
+     - Proves Merkle inclusion in CommitmentTree
+     - Proves nullifier == H("tee_swap.nullifier", commitment_A, salt_A)
+     - Proves knowledge of sk_A where sk_A·G == fallbackOwner
+     - Proves current_timestamp > timeout (current_timestamp is a public input; verifier contract checks it matches block.timestamp)
+  5. Submit proof → nullifier added to NullifierSet → reclaim USD
 
-Party B refunds BOND (same process)
+Party B refunds BOND (same process, using salt_B which they created)
 ```
+
+> **Note:** If Party B already claimed (nullifier in set), Party A's refund attempt is rejected — the nullifier is the same regardless of spending path. This is the core double-spend protection.
 
 ---
 
@@ -297,8 +387,9 @@ Party B refunds BOND (same process)
 - ✅ Time-locked notes indistinguishable from normal notes
 - ✅ Spending with stealth key vs refund path produces identical on-chain footprint
 - ✅ Large anonymity set: swap notes mix with all system notes
+- ⚠️ **Claim transactions must be staggered.** If both parties claim shortly after the TEE announcement, an observer can correlate the two spend transactions by timing — linking the USD and BOND legs of the same swap. Parties should introduce a random delay (e.g., minutes to hours) between the announcement and their claim submission. The timeout window (48h) provides ample room for this.
 
-**Impact:** Minimal metadata leakage. Privacy comparable to client-side ZK systems.
+**Impact:** Minimal metadata leakage with proper claim staggering. Without staggering, timing correlation can link swap legs across chains.
 
 ---
 
@@ -321,6 +412,7 @@ Party B refunds BOND (same process)
 **Guaranteed (cryptographic):**
 - Users cannot lose funds to TEE
 - Users can always recover via timeout refund
+- Double-spend prevention: canonical nullifier per note (`H("tee_swap.nullifier", commitment, salt)`) ensures a note spent via one path cannot be spent again via the other
 - Front-running impossible (stealth address protection)
 - Large anonymity set (all notes indistinguishable)
 - Atomic swaps: both parties can claim or both refund (no partial execution)
