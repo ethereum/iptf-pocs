@@ -90,10 +90,6 @@ fn main() -> Result<()> {
         &recipient_proof.path,
     );
 
-    let sender_old_leaf = account_commitment(&sender.pubkey, sender.balance, &sender.salt);
-    let expected_nullifier: [u8; 32] =
-        Sha256::digest([&sender_sk[..], &sender_old_leaf[..], b"transfer_v1"].concat()).into();
-
     // NOTE: Each env.write() is a separate syscall. Production code should batch
     // these into a single struct to minimize overhead.
     let env = risc0_zkvm::ExecutorEnv::builder()
@@ -126,13 +122,11 @@ fn main() -> Result<()> {
 
     assert_eq!(tj.old_root, root);
     assert_eq!(tj.new_root, expected_new_root);
-    assert_eq!(tj.nullifier, expected_nullifier);
 
     println!(
-        "Journal: old_root=0x{}..., new_root=0x{}..., nullifier=0x{}...",
+        "Journal: old_root=0x{}..., new_root=0x{}...",
         hex::encode(&tj.old_root[..4]),
         hex::encode(&tj.new_root[..4]),
-        hex::encode(&tj.nullifier[..4]),
     );
     println!("All journal fields match: OK");
 
@@ -169,12 +163,6 @@ fn main() -> Result<()> {
         &withdraw_proof.path,
         &withdraw_proof.indices,
     );
-    let withdraw_old_leaf =
-        account_commitment(&withdraw_pubkey, withdraw_acct.balance, &withdraw_acct.salt);
-    let expected_withdraw_nullifier: [u8; 32] =
-        Sha256::digest([&withdraw_sk[..], &withdraw_old_leaf[..], b"withdrawal_v1"].concat())
-            .into();
-
     let env = risc0_zkvm::ExecutorEnv::builder()
         .write(&withdraw_sk)?
         .write(&withdraw_acct.balance)?
@@ -197,15 +185,13 @@ fn main() -> Result<()> {
 
     assert_eq!(wj.old_root, root);
     assert_eq!(wj.new_root, expected_withdraw_new_root);
-    assert_eq!(wj.nullifier, expected_withdraw_nullifier);
     assert_eq!(wj.amount, withdraw_amount);
     assert_eq!(wj.recipient, eth_recipient);
 
     println!(
-        "Journal (124 bytes): old_root=0x{}..., new_root=0x{}..., nullifier=0x{}..., amount={}, recipient=0x{}",
+        "Journal (92 bytes): old_root=0x{}..., new_root=0x{}..., amount={}, recipient=0x{}",
         hex::encode(&wj.old_root[..4]),
         hex::encode(&wj.new_root[..4]),
-        hex::encode(&wj.nullifier[..4]),
         wj.amount,
         hex::encode(wj.recipient),
     );

@@ -7,19 +7,17 @@
 
 use anyhow::{ensure, Result};
 
-/// Transfer circuit public outputs: old_root || new_root || nullifier (96 bytes).
+/// Transfer circuit public outputs: old_root || new_root (64 bytes).
 pub struct TransferJournal {
     pub old_root: [u8; 32],
     pub new_root: [u8; 32],
-    pub nullifier: [u8; 32],
 }
 
 /// Withdrawal circuit public outputs:
-/// old_root || new_root || nullifier || amount_be || recipient (124 bytes).
+/// old_root || new_root || amount_be || recipient (92 bytes).
 pub struct WithdrawalJournal {
     pub old_root: [u8; 32],
     pub new_root: [u8; 32],
-    pub nullifier: [u8; 32],
     pub amount: u64,
     pub recipient: [u8; 20],
 }
@@ -33,8 +31,8 @@ pub struct DisclosureJournal {
 }
 
 impl TransferJournal {
-    /// Expected journal size in bytes: 32 + 32 + 32 = 96.
-    pub const SIZE: usize = 96;
+    /// Expected journal size in bytes: 32 + 32 = 64.
+    pub const SIZE: usize = 64;
 
     /// Parse a transfer journal from raw bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
@@ -47,14 +45,13 @@ impl TransferJournal {
         Ok(Self {
             old_root: bytes[..32].try_into()?,
             new_root: bytes[32..64].try_into()?,
-            nullifier: bytes[64..96].try_into()?,
         })
     }
 }
 
 impl WithdrawalJournal {
-    /// Expected journal size in bytes: 32 + 32 + 32 + 8 + 20 = 124.
-    pub const SIZE: usize = 124;
+    /// Expected journal size in bytes: 32 + 32 + 8 + 20 = 92.
+    pub const SIZE: usize = 92;
 
     /// Parse a withdrawal journal from raw bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
@@ -67,9 +64,8 @@ impl WithdrawalJournal {
         Ok(Self {
             old_root: bytes[..32].try_into()?,
             new_root: bytes[32..64].try_into()?,
-            nullifier: bytes[64..96].try_into()?,
-            amount: u64::from_be_bytes(bytes[96..104].try_into()?),
-            recipient: bytes[104..124].try_into()?,
+            amount: u64::from_be_bytes(bytes[64..72].try_into()?),
+            recipient: bytes[72..92].try_into()?,
         })
     }
 }
@@ -103,17 +99,15 @@ mod tests {
         let mut bytes = vec![0u8; TransferJournal::SIZE];
         bytes[0] = 0xAA; // old_root first byte
         bytes[32] = 0xBB; // new_root first byte
-        bytes[64] = 0xCC; // nullifier first byte
 
         let journal = TransferJournal::from_bytes(&bytes).unwrap();
         assert_eq!(journal.old_root[0], 0xAA);
         assert_eq!(journal.new_root[0], 0xBB);
-        assert_eq!(journal.nullifier[0], 0xCC);
     }
 
     #[test]
     fn test_transfer_journal_wrong_size() {
-        let bytes = vec![0u8; 95];
+        let bytes = vec![0u8; 63];
         assert!(TransferJournal::from_bytes(&bytes).is_err());
     }
 
@@ -122,21 +116,19 @@ mod tests {
         let mut bytes = vec![0u8; WithdrawalJournal::SIZE];
         bytes[0] = 0xAA; // old_root
         bytes[32] = 0xBB; // new_root
-        bytes[64] = 0xCC; // nullifier
-        bytes[96..104].copy_from_slice(&500u64.to_be_bytes()); // amount
-        bytes[104] = 0xDD; // recipient first byte
+        bytes[64..72].copy_from_slice(&500u64.to_be_bytes()); // amount
+        bytes[72] = 0xDD; // recipient first byte
 
         let journal = WithdrawalJournal::from_bytes(&bytes).unwrap();
         assert_eq!(journal.old_root[0], 0xAA);
         assert_eq!(journal.new_root[0], 0xBB);
-        assert_eq!(journal.nullifier[0], 0xCC);
         assert_eq!(journal.amount, 500);
         assert_eq!(journal.recipient[0], 0xDD);
     }
 
     #[test]
     fn test_withdrawal_journal_wrong_size() {
-        let bytes = vec![0u8; 123];
+        let bytes = vec![0u8; 91];
         assert!(WithdrawalJournal::from_bytes(&bytes).is_err());
     }
 

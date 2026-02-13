@@ -62,7 +62,7 @@ Off-chain (Operator)          ZK Layer (RISC Zero)         On-chain (Ethereum)
 +-----------------------+     +---------------------+     +---------------------+
 | Account database      | --> | Prove state valid   | --> | Verify proof        |
 | - pubkeys, balances   |     | - Transfer correct   |     | - Store Merkle root |
-| - salts, Merkle tree  |     | - Withdrawal valid   |     | - Record nullifiers |
+| - salts, Merkle tree  |     | - Withdrawal valid   |     | - Track state root  |
 |                       |     | - Disclosure valid   |     | - Bridge ERC20      |
 +-----------------------+     +---------------------+     +---------------------+
 ```
@@ -198,7 +198,6 @@ diy-validium/
 ## References
 
 - [RISC Zero Documentation](https://dev.risczero.com/)
-- [Tornado Cash -- Nullifier Design](https://tornado.cash/)
 - [Zcash Protocol Specification](https://zips.z.cash/protocol/protocol.pdf)
 - [Validium on ethereum.org](https://ethereum.org/en/developers/docs/scaling/validium/)
 - [Penumbra -- Viewing Keys](https://protocol.penumbra.zone/)

@@ -58,8 +58,8 @@ contract ValidiumBridgeTest is Test {
 
     bytes32 internal constant STATE_ROOT = keccak256("test-state-root");
     bytes32 internal constant NEW_ROOT = keccak256("test-new-state-root");
+    bytes32 internal constant THIRD_ROOT = keccak256("test-third-root");
     bytes32 internal constant ALLOWLIST_ROOT = keccak256("test-allowlist-root");
-    bytes32 internal constant NULLIFIER = keccak256("test-nullifier");
     bytes32 internal constant PUBKEY = keccak256("test-pubkey");
 
     address internal alice = address(0xA11CE);
@@ -136,13 +136,6 @@ contract ValidiumBridgeTest is Test {
     // 4. Deposit calls verifier.verify with membership journal
     // ---------------------------------------------------------------
     function test_deposit_requiresMembershipProof() public {
-        // This test verifies the deposit path exercises the verifier.
-        // With MockRiscZeroVerifier (always succeeds), the deposit should
-        // complete. The journal should be abi.encodePacked(allowlistRoot).
-        //
-        // We verify indirectly: if deposit succeeds with the mock verifier,
-        // the membership proof path was exercised. A failing verifier mock
-        // would cause revert (tested separately if needed).
         uint256 amount = DEPOSIT_AMOUNT;
         token.mint(alice, amount);
 
@@ -156,20 +149,17 @@ contract ValidiumBridgeTest is Test {
     }
 
     // ---------------------------------------------------------------
-    // 5. Withdraw verifies proof, updates stateRoot, marks nullifier,
-    //    and transfers tokens to recipient
+    // 5. Withdraw verifies proof, updates stateRoot, and transfers tokens
     // ---------------------------------------------------------------
     function test_withdraw_updatesStateAndTransfers() public {
         // First, fund the bridge via a deposit
         _depositAs(alice, WITHDRAW_AMOUNT, PUBKEY);
 
         // Execute withdrawal to bob
-        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, NULLIFIER, WITHDRAW_AMOUNT, bob);
+        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
 
         // State root should be updated
         assertEq(bridge.stateRoot(), NEW_ROOT);
-        // Nullifier should be marked used
-        assertTrue(bridge.nullifiers(NULLIFIER));
         // Bob should have received the tokens
         assertEq(token.balanceOf(bob), WITHDRAW_AMOUNT);
         // Bridge balance should be zero
@@ -184,9 +174,9 @@ contract ValidiumBridgeTest is Test {
         _depositAs(alice, WITHDRAW_AMOUNT, PUBKEY);
 
         vm.expectEmit(true, true, true, true);
-        emit ValidiumBridge.Withdrawal(NULLIFIER, bob, WITHDRAW_AMOUNT);
+        emit ValidiumBridge.Withdrawal(bob, WITHDRAW_AMOUNT);
 
-        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, NULLIFIER, WITHDRAW_AMOUNT, bob);
+        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
     }
 
     // ---------------------------------------------------------------
@@ -196,22 +186,22 @@ contract ValidiumBridgeTest is Test {
         bytes32 wrongRoot = keccak256("wrong-root");
 
         vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.StaleState.selector, STATE_ROOT, wrongRoot));
-        bridge.withdraw(hex"", wrongRoot, NEW_ROOT, NULLIFIER, WITHDRAW_AMOUNT, bob);
+        bridge.withdraw(hex"", wrongRoot, NEW_ROOT, WITHDRAW_AMOUNT, bob);
     }
 
     // ---------------------------------------------------------------
-    // 8. Withdraw reverts when nullifier already used (double-spend)
+    // 8. Sequential root check prevents replay (double-spend protection)
     // ---------------------------------------------------------------
-    function test_withdraw_revertsDoubleSpend() public {
+    function test_withdraw_sequentialRootPreventsReplay() public {
         // Fund the bridge with enough for two withdrawals
         _depositAs(alice, WITHDRAW_AMOUNT * 2, PUBKEY);
 
-        // First withdrawal succeeds
-        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, NULLIFIER, WITHDRAW_AMOUNT, bob);
+        // First withdrawal succeeds: STATE_ROOT -> NEW_ROOT
+        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
 
-        // Second withdrawal with same nullifier should revert
-        vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.NullifierAlreadyUsed.selector, NULLIFIER));
-        bridge.withdraw(hex"", NEW_ROOT, keccak256("another-root"), NULLIFIER, WITHDRAW_AMOUNT, bob);
+        // Replaying with old STATE_ROOT reverts — sequential root check prevents double-spend
+        vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.StaleState.selector, NEW_ROOT, STATE_ROOT));
+        bridge.withdraw(hex"", STATE_ROOT, THIRD_ROOT, WITHDRAW_AMOUNT, bob);
     }
 
     // ---------------------------------------------------------------
@@ -219,7 +209,7 @@ contract ValidiumBridgeTest is Test {
     // ---------------------------------------------------------------
     function test_withdraw_revertsZeroAmount() public {
         vm.expectRevert(ValidiumBridge.InvalidAmount.selector);
-        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, NULLIFIER, 0, bob);
+        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, 0, bob);
     }
 
     // ---------------------------------------------------------------
@@ -229,6 +219,6 @@ contract ValidiumBridgeTest is Test {
         // Bridge has zero tokens -- withdrawal should revert due to
         // ERC20 transfer underflow in MockERC20.transfer
         vm.expectRevert();
-        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, NULLIFIER, WITHDRAW_AMOUNT, bob);
+        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
     }
 }

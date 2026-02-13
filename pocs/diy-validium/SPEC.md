@@ -97,25 +97,18 @@ commitment = SHA256(pubkey || balance_le || salt)   // 72 bytes input
 internal_node = SHA256(left_child || right_child)
 ```
 
-**Nullifier (double-spend prevention):**
-```
-nullifier = SHA256(secret_key || old_commitment || domain_tag)
-```
-Domain tags: `"transfer_v1"`, `"withdrawal_v1"`. Commitment-bound — each state transition generates a unique nullifier per consumed balance state.
-
-> **Design note:** In the current sequential model, the contract's `oldRoot == stateRoot` check already prevents replay — after any operation the root changes and old proofs cannot be resubmitted. Nullifiers provide defense-in-depth and become essential if the protocol evolves to support batching (multiple operations per root update), where several proofs could reference the same pre-update root. They also serve as an on-chain audit trail of consumed states, following established conventions from Zcash and Tornado Cash.
-
 ### On-Chain State
 
 ```solidity
 // TransferVerifier
 bytes32 public stateRoot;
-mapping(bytes32 => bool) public nullifiers;
 
 // ValidiumBridge (extends with ERC20)
 IERC20 public token;
 bytes32 public allowlistRoot;
 ```
+
+> **No nullifiers needed:** In an account model with sequential state updates, the contract's `require(oldRoot == stateRoot)` check prevents replay — each operation changes the root, making stale proofs instantly invalid. Nullifiers are essential in UTXO models (Zcash, Tornado Cash) where independent notes can be spent, but are redundant here. This matches Prividium (ZKSync), which also uses sequential root checks without nullifiers.
 
 **Token Conservation Invariant:** The bridge contract's ERC20 balance must always equal the sum of all private account balances. This is maintained by construction: deposits increase both the bridge balance and one private balance; withdrawals decrease both. The invariant is not enforced by an on-chain check — it follows from the proof structure (withdrawal amounts are public in the journal and verified by the bridge).
 
@@ -139,7 +132,7 @@ Sender         Operator              RISC Zero          Contract
 
 ### Circuit: Transfer Proof
 
-**Public Inputs (Journal):** `old_root` (32) + `new_root` (32) + `nullifier` (32) = 96 bytes
+**Public Inputs (Journal):** `old_root` (32) + `new_root` (32) = 64 bytes
 
 **Private Inputs:** sender_sk, sender_balance, sender_salt, sender_path, sender_indices, amount, recipient_pubkey, recipient_balance, recipient_salt, recipient_path, recipient_indices, new_sender_salt, new_recipient_salt
 
@@ -160,10 +153,9 @@ let old_root = compute_root(sender_old_leaf, &sender_path, &sender_indices);
 verify_membership(recipient_old_leaf, &recipient_path, &recipient_indices, old_root);
 
 // State transition: compute new root with updated balances
-let nullifier = sha256(&[&sender_sk, &sender_old_leaf, b"transfer_v1"].concat());
 let new_root = compute_new_root(sender_new_leaf, recipient_new_leaf, ...);
 
-commit(old_root, new_root, nullifier);
+commit(old_root, new_root);
 ```
 
 **Dual-Leaf Root Recomputation:** When two leaves change simultaneously, the algorithm finds the divergence depth (shallowest level where sender/recipient indices differ), recomputes each branch independently below it, joins them at divergence, and hashes upward using shared siblings.
@@ -171,12 +163,10 @@ commit(old_root, new_root, nullifier);
 ### Contract: TransferVerifier
 
 ```solidity
-function executeTransfer(bytes seal, bytes32 oldRoot, bytes32 newRoot, bytes32 nullifier) {
+function executeTransfer(bytes seal, bytes32 oldRoot, bytes32 newRoot) {
     require(oldRoot == stateRoot, "Stale state");
-    require(!nullifiers[nullifier], "Double spend");
-    verifier.verify(seal, IMAGE_ID, sha256(abi.encodePacked(oldRoot, newRoot, nullifier)));
+    verifier.verify(seal, IMAGE_ID, sha256(abi.encodePacked(oldRoot, newRoot)));
     stateRoot = newRoot;
-    nullifiers[nullifier] = true;
 }
 ```
 
@@ -204,7 +194,7 @@ User                    Contract                 Operator
 
 Single-leaf state transition: balance decreases, funds exit to L1.
 
-**Public Inputs (Journal):** `old_root` (32) + `new_root` (32) + `nullifier` (32) + `amount` (8, big-endian) + `recipient` (20) = 124 bytes
+**Public Inputs (Journal):** `old_root` (32) + `new_root` (32) + `amount` (8, big-endian) + `recipient` (20) = 92 bytes
 
 **Circuit Logic:**
 ```rust
@@ -216,11 +206,10 @@ let old_root = compute_root(old_leaf, &path, &indices);
 assert!(amount > 0, "Withdrawal amount must be positive");
 assert!(balance >= amount, "Insufficient balance");
 
-let nullifier = sha256(&[&secret_key, &old_leaf, b"withdrawal_v1"].concat());
 let new_leaf = account_commitment(&pubkey, balance - amount, &new_salt);
 let new_root = compute_root(new_leaf, &path, &indices);
 
-commit(old_root, new_root, nullifier, amount, recipient);
+commit(old_root, new_root, amount, recipient);
 ```
 
 ### Contract: ValidiumBridge
@@ -234,11 +223,10 @@ function deposit(uint256 amount, bytes32 pubkey, bytes calldata membershipSeal) 
 }
 
 function withdraw(bytes seal, bytes32 oldRoot, bytes32 newRoot,
-                  bytes32 nullifier, uint64 amount, address recipient) external {
-    require(oldRoot == stateRoot && !nullifiers[nullifier] && amount > 0);
+                  uint64 amount, address recipient) external {
+    require(oldRoot == stateRoot && amount > 0);
     verifier.verify(seal, WITHDRAWAL_IMAGE_ID, sha256(journal));
     stateRoot = newRoot;
-    nullifiers[nullifier] = true;
     token.transfer(recipient, amount);  // CEI: state updates before external call
 }
 ```
@@ -304,7 +292,7 @@ function verifyDisclosure(bytes seal, bytes32 root, uint64 threshold,
 }
 ```
 
-> Read-only contract: no nullifiers, no root updates. Disclosure proofs are attestations, not state transitions.
+> Read-only contract: no root updates. Disclosure proofs are attestations, not state transitions.
 
 **Proof Freshness:** A disclosure proof is bound to a specific Merkle root. If the operator updates state (via transfer or withdrawal) between proof generation and auditor verification, the on-chain `stateRoot` will have moved and the `DisclosureVerifier` will reject the proof with "Root mismatch". In practice, the auditor should verify the proof promptly, or the user must regenerate the proof against the current root. Off-chain verification (without the contract) avoids this issue since the auditor can accept any recent root.
 
@@ -323,7 +311,7 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 | Operation | What's Public | What's Private | Who Learns What |
 |-----------|--------------|----------------|-----------------|
 | **Deposit** | Amount, depositor address | Account position in tree | Public observers see deposit |
-| **Transfer** | Nullifiers, Merkle roots | Amount, sender, recipient, balances | Only operator sees details |
+| **Transfer** | Merkle roots | Amount, sender, recipient, balances | Only operator sees details |
 | **Disclosure** | Threshold, disclosure_key_hash | Actual balance, pubkey, tree position | Auditor learns: balance >= threshold. Nothing more. |
 | **Withdrawal** | Amount, recipient address | Prior balance, account history | Public observers see withdrawal |
 
@@ -345,7 +333,7 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 
 **Enforced by ZK + on-chain verification:**
 - Cannot forge a transfer or withdrawal without the sender's secret key
-- Cannot double-spend (nullifiers recorded on-chain)
+- Cannot double-spend (sequential root check prevents replay)
 - Cannot steal funds via withdrawal (proofs verified on-chain)
 - Cannot update state root without a valid proof
 - Cannot fake a disclosure proof (bound to real account state + specific auditor)
@@ -377,7 +365,6 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 
 - **Commitment** — Hash that hides a value but can be verified later
 - **Merkle Root** — Single hash representing entire tree state
-- **Nullifier** — Unique identifier that prevents double-use of a commitment
 - **Journal** — Public outputs from a RISC Zero proof
 - **Seal** — The proof bytes that can be verified on-chain
 - **Validium** — L2 where data is off-chain but validity is proven
@@ -387,7 +374,6 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 ## References
 
 - [RISC Zero Documentation](https://dev.risczero.com/)
-- [Tornado Cash — Nullifier Design](https://tornado.cash/)
 - [Zcash Protocol Specification](https://zips.z.cash/protocol/protocol.pdf)
 - [Validium on ethereum.org](https://ethereum.org/en/developers/docs/scaling/validium/)
 - [Penumbra — Viewing Keys](https://protocol.penumbra.zone/)

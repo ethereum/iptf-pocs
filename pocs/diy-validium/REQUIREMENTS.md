@@ -17,8 +17,8 @@ Financial institutions need to transact on Ethereum while keeping balances and t
 ### Transfer (Private Payment)
 
 - User can transfer value to another user privately
-- Transfer proof demonstrates: sender owns an account in the current state, sender has sufficient balance, state transition is correct, nullifier prevents double-spend
-- Contract updates state root and records nullifier atomically
+- Transfer proof demonstrates: sender owns an account in the current state, sender has sufficient balance, state transition is correct
+- Contract updates state root atomically after proof verification
 - Recipient's balance is updated off-chain by operator
 
 ### Bridge (Deposit + Withdrawal)
@@ -26,21 +26,21 @@ Financial institutions need to transact on Ethereum while keeping balances and t
 - User can deposit ERC20 tokens to receive private balance
 - Deposits are gated by allowlist membership proof
 - User can withdraw private balance to receive ERC20 tokens
-- Withdrawal proof demonstrates: account ownership, sufficient balance, state transition, nullifier
+- Withdrawal proof demonstrates: account ownership, sufficient balance, state transition
 - Total private supply equals total escrowed tokens (conservation)
 
 ### Disclosure (Compliance)
 
 - User can prove balance >= threshold to a specific auditor
 - Disclosure proof is bound to a specific auditor via disclosure key
-- Disclosure is read-only (no state mutation, no nullifier)
+- Disclosure is read-only (no state mutation)
 - Auditor learns only that balance satisfies the threshold
 
 ### Access Control
 
 - Only operator can update state roots
 - Anyone can submit valid proofs for verification
-- Nullifier registry prevents double-spending
+- Sequential root check prevents double-spending (each operation changes stateRoot, invalidating stale proofs)
 
 ## 3. Privacy Requirements (MUST)
 
@@ -54,7 +54,6 @@ Financial institutions need to transact on Ethereum while keeping balances and t
 ### Public Data (visible on-chain)
 
 - Merkle roots (allowlist root, accounts root)
-- Nullifiers (opaque 32-byte values)
 - Proof validity (pass/fail)
 - Total deposited/withdrawn amounts
 - Contract events and timestamps
@@ -66,7 +65,7 @@ Financial institutions need to transact on Ethereum while keeping balances and t
 
 ## 4. Security Requirements (MUST)
 
-- **No Double-Spend**: Nullifier scheme prevents spending the same balance twice
+- **No Double-Spend**: Sequential root check prevents spending the same balance twice
 - **No Forgery**: Cannot create valid proofs for accounts you don't own (requires secret key)
 - **No Replay**: Proofs are bound to specific state roots
 - **Balance Conservation**: Transfers cannot create or destroy value

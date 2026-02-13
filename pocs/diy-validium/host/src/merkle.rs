@@ -219,12 +219,11 @@ pub fn compute_new_root(
     current
 }
 
-/// Verify a transfer proof as specified in SPEC.md Phase 3 circuit logic.
+/// Verify a transfer proof as specified in SPEC.md circuit logic.
 ///
 /// This mirrors the transfer circuit: derives the sender pubkey from the
 /// secret key, verifies both accounts in the old tree, checks balance
-/// constraints, verifies the nullifier, computes new commitments, and
-/// asserts the new root matches.
+/// constraints, computes new commitments, and asserts the new root matches.
 ///
 /// Panics on any verification failure.
 #[allow(clippy::too_many_arguments)]
@@ -244,7 +243,6 @@ pub fn verify_transfer(
     new_recipient_salt: [u8; 32],
     old_root: [u8; 32],
     new_root: [u8; 32],
-    nullifier: [u8; 32],
 ) {
     // 1. Derive sender pubkey from secret key
     let sender_pubkey = sha256_hash(&sender_sk);
@@ -278,16 +276,11 @@ pub fn verify_transfer(
         "Recipient balance overflow"
     );
 
-    // 8. Compute and verify commitment-bound nullifier
-    let computed_nullifier =
-        sha256_hash(&[&sender_sk[..], &sender_old_leaf[..], b"transfer_v1"].concat());
-    assert_eq!(computed_nullifier, nullifier, "Nullifier mismatch");
-
-    // 9. Compute new balances (safe after checks in steps 5-7)
+    // 8. Compute new balances (safe after checks in steps 5-7)
     let new_sender_balance = sender_balance - amount;
     let new_recipient_balance = recipient_balance + amount;
 
-    // 10. Compute new leaf commitments
+    // 9. Compute new leaf commitments
     let sender_new_leaf = account_commitment(&sender_pubkey, new_sender_balance, &new_sender_salt);
     let recipient_new_leaf = account_commitment(
         &recipient_pubkey,
@@ -295,7 +288,7 @@ pub fn verify_transfer(
         &new_recipient_salt,
     );
 
-    // 11. Recompute new root with both leaves updated
+    // 10. Recompute new root with both leaves updated
     let computed_new_root = compute_new_root(
         sender_new_leaf,
         sender_indices,
@@ -334,12 +327,12 @@ pub fn compute_single_leaf_root(
     current
 }
 
-/// Verify a withdrawal proof as specified in SPEC.md Phase 4 circuit logic.
+/// Verify a withdrawal proof as specified in SPEC.md circuit logic.
 ///
 /// This mirrors the withdrawal circuit: derives the pubkey from the secret
 /// key, verifies account membership in the old tree, checks balance
-/// constraints, verifies the nullifier, computes the new commitment with
-/// reduced balance, and asserts the new root matches via single-leaf update.
+/// constraints, computes the new commitment with reduced balance, and
+/// asserts the new root matches via single-leaf update.
 ///
 /// The `recipient` parameter is committed to the journal in the guest for
 /// on-chain use but does not affect the circuit's state transition logic.
@@ -357,7 +350,6 @@ pub fn verify_withdrawal(
     _recipient: [u8; 20],
     old_root: [u8; 32],
     new_root: [u8; 32],
-    nullifier: [u8; 32],
 ) {
     // 1. Derive pubkey from secret key
     let pubkey = sha256_hash(&secret_key);
@@ -374,18 +366,13 @@ pub fn verify_withdrawal(
     // 5. Check balance >= amount
     assert!(balance >= amount, "Insufficient balance");
 
-    // 6. Compute and verify commitment-bound nullifier
-    let computed_nullifier =
-        sha256_hash(&[&secret_key[..], &old_leaf[..], b"withdrawal_v1"].concat());
-    assert_eq!(computed_nullifier, nullifier, "Nullifier mismatch");
-
-    // 7. Compute new balance
+    // 6. Compute new balance
     let new_balance = balance - amount;
 
-    // 8. Compute new leaf commitment with reduced balance and fresh salt
+    // 7. Compute new leaf commitment with reduced balance and fresh salt
     let new_leaf = account_commitment(&pubkey, new_balance, &new_salt);
 
-    // 9. Compute new root via single-leaf update
+    // 8. Compute new root via single-leaf update
     let computed_new_root = compute_single_leaf_root(new_leaf, path, indices);
     assert_eq!(
         computed_new_root, new_root,

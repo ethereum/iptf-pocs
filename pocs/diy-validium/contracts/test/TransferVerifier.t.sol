@@ -16,8 +16,7 @@ contract TransferVerifierTest is Test {
 
     bytes32 internal constant ROOT = keccak256("test-state-root");
     bytes32 internal constant NEW_ROOT = keccak256("test-new-state-root");
-    bytes32 internal constant NULLIFIER = keccak256("test-nullifier");
-    bytes32 internal constant OTHER_NULLIFIER = keccak256("test-nullifier-2");
+    bytes32 internal constant THIRD_ROOT = keccak256("test-third-root");
 
     function setUp() public {
         mockVerifier = new MockRiscZeroVerifier();
@@ -45,58 +44,50 @@ contract TransferVerifierTest is Test {
     // 3. executeTransfer updates stateRoot to newRoot
     // ---------------------------------------------------------------
     function test_executeTransfer_updatesStateRoot() public {
-        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT, NULLIFIER);
+        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT);
         assertEq(transferVerifier.stateRoot(), NEW_ROOT);
     }
 
     // ---------------------------------------------------------------
-    // 4. executeTransfer marks nullifier as used
-    // ---------------------------------------------------------------
-    function test_executeTransfer_marksNullifierUsed() public {
-        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT, NULLIFIER);
-        assertTrue(transferVerifier.nullifiers(NULLIFIER));
-    }
-
-    // ---------------------------------------------------------------
-    // 5. executeTransfer emits Transfer event with correct args
+    // 4. executeTransfer emits Transfer event with correct args
     // ---------------------------------------------------------------
     function test_executeTransfer_emitsTransferEvent() public {
         vm.expectEmit(true, true, true, true);
-        emit TransferVerifier.Transfer(ROOT, NEW_ROOT, NULLIFIER);
-        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT, NULLIFIER);
+        emit TransferVerifier.Transfer(ROOT, NEW_ROOT);
+        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT);
     }
 
     // ---------------------------------------------------------------
-    // 6. executeTransfer reverts when oldRoot != stateRoot (stale state)
+    // 5. executeTransfer reverts when oldRoot != stateRoot (stale state)
     // ---------------------------------------------------------------
     function test_executeTransfer_revertsStaleState() public {
         bytes32 wrongRoot = keccak256("wrong-root");
         vm.expectRevert(abi.encodeWithSelector(TransferVerifier.StaleState.selector, ROOT, wrongRoot));
-        transferVerifier.executeTransfer(hex"", wrongRoot, NEW_ROOT, NULLIFIER);
+        transferVerifier.executeTransfer(hex"", wrongRoot, NEW_ROOT);
     }
 
     // ---------------------------------------------------------------
-    // 7. executeTransfer reverts when nullifier already used (double-spend)
+    // 6. Sequential root check prevents replay (double-spend protection)
     // ---------------------------------------------------------------
-    function test_executeTransfer_revertsDoubleSpend() public {
-        // First transfer succeeds
-        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT, NULLIFIER);
+    function test_executeTransfer_sequentialRootPreventsReplay() public {
+        // First transfer succeeds: ROOT -> NEW_ROOT
+        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT);
 
-        // Second transfer with the same nullifier should revert
-        vm.expectRevert(abi.encodeWithSelector(TransferVerifier.NullifierAlreadyUsed.selector, NULLIFIER));
-        transferVerifier.executeTransfer(hex"", NEW_ROOT, keccak256("another-root"), NULLIFIER);
+        // Replaying with old ROOT reverts — sequential root check prevents double-spend
+        vm.expectRevert(abi.encodeWithSelector(TransferVerifier.StaleState.selector, NEW_ROOT, ROOT));
+        transferVerifier.executeTransfer(hex"", ROOT, THIRD_ROOT);
     }
 
     // ---------------------------------------------------------------
-    // 8. Second transfer with same nullifier reverts even with different roots
+    // 7. Two sequential transfers succeed with correct chaining
     // ---------------------------------------------------------------
-    function test_executeTransfer_revertsWithDifferentNullifier() public {
-        // First transfer succeeds
-        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT, NULLIFIER);
+    function test_executeTransfer_sequentialTransfersSucceed() public {
+        // First transfer: ROOT -> NEW_ROOT
+        transferVerifier.executeTransfer(hex"", ROOT, NEW_ROOT);
+        assertEq(transferVerifier.stateRoot(), NEW_ROOT);
 
-        // Second transfer with same nullifier but different roots reverts
-        bytes32 thirdRoot = keccak256("third-root");
-        vm.expectRevert(abi.encodeWithSelector(TransferVerifier.NullifierAlreadyUsed.selector, NULLIFIER));
-        transferVerifier.executeTransfer(hex"", NEW_ROOT, thirdRoot, NULLIFIER);
+        // Second transfer: NEW_ROOT -> THIRD_ROOT
+        transferVerifier.executeTransfer(hex"", NEW_ROOT, THIRD_ROOT);
+        assertEq(transferVerifier.stateRoot(), THIRD_ROOT);
     }
 }

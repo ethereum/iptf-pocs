@@ -3,7 +3,7 @@
 //! Proves a valid private transfer between two accounts in the Merkle tree.
 //! Dual-leaf state transition: sender balance decreases, recipient increases.
 //!
-//! Public inputs (journal): old_root, new_root, nullifier
+//! Public inputs (journal): old_root, new_root
 //! Private inputs: sender_sk, sender_balance, sender_salt, sender_path,
 //!   sender_indices, amount, recipient_pubkey, recipient_balance, recipient_salt,
 //!   recipient_path, recipient_indices, new_sender_salt, new_recipient_salt
@@ -99,8 +99,6 @@ fn main() {
     verify_membership(recipient_old_leaf, &recipient_path, &recipient_indices, old_root);
 
     // State transition
-    let nullifier = sha256(&[&sender_sk[..], &sender_old_leaf[..], b"transfer_v1"].concat());
-
     let new_sender_balance = sender_balance - amount;
     let new_recipient_balance = recipient_balance + amount;
 
@@ -120,5 +118,4 @@ fn main() {
     // Commit public outputs
     risc0_zkvm::guest::env::commit_slice(&old_root);
     risc0_zkvm::guest::env::commit_slice(&new_root);
-    risc0_zkvm::guest::env::commit_slice(&nullifier);
 }

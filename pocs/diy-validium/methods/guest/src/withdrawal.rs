@@ -3,7 +3,7 @@
 //! Proves a valid withdrawal from an account in the Merkle tree.
 //! Single-leaf state transition: balance decreases, funds exit to L1.
 //!
-//! Public inputs (journal): old_root, new_root, nullifier, amount, recipient
+//! Public inputs (journal): old_root, new_root, amount, recipient
 //! Private inputs: secret_key, balance, salt, path, indices, amount, new_salt, recipient
 
 #![no_main]
@@ -32,8 +32,6 @@ fn main() {
     assert!(amount > 0, "Withdrawal amount must be positive");
     assert!(balance >= amount, "Insufficient balance");
 
-    let nullifier = sha256(&[&secret_key[..], &old_leaf[..], b"withdrawal_v1"].concat());
-
     let new_balance = balance - amount;
     let new_leaf = account_commitment(&pubkey, new_balance, &new_salt);
     let new_root = compute_root(new_leaf, &path, &indices);
@@ -41,7 +39,6 @@ fn main() {
     // Commit public outputs
     risc0_zkvm::guest::env::commit_slice(&old_root);
     risc0_zkvm::guest::env::commit_slice(&new_root);
-    risc0_zkvm::guest::env::commit_slice(&nullifier);
     risc0_zkvm::guest::env::commit_slice(&amount.to_be_bytes());
     risc0_zkvm::guest::env::commit_slice(&recipient);
 }
