@@ -1,8 +1,8 @@
-//! Integration tests for the disclosure proof circuit logic (Phase 4).
+//! Integration tests for the disclosure proof guest program logic.
 //!
-//! These tests validate the disclosure proof circuit logic as a pure Rust
+//! These tests validate the disclosure proof logic as a pure Rust
 //! function on the host side, without requiring the RISC Zero zkVM. The
-//! circuit logic from SPEC.md (Phase 4, "Circuit: Disclosure Proof") takes
+//! guest program from SPEC.md ("Guest Program: Disclosure Proof") takes
 //! an account owner's secret key, account data, Merkle proof, a threshold,
 //! and an auditor pubkey, then:
 //!   1. Derives pubkey from secret key: SHA256(sk)
@@ -69,7 +69,7 @@ fn setup_disclosure_tree(
 }
 
 // -------------------------------------------------------------------
-// verify_disclosure tests (mirrors SPEC.md Phase 4 circuit logic)
+// verify_disclosure tests (mirrors SPEC.md guest program logic)
 // -------------------------------------------------------------------
 
 #[test]

@@ -1,6 +1,6 @@
 //! DIY Validium host library
 //!
-//! Provides Merkle tree operations and circuit input preparation
+//! Provides Merkle tree operations and guest program input preparation
 //! for the diy-validium protocol.
 
 pub mod accounts;

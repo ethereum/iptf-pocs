@@ -1,19 +1,19 @@
-//! Typed journal structs for parsing guest circuit public outputs.
+//! Typed journal structs for parsing guest program public outputs.
 //!
-//! Guest circuits commit raw bytes via `env::commit_slice` for on-chain
+//! Guest programs commit raw bytes via `env::commit_slice` for on-chain
 //! compatibility (Solidity uses `abi.encodePacked` with the same layout).
 //! These structs provide typed parsing on the host side, replacing manual
 //! byte slicing with structured access.
 
 use anyhow::{ensure, Result};
 
-/// Transfer circuit public outputs: old_root || new_root (64 bytes).
+/// Transfer guest program public outputs: old_root || new_root (64 bytes).
 pub struct TransferJournal {
     pub old_root: [u8; 32],
     pub new_root: [u8; 32],
 }
 
-/// Withdrawal circuit public outputs:
+/// Withdrawal guest program public outputs:
 /// old_root || new_root || amount_be || recipient (92 bytes).
 pub struct WithdrawalJournal {
     pub old_root: [u8; 32],
@@ -22,7 +22,7 @@ pub struct WithdrawalJournal {
     pub recipient: [u8; 20],
 }
 
-/// Disclosure circuit public outputs:
+/// Disclosure guest program public outputs:
 /// merkle_root || threshold_be || disclosure_key_hash (72 bytes).
 pub struct DisclosureJournal {
     pub merkle_root: [u8; 32],

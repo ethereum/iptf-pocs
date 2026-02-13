@@ -1,7 +1,7 @@
-//! Integration tests for the withdrawal proof circuit logic.
+//! Integration tests for the withdrawal proof guest program logic.
 //!
-//! These tests validate the withdrawal proof circuit logic as a pure Rust function
-//! on the host side, without requiring the RISC Zero zkVM. The circuit logic
+//! These tests validate the withdrawal proof logic as a pure Rust function
+//! on the host side, without requiring the RISC Zero zkVM. The guest program
 //! takes account data, a Merkle path, amount, new salt, and recipient address, then:
 //!   1. Derives pubkey from secret key: SHA256(sk)
 //!   2. Verifies account membership in old tree
@@ -81,7 +81,7 @@ fn rebuild_tree_after_withdrawal(
 }
 
 // -------------------------------------------------------------------
-// verify_withdrawal tests (mirrors SPEC.md circuit logic)
+// verify_withdrawal tests (mirrors SPEC.md guest program logic)
 // -------------------------------------------------------------------
 
 #[test]

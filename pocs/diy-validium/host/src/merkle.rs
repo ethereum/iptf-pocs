@@ -219,9 +219,9 @@ pub fn compute_new_root(
     current
 }
 
-/// Verify a transfer proof as specified in SPEC.md circuit logic.
+/// Verify a transfer proof as specified in SPEC.md guest program logic.
 ///
-/// This mirrors the transfer circuit: derives the sender pubkey from the
+/// This mirrors the transfer guest program: derives the sender pubkey from the
 /// secret key, verifies both accounts in the old tree, checks balance
 /// constraints, computes new commitments, and asserts the new root matches.
 ///
@@ -327,15 +327,15 @@ pub fn compute_single_leaf_root(
     current
 }
 
-/// Verify a withdrawal proof as specified in SPEC.md circuit logic.
+/// Verify a withdrawal proof as specified in SPEC.md guest program logic.
 ///
-/// This mirrors the withdrawal circuit: derives the pubkey from the secret
+/// This mirrors the withdrawal guest program: derives the pubkey from the secret
 /// key, verifies account membership in the old tree, checks balance
 /// constraints, computes the new commitment with reduced balance, and
 /// asserts the new root matches via single-leaf update.
 ///
 /// The `recipient` parameter is committed to the journal in the guest for
-/// on-chain use but does not affect the circuit's state transition logic.
+/// on-chain use but does not affect the guest program's state transition logic.
 ///
 /// Panics on any verification failure.
 #[allow(clippy::too_many_arguments)]
@@ -389,9 +389,9 @@ pub fn compute_disclosure_key_hash(pubkey: &[u8; 32], auditor_pubkey: &[u8; 32])
     sha256_hash(&[&pubkey[..], &auditor_pubkey[..], b"disclosure_v1"].concat())
 }
 
-/// Verify a disclosure proof as specified in SPEC.md Phase 4 circuit logic.
+/// Verify a disclosure proof as specified in SPEC.md guest program logic.
 ///
-/// This mirrors the disclosure circuit: derives the pubkey from the secret
+/// This mirrors the disclosure guest program: derives the pubkey from the secret
 /// key, verifies the account exists in the tree, checks balance >= threshold,
 /// and verifies the disclosure key hash binds to the correct account and auditor.
 ///

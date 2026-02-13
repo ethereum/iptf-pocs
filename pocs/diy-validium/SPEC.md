@@ -22,7 +22,7 @@ Three operations cover the institutional lifecycle:
 | **Bridge** | Deposit ERC20 (gated) + withdrawal (proven exit) | On/off ramp between public and private systems |
 | **Disclosure** | Prove compliance without revealing data | Regulatory attestations, capital adequacy proofs |
 
-The disclosure circuit is the key differentiator: compliance rules written as readable Rust functions, auditable by non-cryptographers.
+The disclosure proof is the key differentiator: compliance rules written as readable Rust guest programs, auditable by non-cryptographers.
 
 ## Problem Statement
 
@@ -45,29 +45,27 @@ Build a Validium-style system where:
 - Full account state lives off-chain (operator database)
 - Merkle roots of state are committed on-chain
 - Zero-knowledge proofs validate state transitions
-- RISC Zero provides the proving system (Rust circuits, no trusted setup)
+- RISC Zero provides the proving system (Rust guest programs, no trusted setup)
 
 | Alternative | Why Not |
 |-------------|---------|
 | On-chain encrypted state | Gas costs prohibitive, limited computation |
 | Full zkRollup | On-chain DA publishes all transaction data; validium keeps data private off-chain |
 | Trusted execution (SGX) | Different trust model, hardware dependency |
-| ZKSync Prividium | Supports privacy + operator-level rules, but compliance logic isn't expressed as auditable ZK circuits |
+| ZKSync Prividium | Same validium pattern; DIY Validium demonstrates the building blocks from scratch using RISC Zero |
 
-### What's Different from Prividium
+### Relationship to Prividium
 
-Prividium (ZKSync) is a validium that provides private transactions with operator-managed compliance rules at the RPC level. It handles privacy well, but compliance logic isn't expressed as verifiable ZK circuits — it's enforced by the operator.
-
-**DIY Validium shows custom ZK compliance proofs as Rust functions.** The difference: compliance rules are proven inside the ZK circuit, so an auditor can verify them without trusting the operator:
+DIY Validium and Prividium (ZKSync) are the same architecture: account-based validiums with off-chain state, on-chain roots, and ZK validity proofs. This PoC demonstrates how to build the pattern from scratch using RISC Zero, with compliance rules expressed as Rust guest programs:
 
 ```rust
-// In the disclosure circuit — readable by any Rust engineer:
+// In the disclosure guest program — readable by any Rust engineer:
 assert!(balance >= threshold, "Balance below threshold");
 let disclosure_key_hash =
     sha256(&[&pubkey[..], &auditor_pubkey[..], b"disclosure_v1"].concat());
 ```
 
-Purpose-built circuits are easier to audit than a full zkEVM. An auditor reviewing a 40-line Rust function is a fundamentally different (and better) experience than auditing a zkEVM opcode table.
+Purpose-built guest programs are easier to audit than a full zkEVM. An auditor reviewing a 40-line Rust function is a fundamentally different (and better) experience than auditing a zkEVM opcode table.
 
 ## Protocol Design
 
@@ -130,13 +128,13 @@ Sender         Operator              RISC Zero          Contract
   │               │ update off-chain DB  │                  │
 ```
 
-### Circuit: Transfer Proof
+### Guest Program: Transfer Proof
 
 **Public Inputs (Journal):** `old_root` (32) + `new_root` (32) = 64 bytes
 
 **Private Inputs:** sender_sk, sender_balance, sender_salt, sender_path, sender_indices, amount, recipient_pubkey, recipient_balance, recipient_salt, recipient_path, recipient_indices, new_sender_salt, new_recipient_salt
 
-**Circuit Logic:**
+**Guest Program:**
 ```rust
 // Derive sender identity
 let sender_pubkey = sha256(&sender_sk);
@@ -190,13 +188,13 @@ User                    Contract                 Operator
   │                     │                        │ credit off-chain balance
 ```
 
-### Withdrawal Circuit
+### Guest Program: Withdrawal Proof
 
 Single-leaf state transition: balance decreases, funds exit to L1.
 
 **Public Inputs (Journal):** `old_root` (32) + `new_root` (32) + `amount` (8, big-endian) + `recipient` (20) = 92 bytes
 
-**Circuit Logic:**
+**Guest Program:**
 ```rust
 let pubkey = sha256(&secret_key);
 let old_leaf = account_commitment(&pubkey, balance, &salt);
@@ -235,7 +233,7 @@ function withdraw(bytes seal, bytes32 oldRoot, bytes32 newRoot,
 
 ## Operation 3: Disclosure — The Differentiator
 
-The disclosure circuit proves that an account satisfies a compliance predicate (balance >= threshold) without revealing the actual balance, identity, or tree position. The proof is bound to a specific auditor via a disclosure key.
+The disclosure guest program proves that an account satisfies a compliance predicate (balance >= threshold) without revealing the actual balance, identity, or tree position. The proof is bound to a specific auditor via a disclosure key.
 
 This is what makes DIY Validium distinct from platform-level privacy solutions: **institutions write compliance rules as readable Rust functions**, not as opaque zkEVM bytecode.
 
@@ -250,11 +248,11 @@ User                    Auditor                  Contract (optional)
   │                     │◀── verified ───────────│
 ```
 
-### Circuit: Disclosure Proof
+### Guest Program: Disclosure Proof
 
 **Public Inputs (Journal):** `merkle_root` (32) + `threshold_be` (8) + `disclosure_key_hash` (32) = 72 bytes
 
-**Circuit Logic:**
+**Guest Program:**
 ```rust
 // Derive identity and verify account exists
 let pubkey = sha256(&secret_key);
@@ -298,9 +296,9 @@ function verifyDisclosure(bytes seal, bytes32 root, uint64 threshold,
 
 ---
 
-## Why Rust Circuits Matter
+## Why Rust Guest Programs Matter
 
-The circuits above are standard Rust — no DSL, no manual constraint wiring, no bit decomposition. An institutional auditor reviewing the 5-line disclosure check (`assert!(balance >= threshold)`) is reviewing the actual verification logic, not a circuit abstraction layer.
+The guest programs above are standard Rust — no DSL, no manual constraint wiring, no bit decomposition. An institutional auditor reviewing the 5-line disclosure check (`assert!(balance >= threshold)`) is reviewing the actual verification logic, not a circuit abstraction layer.
 
 Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constraint wiring for the same logic. Noir is more readable but still a ZK-specific DSL with a smaller ecosystem. RISC Zero lets institutions write compliance rules in a language their engineers already know.
 
@@ -358,7 +356,7 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - **Transaction batching** — N transfers per proof
 - **Range proofs** — Prove "amount in [min, max]" for AML compliance
 - **ERC-3643 compliance hooks** — ZK proofs of claim validity (KYC status without revealing claims)
-- **Proven minting / supply audit** — Currently the operator is trusted to credit deposits correctly. A "supply proof" circuit could periodically prove that the sum of all private balances equals the bridge's ERC20 balance, providing on-chain verification of the conservation invariant.
+- **Proven minting / supply audit** — Currently the operator is trusted to credit deposits correctly. A "supply proof" guest program could periodically prove that the sum of all private balances equals the bridge's ERC20 balance, providing on-chain verification of the conservation invariant.
 - **Cross-validium transfers** — Moving funds between validiums currently requires a public withdraw-then-deposit cycle, which links the two operations on-chain. Private cross-validium transfers would need a shared proof relay or atomic bridge protocol.
 
 ## Terminology

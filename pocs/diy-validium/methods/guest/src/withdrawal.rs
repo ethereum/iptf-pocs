@@ -1,4 +1,4 @@
-//! Withdrawal proof circuit
+//! Withdrawal proof guest program
 //!
 //! Proves a valid withdrawal from an account in the Merkle tree.
 //! Single-leaf state transition: balance decreases, funds exit to L1.

@@ -1,7 +1,7 @@
-//! Shared cryptographic primitives for diy-validium guest circuits.
+//! Shared cryptographic primitives for diy-validium guest programs.
 //!
 //! Extracts the repetitive crypto boilerplate (SHA-256, Merkle operations,
-//! account commitments) so that guest circuits can focus on business logic.
+//! account commitments) so that guest programs can focus on business logic.
 
 use sha2::{Digest, Sha256};
 

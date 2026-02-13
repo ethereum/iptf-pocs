@@ -14,9 +14,9 @@ Three operations cover the institutional lifecycle:
 | **Bridge** | ERC20 deposit (gated) + withdrawal (proven exit) | On/off ramp between public and private systems |
 | **Disclosure** | Prove compliance without revealing data | Regulatory attestations, capital adequacy proofs |
 
-### Why Not Just Use Prividium?
+### Relationship to Prividium
 
-Prividium (ZKSync) is a validium with operator-managed compliance rules at the RPC level. It handles privacy well, but compliance logic isn't expressed as verifiable ZK circuits -- it's enforced by the operator. **DIY Validium shows custom ZK compliance proofs as Rust functions**, where compliance rules are proven inside the ZK circuit so an auditor can verify them without trusting the operator. The disclosure circuit is 40 lines of readable Rust that any engineer can audit:
+DIY Validium and Prividium (ZKSync) are the same architecture: account-based validiums with off-chain state, on-chain roots, and ZK validity proofs. This PoC demonstrates how to build the pattern from scratch using RISC Zero, with compliance rules expressed as Rust guest programs. The disclosure proof is 40 lines of readable Rust that any engineer can audit:
 
 ```rust
 // The full business logic of a disclosure proof:
@@ -31,23 +31,23 @@ let disclosure_key_hash =
 
 Compare this to ~80 lines of Circom constraint wiring or a full zkEVM opcode table. For institutional auditors reviewing compliance logic, readability matters.
 
-See [SPEC.md](SPEC.md) for the full protocol specification, including a side-by-side comparison of the disclosure circuit in Rust, Circom, and Noir.
+See [SPEC.md](SPEC.md) for the full protocol specification, including a comparison of the disclosure proof in Rust vs Circom and Noir.
 
 ### How Does This Compare to Aztec?
 
-Aztec is the most prominent privacy-native L2, using Noir as its circuit language. Different architecture, different tradeoffs:
+Aztec is the most prominent privacy-native L2, using Noir as its ZK language. Different architecture, different tradeoffs:
 
 | Dimension | DIY Validium (RISC Zero) | Aztec (Noir) |
 |-----------|--------------------------|--------------|
 | **Architecture** | Validium: off-chain data, on-chain proofs on L1 | Privacy-native L2 rollup with its own sequencer and DA |
-| **Circuit Language** | Rust (general-purpose, large ecosystem) | Noir (ZK-specific DSL, growing ecosystem) |
+| **ZK Language** | Rust via RISC Zero zkVM (general-purpose, large ecosystem) | Noir (ZK-specific DSL, growing ecosystem) |
 | **Compliance Logic** | Custom Rust functions -- institutions write their own rules | Platform-level privacy; custom compliance requires Noir expertise |
 | **Deployment Target** | Ethereum L1 directly (Solidity verifier contracts) | Aztec L2 (separate network, bridges to Ethereum) |
 | **Gas Cost** | High per-proof (~200K--400K gas for STARK verification on L1) | Amortized across L2 block; users pay L2 fees |
 | **Bridging** | Native -- ERC20 deposits/withdrawals directly on L1 | Requires L1-L2 bridge with messaging delay |
 | **Privacy Model** | Selective: operator sees everything, users prove to auditors | Default encrypted notes; viewing keys for selective disclosure |
 | **Data Availability** | Operator-held (trust assumption) | L2 DA layer with encrypted note storage |
-| **Auditability** | Rust circuits readable by any engineer | Noir readable but requires ZK-DSL familiarity |
+| **Auditability** | Rust guest programs readable by any engineer | Noir readable but requires ZK-DSL familiarity |
 
 **DIY Validium wins on:** direct L1 settlement (no bridge delay), custom compliance in a mainstream language, simpler trust model to reason about, standard Solidity/Foundry tooling.
 
@@ -96,7 +96,7 @@ cargo build
 ### Run Tests
 
 ```bash
-# Rust tests (Merkle tree, account store, circuit tests via dev mode)
+# Rust tests (Merkle tree, account store, guest program tests via dev mode)
 RISC0_SKIP_BUILD=1 cargo test -p diy-validium-host
 
 # Solidity tests (transfer verifier, bridge, disclosure verifier)
@@ -141,18 +141,18 @@ diy-validium/
 │   │   ├── merkle.rs                # Merkle tree + proof generation
 │   │   └── accounts.rs              # Account model + store
 │   └── tests/                       # Integration tests
-│       ├── transfer_circuit.rs      # Transfer circuit tests
-│       ├── withdrawal_circuit.rs    # Withdrawal circuit tests
-│       ├── disclosure_circuit.rs    # Disclosure circuit tests
+│       ├── transfer_circuit.rs      # Transfer proof tests
+│       ├── withdrawal_circuit.rs    # Withdrawal proof tests
+│       ├── disclosure_circuit.rs    # Disclosure proof tests
 │       └── account_store.rs         # Account store tests
 ├── methods/
 │   ├── guest/
 │   │   ├── crypto/                  # Shared crypto primitives (sha256, Merkle ops)
 │   │   └── src/
-│   │       ├── membership.rs        # Membership circuit (used by bridge deposit)
-│   │       ├── transfer.rs          # Transfer circuit
-│   │       ├── withdrawal.rs        # Withdrawal circuit
-│   │       └── disclosure.rs        # Disclosure circuit (THE differentiator)
+│   │       ├── membership.rs        # Membership guest program (used by bridge deposit)
+│   │       ├── transfer.rs          # Transfer guest program
+│   │       ├── withdrawal.rs        # Withdrawal guest program
+│   │       └── disclosure.rs        # Disclosure guest program (THE differentiator)
 │   └── src/lib.rs                   # ELF + image ID exports
 └── contracts/
     ├── src/

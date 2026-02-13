@@ -1,7 +1,7 @@
-//! Integration tests for the transfer proof circuit logic.
+//! Integration tests for the transfer proof guest program logic.
 //!
-//! These tests validate the transfer proof circuit logic as a pure Rust function
-//! on the host side, without requiring the RISC Zero zkVM. The circuit logic
+//! These tests validate the transfer proof logic as a pure Rust function
+//! on the host side, without requiring the RISC Zero zkVM. The guest program
 //! takes sender/recipient account data, Merkle paths, amount, and new salts, then:
 //!   1. Derives sender pubkey from secret key: SHA256(sender_sk)
 //!   2. Prohibits self-transfers (sender_pubkey == recipient_pubkey)
@@ -111,7 +111,7 @@ fn rebuild_tree_after_transfer(
 }
 
 // -------------------------------------------------------------------
-// verify_transfer tests (mirrors SPEC.md circuit logic)
+// verify_transfer tests (mirrors SPEC.md guest program logic)
 // -------------------------------------------------------------------
 
 #[test]

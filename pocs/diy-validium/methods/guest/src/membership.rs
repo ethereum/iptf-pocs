@@ -1,4 +1,4 @@
-//! Membership proof circuit
+//! Membership proof guest program
 //!
 //! Proves that a leaf exists in a Merkle tree without revealing which leaf.
 //! Used by ValidiumBridge.deposit() to gate entry to the private system.

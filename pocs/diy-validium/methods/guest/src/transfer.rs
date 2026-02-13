@@ -1,4 +1,4 @@
-//! Transfer proof circuit
+//! Transfer proof guest program
 //!
 //! Proves a valid private transfer between two accounts in the Merkle tree.
 //! Dual-leaf state transition: sender balance decreases, recipient increases.
