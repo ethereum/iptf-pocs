@@ -16,31 +16,31 @@ Financial institutions need to transact on Ethereum while keeping balances and t
 
 ### Transfer (Private Payment)
 
-- **FR1.1**: User can transfer value to another user privately
-- **FR1.2**: Transfer proof demonstrates: sender owns an account in the current state, sender has sufficient balance, state transition is correct, nullifier prevents double-spend
-- **FR1.3**: Contract updates state root and records nullifier atomically
-- **FR1.4**: Recipient's balance is updated off-chain by operator
+- User can transfer value to another user privately
+- Transfer proof demonstrates: sender owns an account in the current state, sender has sufficient balance, state transition is correct, nullifier prevents double-spend
+- Contract updates state root and records nullifier atomically
+- Recipient's balance is updated off-chain by operator
 
 ### Bridge (Deposit + Withdrawal)
 
-- **FR2.1**: User can deposit ERC20 tokens to receive private balance
-- **FR2.2**: Deposits are gated by allowlist membership proof
-- **FR2.3**: User can withdraw private balance to receive ERC20 tokens
-- **FR2.4**: Withdrawal proof demonstrates: account ownership, sufficient balance, state transition, nullifier
-- **FR2.5**: Total private supply equals total escrowed tokens (conservation)
+- User can deposit ERC20 tokens to receive private balance
+- Deposits are gated by allowlist membership proof
+- User can withdraw private balance to receive ERC20 tokens
+- Withdrawal proof demonstrates: account ownership, sufficient balance, state transition, nullifier
+- Total private supply equals total escrowed tokens (conservation)
 
 ### Disclosure (Compliance)
 
-- **FR3.1**: User can prove balance >= threshold to a specific auditor
-- **FR3.2**: Disclosure proof is bound to a specific auditor via disclosure key
-- **FR3.3**: Disclosure is read-only (no state mutation, no nullifier)
-- **FR3.4**: Auditor learns only that balance satisfies the threshold
+- User can prove balance >= threshold to a specific auditor
+- Disclosure proof is bound to a specific auditor via disclosure key
+- Disclosure is read-only (no state mutation, no nullifier)
+- Auditor learns only that balance satisfies the threshold
 
 ### Access Control
 
-- **AC1**: Only operator can update state roots
-- **AC2**: Anyone can submit valid proofs for verification
-- **AC3**: Nullifier registry prevents double-spending
+- Only operator can update state roots
+- Anyone can submit valid proofs for verification
+- Nullifier registry prevents double-spending
 
 ## 3. Privacy Requirements (MUST)
 
@@ -66,11 +66,11 @@ Financial institutions need to transact on Ethereum while keeping balances and t
 
 ## 4. Security Requirements (MUST)
 
-- **SR1: No Double-Spend**: Nullifier scheme prevents spending the same balance twice
-- **SR2: No Forgery**: Cannot create valid proofs for accounts you don't own (requires secret key)
-- **SR3: No Replay**: Proofs are bound to specific state roots
-- **SR4: Balance Conservation**: Transfers cannot create or destroy value
-- **SR5: Root Integrity**: Only valid state transitions can update the root
+- **No Double-Spend**: Nullifier scheme prevents spending the same balance twice
+- **No Forgery**: Cannot create valid proofs for accounts you don't own (requires secret key)
+- **No Replay**: Proofs are bound to specific state roots
+- **Balance Conservation**: Transfers cannot create or destroy value
+- **Root Integrity**: Only valid state transitions can update the root
 
 ## 5. Operational Requirements (MUST)
 

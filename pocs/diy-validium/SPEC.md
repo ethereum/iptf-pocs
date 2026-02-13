@@ -2,10 +2,10 @@
 title: "DIY Validium"
 status: Draft
 version: 0.2.0
-authors: []
+authors: ["Oskar"]
 created: 2026-01-29
-iptf_use_case: "Private institutional payments"
-iptf_approach: "Validium with ZK proofs"
+iptf_use_case: "[Private institutional payments](https://github.com/ethereum/iptf-map/tree/master/use-cases)"
+iptf_approach: "[Validium with ZK proofs](https://github.com/ethereum/iptf-map/tree/master/approaches)"
 ---
 
 # DIY Validium: Protocol Specification
@@ -50,15 +50,15 @@ Build a Validium-style system where:
 | Alternative | Why Not |
 |-------------|---------|
 | On-chain encrypted state | Gas costs prohibitive, limited computation |
-| Full zkRollup | Data availability overhead unnecessary for PoC |
+| Full zkRollup | On-chain DA publishes all transaction data; validium keeps data private off-chain |
 | Trusted execution (SGX) | Different trust model, hardware dependency |
-| ZKSync Prividium / full L2 | Privacy exists but no custom compliance rules — institutions can't write their own verification logic |
+| ZKSync Prividium | Supports privacy + operator-level rules, but compliance logic isn't expressed as auditable ZK circuits |
 
 ### What's Different from Prividium
 
-Prividium (ZKSync) is a full L2 platform — you get privacy, but compliance logic is baked into the platform. You can't customize it.
+Prividium (ZKSync) is a validium that provides private transactions with operator-managed compliance rules at the RPC level. It handles privacy well, but compliance logic isn't expressed as verifiable ZK circuits — it's enforced by the operator.
 
-**DIY Validium shows custom ZK compliance proofs as Rust functions.** Institutions write their own rules:
+**DIY Validium shows custom ZK compliance proofs as Rust functions.** The difference: compliance rules are proven inside the ZK circuit, so an auditor can verify them without trusting the operator:
 
 ```rust
 // In the disclosure circuit — readable by any Rust engineer:
@@ -202,7 +202,7 @@ User                    Contract                 Operator
 
 Single-leaf state transition: balance decreases, funds exit to L1.
 
-**Public Inputs (Journal):** `old_root` (32) + `new_root` (32) + `nullifier` (32) + `amount_be` (8) + `recipient` (20) = 124 bytes
+**Public Inputs (Journal):** `old_root` (32) + `new_root` (32) + `nullifier` (32) + `amount` (8, big-endian) + `recipient` (20) = 124 bytes
 
 **Circuit Logic:**
 ```rust
