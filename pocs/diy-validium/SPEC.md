@@ -22,7 +22,7 @@ Three operations cover the institutional lifecycle:
 | **Bridge** | Deposit ERC20 (gated) + withdrawal (proven exit) | On/off ramp between public and private systems |
 | **Disclosure** | Prove compliance without revealing data | Regulatory attestations, capital adequacy proofs |
 
-The disclosure proof is the key differentiator: compliance rules written as readable Rust guest programs, auditable by non-cryptographers.
+The disclosure proof demonstrates custom compliance: rules written as readable Rust guest programs, auditable by non-cryptographers.
 
 ## Problem Statement
 
@@ -231,11 +231,11 @@ function withdraw(bytes seal, bytes32 oldRoot, bytes32 newRoot,
 
 ---
 
-## Operation 3: Disclosure — The Differentiator
+## Operation 3: Disclosure
 
 The disclosure guest program proves that an account satisfies a compliance predicate (balance >= threshold) without revealing the actual balance, identity, or tree position. The proof is bound to a specific auditor via a disclosure key.
 
-This is what makes DIY Validium distinct from platform-level privacy solutions: **institutions write compliance rules as readable Rust functions**, not as opaque zkEVM bytecode.
+Institutions write compliance rules as readable Rust guest programs — not opaque zkEVM bytecode or platform-specific DSLs.
 
 ### Flow
 

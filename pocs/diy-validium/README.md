@@ -152,7 +152,7 @@ diy-validium/
 │   │       ├── membership.rs        # Membership guest program (used by bridge deposit)
 │   │       ├── transfer.rs          # Transfer guest program
 │   │       ├── withdrawal.rs        # Withdrawal guest program
-│   │       └── disclosure.rs        # Disclosure guest program (THE differentiator)
+│   │       └── disclosure.rs        # Disclosure guest program
 │   └── src/lib.rs                   # ELF + image ID exports
 └── contracts/
     ├── src/

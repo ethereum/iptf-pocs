@@ -1,4 +1,4 @@
-//! Disclosure proof guest program — THE differentiator
+//! Disclosure proof guest program
 //!
 //! Proves that an account holder's balance meets a compliance threshold,
 //! bound to a specific auditor, without revealing balance or identity.
