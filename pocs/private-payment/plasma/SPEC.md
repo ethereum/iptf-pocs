@@ -59,7 +59,7 @@ In both models:
 
 Starting from the constraints:
 
-1. **Transaction privacy** requires that transaction details (amounts, recipients) are not posted on-chain. This rules out traditional validiums and optimistic rollups, where full transaction data is published to L1 for data availability.
+1. **Transaction privacy** requires that transaction details (amounts, recipients) are not posted on-chain. This rules out optimistic rollups, where full transaction data is published to L1 for data availability.
 2. **No trusted sequencer** requires stateless block production, where aggregators do not need to know the previous rollup state to produce new blocks. This rules out designs where a single sequencer maintains global state.
 3. Together, (1) and (2) point to an architecture where only *commitments* (Merkle roots of salted transaction hashes) go on-chain, and users maintain their own balance state.
 4. **Compliance gating** is layered on top via attestation-gated deposits, orthogonal to the rollup design itself.
