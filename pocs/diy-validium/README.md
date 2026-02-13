@@ -16,7 +16,7 @@ Three operations cover the institutional lifecycle:
 
 ### Why Not Just Use Prividium?
 
-Prividium (ZKSync) is a full L2 -- you get privacy, but compliance logic is baked into the platform. **DIY Validium shows custom ZK compliance proofs as Rust functions.** The disclosure circuit is 40 lines of readable Rust that any engineer can audit:
+Prividium (ZKSync) is a validium with operator-managed compliance rules at the RPC level. It handles privacy well, but compliance logic isn't expressed as verifiable ZK circuits -- it's enforced by the operator. **DIY Validium shows custom ZK compliance proofs as Rust functions**, where compliance rules are proven inside the ZK circuit so an auditor can verify them without trusting the operator. The disclosure circuit is 40 lines of readable Rust that any engineer can audit:
 
 ```rust
 // The full business logic of a disclosure proof:
