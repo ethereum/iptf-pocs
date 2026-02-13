@@ -10,6 +10,7 @@
 
 use anyhow::Result;
 use diy_validium_host::accounts::{Account, AccountStore};
+use diy_validium_host::journal::{DisclosureJournal, TransferJournal, WithdrawalJournal};
 use diy_validium_host::merkle::{
     account_commitment, compute_disclosure_key_hash, compute_new_root, compute_single_leaf_root,
 };
@@ -89,8 +90,9 @@ fn main() -> Result<()> {
         &recipient_proof.path,
     );
 
+    let sender_old_leaf = account_commitment(&sender.pubkey, sender.balance, &sender.salt);
     let expected_nullifier: [u8; 32] =
-        Sha256::digest([&sender_sk[..], &root[..], b"transfer_v1"].concat()).into();
+        Sha256::digest([&sender_sk[..], &sender_old_leaf[..], b"transfer_v1"].concat()).into();
 
     // NOTE: Each env.write() is a separate syscall. Production code should batch
     // these into a single struct to minimize overhead.
@@ -120,26 +122,17 @@ fn main() -> Result<()> {
     receipt.verify(methods::TRANSFER_ID)?;
     println!("Transfer proof verified: OK");
 
-    let journal_bytes = &receipt.journal.bytes;
-    assert_eq!(
-        journal_bytes.len(),
-        96,
-        "Transfer journal should be 96 bytes"
-    );
+    let tj = TransferJournal::from_bytes(&receipt.journal.bytes)?;
 
-    let journal_old_root: [u8; 32] = journal_bytes[..32].try_into()?;
-    let journal_new_root: [u8; 32] = journal_bytes[32..64].try_into()?;
-    let journal_nullifier: [u8; 32] = journal_bytes[64..96].try_into()?;
-
-    assert_eq!(journal_old_root, root);
-    assert_eq!(journal_new_root, expected_new_root);
-    assert_eq!(journal_nullifier, expected_nullifier);
+    assert_eq!(tj.old_root, root);
+    assert_eq!(tj.new_root, expected_new_root);
+    assert_eq!(tj.nullifier, expected_nullifier);
 
     println!(
         "Journal: old_root=0x{}..., new_root=0x{}..., nullifier=0x{}...",
-        hex::encode(&journal_old_root[..4]),
-        hex::encode(&journal_new_root[..4]),
-        hex::encode(&journal_nullifier[..4]),
+        hex::encode(&tj.old_root[..4]),
+        hex::encode(&tj.new_root[..4]),
+        hex::encode(&tj.nullifier[..4]),
     );
     println!("All journal fields match: OK");
 
@@ -176,8 +169,11 @@ fn main() -> Result<()> {
         &withdraw_proof.path,
         &withdraw_proof.indices,
     );
+    let withdraw_old_leaf =
+        account_commitment(&withdraw_pubkey, withdraw_acct.balance, &withdraw_acct.salt);
     let expected_withdraw_nullifier: [u8; 32] =
-        Sha256::digest([&withdraw_sk[..], &root[..], b"withdrawal_v1"].concat()).into();
+        Sha256::digest([&withdraw_sk[..], &withdraw_old_leaf[..], b"withdrawal_v1"].concat())
+            .into();
 
     let env = risc0_zkvm::ExecutorEnv::builder()
         .write(&withdraw_sk)?
@@ -197,32 +193,21 @@ fn main() -> Result<()> {
     receipt.verify(methods::WITHDRAWAL_ID)?;
     println!("Withdrawal proof verified: OK");
 
-    let journal_bytes = &receipt.journal.bytes;
-    assert_eq!(
-        journal_bytes.len(),
-        124,
-        "Withdrawal journal should be 124 bytes"
-    );
+    let wj = WithdrawalJournal::from_bytes(&receipt.journal.bytes)?;
 
-    let j_old_root: [u8; 32] = journal_bytes[..32].try_into()?;
-    let j_new_root: [u8; 32] = journal_bytes[32..64].try_into()?;
-    let j_nullifier: [u8; 32] = journal_bytes[64..96].try_into()?;
-    let j_amount = u64::from_be_bytes(journal_bytes[96..104].try_into()?);
-    let j_recipient: [u8; 20] = journal_bytes[104..124].try_into()?;
-
-    assert_eq!(j_old_root, root);
-    assert_eq!(j_new_root, expected_withdraw_new_root);
-    assert_eq!(j_nullifier, expected_withdraw_nullifier);
-    assert_eq!(j_amount, withdraw_amount);
-    assert_eq!(j_recipient, eth_recipient);
+    assert_eq!(wj.old_root, root);
+    assert_eq!(wj.new_root, expected_withdraw_new_root);
+    assert_eq!(wj.nullifier, expected_withdraw_nullifier);
+    assert_eq!(wj.amount, withdraw_amount);
+    assert_eq!(wj.recipient, eth_recipient);
 
     println!(
         "Journal (124 bytes): old_root=0x{}..., new_root=0x{}..., nullifier=0x{}..., amount={}, recipient=0x{}",
-        hex::encode(&j_old_root[..4]),
-        hex::encode(&j_new_root[..4]),
-        hex::encode(&j_nullifier[..4]),
-        j_amount,
-        hex::encode(j_recipient),
+        hex::encode(&wj.old_root[..4]),
+        hex::encode(&wj.new_root[..4]),
+        hex::encode(&wj.nullifier[..4]),
+        wj.amount,
+        hex::encode(wj.recipient),
     );
     println!("All withdrawal journal fields match: OK");
 
@@ -267,26 +252,17 @@ fn main() -> Result<()> {
     receipt.verify(methods::DISCLOSURE_ID)?;
     println!("Disclosure proof verified: OK");
 
-    let journal_bytes = &receipt.journal.bytes;
-    assert_eq!(
-        journal_bytes.len(),
-        72,
-        "Disclosure journal should be 72 bytes"
-    );
+    let dj = DisclosureJournal::from_bytes(&receipt.journal.bytes)?;
 
-    let j_root: [u8; 32] = journal_bytes[..32].try_into()?;
-    let j_threshold = u64::from_be_bytes(journal_bytes[32..40].try_into()?);
-    let j_dkh: [u8; 32] = journal_bytes[40..72].try_into()?;
-
-    assert_eq!(j_root, root);
-    assert_eq!(j_threshold, threshold);
-    assert_eq!(j_dkh, expected_dkh);
+    assert_eq!(dj.merkle_root, root);
+    assert_eq!(dj.threshold, threshold);
+    assert_eq!(dj.disclosure_key_hash, expected_dkh);
 
     println!(
         "Journal (72 bytes): root=0x{}..., threshold={}, disclosure_key_hash=0x{}...",
-        hex::encode(&j_root[..4]),
-        j_threshold,
-        hex::encode(&j_dkh[..4]),
+        hex::encode(&dj.merkle_root[..4]),
+        dj.threshold,
+        hex::encode(&dj.disclosure_key_hash[..4]),
     );
     println!("All disclosure journal fields match: OK");
     println!(

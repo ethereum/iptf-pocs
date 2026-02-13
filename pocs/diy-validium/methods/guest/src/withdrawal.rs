@@ -32,7 +32,7 @@ fn main() {
     assert!(amount > 0, "Withdrawal amount must be positive");
     assert!(balance >= amount, "Insufficient balance");
 
-    let nullifier = sha256(&[&secret_key[..], &old_root[..], b"withdrawal_v1"].concat());
+    let nullifier = sha256(&[&secret_key[..], &old_leaf[..], b"withdrawal_v1"].concat());
 
     let new_balance = balance - amount;
     let new_leaf = account_commitment(&pubkey, new_balance, &new_salt);

@@ -8,7 +8,7 @@
 //!   2. Prohibits self-transfers (sender_pubkey == recipient_pubkey)
 //!   3. Verifies both sender and recipient membership in old tree
 //!   4. Checks sufficient sender balance and recipient overflow protection
-//!   5. Computes state-bound nullifier: SHA256(sender_sk || old_root || "transfer_v1")
+//!   5. Computes commitment-bound nullifier: SHA256(sender_sk || sender_old_leaf || "transfer_v1")
 //!   6. Computes new commitments with updated balances and fresh salts
 //!   7. Recomputes new root via dual-leaf update (compute_new_root)
 //!
@@ -92,9 +92,9 @@ fn setup_two_account_tree(
 }
 
 /// Helper: compute the nullifier as specified in SPEC.md:
-/// `SHA256(sender_sk || old_root || "transfer_v1")`
-fn compute_nullifier(sender_sk: &[u8; 32], old_root: &[u8; 32]) -> [u8; 32] {
-    sha256(&[&sender_sk[..], &old_root[..], b"transfer_v1"].concat())
+/// `SHA256(sender_sk || sender_old_leaf || "transfer_v1")`
+fn compute_nullifier(sender_sk: &[u8; 32], sender_old_leaf: &[u8; 32]) -> [u8; 32] {
+    sha256(&[&sender_sk[..], &sender_old_leaf[..], b"transfer_v1"].concat())
 }
 
 /// Helper: compute the expected new root after a transfer by rebuilding the
@@ -161,7 +161,8 @@ fn test_valid_transfer_succeeds() {
         new_recipient_salt,
     );
 
-    let nullifier = compute_nullifier(&sender_sk, &old_root);
+    let sender_old_leaf = account_commitment(&sender_pubkey, sender.balance, &sender.salt);
+    let nullifier = compute_nullifier(&sender_sk, &sender_old_leaf);
 
     // This should succeed without panic
     verify_transfer(
@@ -208,7 +209,9 @@ fn test_insufficient_balance_panics() {
     let amount: u64 = 1000;
 
     // new_root and nullifier don't matter — should panic before reaching them
-    let nullifier = compute_nullifier(&sender_sk, &old_root);
+    let sender_pubkey = sha256(&sender_sk);
+    let sender_old_leaf = account_commitment(&sender_pubkey, sender.balance, &sender.salt);
+    let nullifier = compute_nullifier(&sender_sk, &sender_old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_transfer(
@@ -255,7 +258,9 @@ fn test_wrong_sender_sk_panics() {
 
     // Use a wrong secret key — derived pubkey won't match the tree leaf
     let wrong_sk = sha256(b"wrong_secret_key");
-    let nullifier = compute_nullifier(&wrong_sk, &old_root);
+    let wrong_pubkey = sha256(&wrong_sk);
+    let wrong_old_leaf = account_commitment(&wrong_pubkey, sender.balance, &sender.salt);
+    let nullifier = compute_nullifier(&wrong_sk, &wrong_old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_transfer(
@@ -304,7 +309,9 @@ fn test_wrong_recipient_balance_panics() {
     // recipient leaf won't match the old tree, so membership verification fails.
     let fake_recipient_balance: u64 = 9999;
 
-    let nullifier = compute_nullifier(&sender_sk, &old_root);
+    let sender_pubkey = sha256(&sender_sk);
+    let sender_old_leaf = account_commitment(&sender_pubkey, sender.balance, &sender.salt);
+    let nullifier = compute_nullifier(&sender_sk, &sender_old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_transfer(
@@ -351,7 +358,9 @@ fn test_wrong_root_panics() {
 
     // Use a fabricated old_root — Merkle membership checks will fail
     let wrong_old_root = sha256(b"wrong_root");
-    let nullifier = compute_nullifier(&sender_sk, &wrong_old_root);
+    let sender_pubkey = sha256(&sender_sk);
+    let sender_old_leaf = account_commitment(&sender_pubkey, sender.balance, &sender.salt);
+    let nullifier = compute_nullifier(&sender_sk, &sender_old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_transfer(
@@ -396,7 +405,8 @@ fn test_self_transfer_panics() {
     let amount: u64 = 1000;
     let new_sender_salt = sha256(b"new_salt_s");
     let new_recipient_salt = sha256(b"new_salt_r");
-    let nullifier = compute_nullifier(&sk, &old_root);
+    let old_leaf = account_commitment(&pubkey, 5000, &salt);
+    let nullifier = compute_nullifier(&sk, &old_leaf);
     let fake_new_root = [0u8; 32];
 
     // sender_pubkey == recipient_pubkey — should panic
@@ -455,7 +465,8 @@ fn test_overflow_panics() {
     let amount: u64 = 1000;
     let new_sender_salt = sha256(b"new_sender_salt_0");
     let new_recipient_salt = sha256(b"new_recipient_salt_0");
-    let nullifier = compute_nullifier(&sender_sk, &old_root);
+    let sender_old_leaf = account_commitment(&sender_pubkey, 1000, &sender_salt);
+    let nullifier = compute_nullifier(&sender_sk, &sender_old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_transfer(
@@ -479,27 +490,31 @@ fn test_overflow_panics() {
 }
 
 #[test]
-fn test_nullifier_is_state_bound() {
-    // The same sender_sk with different old_roots should produce different nullifiers.
-    // This verifies the state-binding property from SPEC.md (lines 112-124).
+fn test_nullifier_is_commitment_bound() {
+    // The same sender_sk with different old_commitments should produce different nullifiers.
+    // This verifies the commitment-binding property from SPEC.md.
     let sender_sk = sha256(b"sender_sk_0");
+    let sender_pubkey = sha256(&sender_sk);
 
-    let root_a = sha256(b"state_root_a");
-    let root_b = sha256(b"state_root_b");
+    let salt_a = sha256(b"salt_a");
+    let salt_b = sha256(b"salt_b");
 
-    let nullifier_a = compute_nullifier(&sender_sk, &root_a);
-    let nullifier_b = compute_nullifier(&sender_sk, &root_b);
+    let commitment_a = account_commitment(&sender_pubkey, 1000, &salt_a);
+    let commitment_b = account_commitment(&sender_pubkey, 2000, &salt_b);
+
+    let nullifier_a = compute_nullifier(&sender_sk, &commitment_a);
+    let nullifier_b = compute_nullifier(&sender_sk, &commitment_b);
 
     assert_ne!(
         nullifier_a, nullifier_b,
-        "Nullifier must change when old_root changes (state-bound property)"
+        "Nullifier must change when old_commitment changes (commitment-bound property)"
     );
 
     // Also verify the nullifier matches the spec formula directly
-    let expected = sha256(&[&sender_sk[..], &root_a[..], b"transfer_v1"].concat());
+    let expected = sha256(&[&sender_sk[..], &commitment_a[..], b"transfer_v1"].concat());
     assert_eq!(
         nullifier_a, expected,
-        "Nullifier must equal SHA256(sender_sk || old_root || 'transfer_v1')"
+        "Nullifier must equal SHA256(sender_sk || old_commitment || 'transfer_v1')"
     );
 }
 

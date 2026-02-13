@@ -1,7 +1,7 @@
 ---
 title: "DIY Validium"
 status: Draft
-version: 0.2.0
+version: 0.1.0
 authors: ["Oskar"]
 created: 2026-01-29
 iptf_use_case: "[Private institutional payments](https://github.com/ethereum/iptf-map/tree/master/use-cases)"
@@ -99,9 +99,11 @@ internal_node = SHA256(left_child || right_child)
 
 **Nullifier (double-spend prevention):**
 ```
-nullifier = SHA256(secret_key || old_root || domain_tag)
+nullifier = SHA256(secret_key || old_commitment || domain_tag)
 ```
-Domain tags: `"transfer_v1"`, `"withdrawal_v1"`. State-bound — each state transition generates a unique nullifier per account.
+Domain tags: `"transfer_v1"`, `"withdrawal_v1"`. Commitment-bound — each state transition generates a unique nullifier per consumed balance state.
+
+> **Design note:** In the current sequential model, the contract's `oldRoot == stateRoot` check already prevents replay — after any operation the root changes and old proofs cannot be resubmitted. Nullifiers provide defense-in-depth and become essential if the protocol evolves to support batching (multiple operations per root update), where several proofs could reference the same pre-update root. They also serve as an on-chain audit trail of consumed states, following established conventions from Zcash and Tornado Cash.
 
 ### On-Chain State
 
@@ -158,7 +160,7 @@ let old_root = compute_root(sender_old_leaf, &sender_path, &sender_indices);
 verify_membership(recipient_old_leaf, &recipient_path, &recipient_indices, old_root);
 
 // State transition: compute new root with updated balances
-let nullifier = sha256(&[&sender_sk, &old_root, b"transfer_v1"].concat());
+let nullifier = sha256(&[&sender_sk, &sender_old_leaf, b"transfer_v1"].concat());
 let new_root = compute_new_root(sender_new_leaf, recipient_new_leaf, ...);
 
 commit(old_root, new_root, nullifier);
@@ -214,7 +216,7 @@ let old_root = compute_root(old_leaf, &path, &indices);
 assert!(amount > 0, "Withdrawal amount must be positive");
 assert!(balance >= amount, "Insufficient balance");
 
-let nullifier = sha256(&[&secret_key, &old_root, b"withdrawal_v1"].concat());
+let nullifier = sha256(&[&secret_key, &old_leaf, b"withdrawal_v1"].concat());
 let new_leaf = account_commitment(&pubkey, balance - amount, &new_salt);
 let new_root = compute_root(new_leaf, &path, &indices);
 
@@ -308,68 +310,11 @@ function verifyDisclosure(bytes seal, bytes32 root, uint64 threshold,
 
 ---
 
-## Why Rust for ZK Circuits
+## Why Rust Circuits Matter
 
-The same disclosure logic in three ZK systems:
+The circuits above are standard Rust — no DSL, no manual constraint wiring, no bit decomposition. An institutional auditor reviewing the 5-line disclosure check (`assert!(balance >= threshold)`) is reviewing the actual verification logic, not a circuit abstraction layer.
 
-### RISC Zero (Rust) — 5 lines of business logic
-
-```rust
-let pubkey = sha256(&secret_key);
-let leaf = account_commitment(&pubkey, balance, &salt);
-let root = compute_root(leaf, &path, &indices);
-assert!(balance >= threshold);
-let dk = sha256(&[&pubkey[..], &auditor_pk[..], b"disclosure_v1"].concat());
-```
-
-### Circom — ~80 lines, manual constraint wiring
-
-```
-template Disclosure(DEPTH) {
-    signal input secret_key[256];    // Must decompose to bits
-    signal input balance;
-    signal input threshold;
-
-    // SHA-256 = 30K constraints per call. 5 calls = 150K constraints.
-    component pk = Sha256(256);      // Manual bit wiring
-    pk.in <== secret_key;
-
-    // Merkle proof: DEPTH Sha256 components + multiplexers
-    component merkle[DEPTH];
-    component mux[DEPTH];
-    for (var i = 0; i < DEPTH; i++) {
-        merkle[i] = Sha256(512);
-        mux[i] = Mux1();
-        // ... 10+ lines of manual signal routing per level
-    }
-
-    // Balance check: LessThan(64) range proof
-    component lt = LessThan(64);
-    lt.in[0] <== threshold;
-    lt.in[1] <== balance + 1;
-    lt.out === 1;
-
-    // Disclosure key: Sha256(256+256+104) with manual concat
-    component dk = Sha256(616);
-    // ... 30+ lines of bit-by-bit signal assignment
-}
-```
-
-### Noir — Similar to Rust, but less mature
-
-```
-fn main(secret_key: [u8; 32], ...) -> pub ([u8; 32], u64, [u8; 32]) {
-    let pubkey = std::hash::sha256(secret_key);
-    // Similar to Rust, but array operations less ergonomic
-    // No standard concat — manual byte-by-byte packing
-    let mut input: [u8; 68] = [0; 68];
-    for i in 0..32 { input[i] = pubkey[i]; }
-    for i in 0..32 { input[32 + i] = auditor_pubkey[i]; }
-    // ...
-}
-```
-
-**Key insight:** The Rust version reads like a verification procedure. The Circom version reads like circuit plumbing. For institutional auditors reviewing compliance logic, this matters.
+Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constraint wiring for the same logic. Noir is more readable but still a ZK-specific DSL with a smaller ecosystem. RISC Zero lets institutions write compliance rules in a language their engineers already know.
 
 ---
 
@@ -425,6 +370,8 @@ fn main(secret_key: [u8; 32], ...) -> pub ([u8; 32], u64, [u8; 32]) {
 - **Transaction batching** — N transfers per proof
 - **Range proofs** — Prove "amount in [min, max]" for AML compliance
 - **ERC-3643 compliance hooks** — ZK proofs of claim validity (KYC status without revealing claims)
+- **Proven minting / supply audit** — Currently the operator is trusted to credit deposits correctly. A "supply proof" circuit could periodically prove that the sum of all private balances equals the bridge's ERC20 balance, providing on-chain verification of the conservation invariant.
+- **Cross-validium transfers** — Moving funds between validiums currently requires a public withdraw-then-deposit cycle, which links the two operations on-chain. Private cross-validium transfers would need a shared proof relay or atomic bridge protocol.
 
 ## Terminology
 

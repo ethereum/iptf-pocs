@@ -99,7 +99,7 @@ fn main() {
     verify_membership(recipient_old_leaf, &recipient_path, &recipient_indices, old_root);
 
     // State transition
-    let nullifier = sha256(&[&sender_sk[..], &old_root[..], b"transfer_v1"].concat());
+    let nullifier = sha256(&[&sender_sk[..], &sender_old_leaf[..], b"transfer_v1"].concat());
 
     let new_sender_balance = sender_balance - amount;
     let new_recipient_balance = recipient_balance + amount;

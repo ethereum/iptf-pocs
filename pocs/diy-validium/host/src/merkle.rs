@@ -278,8 +278,9 @@ pub fn verify_transfer(
         "Recipient balance overflow"
     );
 
-    // 8. Compute and verify state-bound nullifier
-    let computed_nullifier = sha256_hash(&[&sender_sk[..], &old_root[..], b"transfer_v1"].concat());
+    // 8. Compute and verify commitment-bound nullifier
+    let computed_nullifier =
+        sha256_hash(&[&sender_sk[..], &sender_old_leaf[..], b"transfer_v1"].concat());
     assert_eq!(computed_nullifier, nullifier, "Nullifier mismatch");
 
     // 9. Compute new balances (safe after checks in steps 5-7)
@@ -373,9 +374,9 @@ pub fn verify_withdrawal(
     // 5. Check balance >= amount
     assert!(balance >= amount, "Insufficient balance");
 
-    // 6. Compute and verify state-bound nullifier
+    // 6. Compute and verify commitment-bound nullifier
     let computed_nullifier =
-        sha256_hash(&[&secret_key[..], &old_root[..], b"withdrawal_v1"].concat());
+        sha256_hash(&[&secret_key[..], &old_leaf[..], b"withdrawal_v1"].concat());
     assert_eq!(computed_nullifier, nullifier, "Nullifier mismatch");
 
     // 7. Compute new balance

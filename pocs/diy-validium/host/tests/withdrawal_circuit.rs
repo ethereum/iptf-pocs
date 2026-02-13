@@ -7,7 +7,7 @@
 //!   1. Derives pubkey from secret key: SHA256(sk)
 //!   2. Verifies account membership in old tree
 //!   3. Checks balance >= amount > 0
-//!   4. Computes state-bound nullifier: SHA256(sk || old_root || "withdrawal_v1")
+//!   4. Computes commitment-bound nullifier: SHA256(sk || old_leaf || "withdrawal_v1")
 //!   5. Computes new commitment with reduced balance and fresh salt
 //!   6. Recomputes new root via single-leaf update (compute_single_leaf_root)
 //!
@@ -72,9 +72,9 @@ fn setup_single_account_tree(
 }
 
 /// Helper: compute the withdrawal nullifier as specified in SPEC.md:
-/// `SHA256(secret_key || old_root || "withdrawal_v1")`
-fn compute_withdrawal_nullifier(secret_key: &[u8; 32], old_root: &[u8; 32]) -> [u8; 32] {
-    sha256(&[&secret_key[..], &old_root[..], b"withdrawal_v1"].concat())
+/// `SHA256(secret_key || old_leaf || "withdrawal_v1")`
+fn compute_withdrawal_nullifier(secret_key: &[u8; 32], old_leaf: &[u8; 32]) -> [u8; 32] {
+    sha256(&[&secret_key[..], &old_leaf[..], b"withdrawal_v1"].concat())
 }
 
 /// Helper: compute the expected new root after a withdrawal by rebuilding the
@@ -110,7 +110,8 @@ fn test_valid_withdrawal_succeeds() {
     let new_root =
         rebuild_tree_after_withdrawal(&store, idx, pubkey, account.balance - amount, new_salt);
 
-    let nullifier = compute_withdrawal_nullifier(&sk, &old_root);
+    let old_leaf = account_commitment(&pubkey, account.balance, &account.salt);
+    let nullifier = compute_withdrawal_nullifier(&sk, &old_leaf);
 
     // This should succeed without panic
     verify_withdrawal(
@@ -140,7 +141,9 @@ fn test_insufficient_balance_panics() {
     let amount: u64 = 1000;
 
     // new_root doesn't matter — should panic before reaching it
-    let nullifier = compute_withdrawal_nullifier(&sk, &old_root);
+    let pubkey = sha256(&sk);
+    let old_leaf = account_commitment(&pubkey, account.balance, &account.salt);
+    let nullifier = compute_withdrawal_nullifier(&sk, &old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_withdrawal(
@@ -169,7 +172,9 @@ fn test_zero_amount_panics() {
     // Zero amount should be rejected
     let amount: u64 = 0;
 
-    let nullifier = compute_withdrawal_nullifier(&sk, &old_root);
+    let pubkey = sha256(&sk);
+    let old_leaf = account_commitment(&pubkey, account.balance, &account.salt);
+    let nullifier = compute_withdrawal_nullifier(&sk, &old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_withdrawal(
@@ -199,7 +204,9 @@ fn test_wrong_sk_panics() {
 
     // Use a wrong secret key — derived pubkey won't match the tree leaf
     let wrong_sk = sha256(b"wrong_secret_key");
-    let nullifier = compute_withdrawal_nullifier(&wrong_sk, &old_root);
+    let wrong_pubkey = sha256(&wrong_sk);
+    let wrong_old_leaf = account_commitment(&wrong_pubkey, account.balance, &account.salt);
+    let nullifier = compute_withdrawal_nullifier(&wrong_sk, &wrong_old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_withdrawal(
@@ -229,7 +236,9 @@ fn test_wrong_root_panics() {
 
     // Use a fabricated old_root — Merkle membership check will fail
     let wrong_old_root = sha256(b"wrong_root");
-    let nullifier = compute_withdrawal_nullifier(&sk, &wrong_old_root);
+    let pubkey = sha256(&sk);
+    let old_leaf = account_commitment(&pubkey, account.balance, &account.salt);
+    let nullifier = compute_withdrawal_nullifier(&sk, &old_leaf);
     let fake_new_root = [0u8; 32];
 
     verify_withdrawal(
@@ -250,13 +259,14 @@ fn test_wrong_root_panics() {
 #[test]
 fn test_nullifier_domain_separation() {
     // Withdrawal nullifiers use "withdrawal_v1" domain tag, while transfer
-    // nullifiers use "transfer_v1". Given the same secret key and old_root,
+    // nullifiers use "transfer_v1". Given the same secret key and old_commitment,
     // the two nullifiers must be different.
     let sk = sha256(b"withdrawal_sk_0");
-    let root = sha256(b"some_state_root");
+    let pubkey = sha256(&sk);
+    let commitment = account_commitment(&pubkey, 5000, &sha256(b"some_salt"));
 
-    let withdrawal_nullifier = sha256(&[&sk[..], &root[..], b"withdrawal_v1"].concat());
-    let transfer_nullifier = sha256(&[&sk[..], &root[..], b"transfer_v1"].concat());
+    let withdrawal_nullifier = sha256(&[&sk[..], &commitment[..], b"withdrawal_v1"].concat());
+    let transfer_nullifier = sha256(&[&sk[..], &commitment[..], b"transfer_v1"].concat());
 
     assert_ne!(
         withdrawal_nullifier, transfer_nullifier,
@@ -264,10 +274,10 @@ fn test_nullifier_domain_separation() {
     );
 
     // Also verify the withdrawal nullifier matches the spec formula directly
-    let expected = compute_withdrawal_nullifier(&sk, &root);
+    let expected = compute_withdrawal_nullifier(&sk, &commitment);
     assert_eq!(
         withdrawal_nullifier, expected,
-        "Withdrawal nullifier must equal SHA256(sk || old_root || 'withdrawal_v1')"
+        "Withdrawal nullifier must equal SHA256(sk || old_commitment || 'withdrawal_v1')"
     );
 }
 
@@ -321,7 +331,8 @@ fn test_withdrawal_full_balance() {
         new_salt,
     );
 
-    let nullifier = compute_withdrawal_nullifier(&sk, &old_root);
+    let old_leaf = account_commitment(&pubkey, account.balance, &account.salt);
+    let nullifier = compute_withdrawal_nullifier(&sk, &old_leaf);
 
     // This should succeed — zero remaining balance is valid
     verify_withdrawal(
