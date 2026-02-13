@@ -4,6 +4,7 @@
 //! for the diy-validium protocol.
 
 pub mod accounts;
+pub mod journal;
 pub mod merkle;
 
 #[cfg(test)]
