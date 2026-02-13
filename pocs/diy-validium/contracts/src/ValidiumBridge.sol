@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
-import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {IERC20} from "forge-std/src/interfaces/IERC20.sol";
 import {IRiscZeroVerifier} from "./interfaces/IRiscZeroVerifier.sol";
 
 /// @title ValidiumBridge
@@ -9,6 +9,9 @@ import {IRiscZeroVerifier} from "./interfaces/IRiscZeroVerifier.sol";
 ///         RISC Zero ZK proofs for membership verification and withdrawal authorization.
 /// @dev See SPEC.md for the full protocol specification.
 contract ValidiumBridge {
+    // TODO: Production should use OpenZeppelin SafeERC20 for safe token transfers
+    // See: https://docs.openzeppelin.com/contracts/5.x/api/token/erc20#SafeERC20
+
     /// @notice The ERC20 token managed by this bridge.
     IERC20 public immutable token;
 

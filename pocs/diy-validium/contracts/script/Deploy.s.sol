@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
-import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {Script, console} from "forge-std/src/Script.sol";
+import {IERC20} from "forge-std/src/interfaces/IERC20.sol";
 import {TransferVerifier} from "../src/TransferVerifier.sol";
 import {ValidiumBridge} from "../src/ValidiumBridge.sol";
 import {DisclosureVerifier} from "../src/DisclosureVerifier.sol";
