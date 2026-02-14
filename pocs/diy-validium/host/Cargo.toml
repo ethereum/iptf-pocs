@@ -1,0 +1,17 @@
+[package]
+name = "diy-validium-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+risc0-zkvm.workspace = true
+sha2.workspace = true
+serde.workspace = true
+bincode.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+
+# Local methods crate for guest ELF binaries
+methods = { path = "../methods" }

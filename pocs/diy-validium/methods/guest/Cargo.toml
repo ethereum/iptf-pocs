@@ -1,0 +1,31 @@
+[package]
+name = "guest"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+risc0-zkvm = { version = "3.0", default-features = false, features = ["std"] }
+sha2 = { version = "0.10", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+guest-crypto = { path = "crypto" }
+
+# Pin indexmap to version compatible with risc0 toolchain (rustc 1.79)
+indexmap = "=2.7.1"
+
+[[bin]]
+name = "membership"
+path = "src/membership.rs"
+
+[[bin]]
+name = "transfer"
+path = "src/transfer.rs"
+
+[[bin]]
+name = "withdrawal"
+path = "src/withdrawal.rs"
+
+[[bin]]
+name = "disclosure"
+path = "src/disclosure.rs"

@@ -1,0 +1,16 @@
+[profile.default]
+src = "src"
+out = "out"
+test = "test"
+libs = ["dependencies"]
+solc_version = "0.8.24"
+remappings = [
+    "forge-std/=dependencies/forge-std-1.9.6/",
+]
+
+[soldeer]
+remappings_generate = false
+remappings_location = "config"
+
+[dependencies]
+forge-std = "1.9.6"
