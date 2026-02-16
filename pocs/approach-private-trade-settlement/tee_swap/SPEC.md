@@ -73,11 +73,10 @@ The circuit proves ALL of the following:
 4. Ownership: EITHER
    a. Know sk_owner where sk_owner·G == owner       (claim path)
    b. Know sk_fallback where sk_fallback·G == fallbackOwner
-      AND current_timestamp > timeout                (refund path)
-      where current_timestamp is a PUBLIC INPUT
+      AND block.timestamp > timeout                  (refund path)
 ```
 
-**Circuit timeout validation:** The circuit cannot read `block.timestamp` directly. Instead, `current_timestamp` is passed as a **public input** to the proof. The circuit checks `current_timestamp > timeout` internally. The on-chain verifier contract enforces that the public input matches `block.timestamp` at verification time. This splits the check: the circuit proves the timeout relationship, the contract guarantees the timestamp is real.
+**Timeout enforcement:** The `timeout` field is part of the note commitment. The refund proof exposes `timeout` as a **public output** (the circuit proves it matches the committed value). The on-chain verifier contract then checks `block.timestamp > timeout` directly.
 
 > **Why `H("tee_swap.nullifier", commitment, salt)` and not `Hash(commitment, spendingKey)`?** The nullifier MUST be unique per note AND independent of which spending path is used. If the nullifier varied by spending key, the owner path and fallback path would produce different nullifiers for the same note, enabling a double-spend where Party B claims and Party A refunds the same note. With `H("tee_swap.nullifier", commitment, salt)`, the nullifier is canonical: whichever path is used first, the second attempt is rejected by the nullifier set.
 
@@ -170,11 +169,13 @@ Each party creates a time-locked note for the counterparty and generates a depos
 Public inputs:
   commitment            // New note commitment (inserted into CommitmentTree)
   pk_stealth            // Stealth address (note owner). Safe to publish: unlinkable without R
+  h_swap                // H(swapId): binds the deposit to a specific swap
   h_R                   // H(R): binds the proof to a specific ephemeral public key
   h_meta                // H(pk_meta_counterparty, salt): binds to the intended counterparty
   h_enc                 // H(encrypted_salt): binds to a correctly encrypted salt
 
 Private inputs:
+  swapId                // Swap identifier (agreed off-chain)
   r                     // Ephemeral private key (never leaves the prover)
   pk_meta_counterparty  // Counterparty's meta public key
   chainId, value, assetId, fallbackOwner, timeout, salt   // Note fields
@@ -183,13 +184,14 @@ Private inputs:
 Circuit constraints:
   1. commitment == H("tee_swap.commitment", chainId, value, assetId, pk_stealth, fallbackOwner, timeout, salt)
   2. pk_stealth == pk_meta_counterparty + H("tee_swap.stealth", r · pk_meta_counterparty)·G
-  3. h_R == H(r·G)
-  4. h_meta == H(pk_meta_counterparty, salt)
-  5. h_enc == H(encrypted_salt)
+  3. h_swap == H(swapId)
+  4. h_R == H(r·G)
+  5. h_meta == H(pk_meta_counterparty, salt)
+  6. h_enc == H(encrypted_salt)
      where encrypted_salt == salt XOR H("tee_swap.salt_enc", r · pk_meta_counterparty)
 ```
 
-Constraint 2 guarantees the stealth address is correctly derived. Constraints 3-5 produce binding commitments that the TEE can open and verify in Phase 2. The ECDH shared secret (`r · pk_meta_counterparty`) is computed once inside the circuit and reused for both stealth derivation (constraint 2) and salt encryption (constraint 5).
+Constraint 2 guarantees the stealth address is correctly derived. Constraint 3 binds the deposit to a specific swap, preventing reuse of the same deposit across swaps. Constraints 4-6 produce binding commitments that the TEE can open and verify in Phase 2. The ECDH shared secret (`r · pk_meta_counterparty`) is computed once inside the circuit and reused for both stealth derivation (constraint 2) and salt encryption (constraint 6).
 
 If the note is funded by spending an existing note, the circuit MUST also prove standard spend operations (Merkle inclusion, nullifier correctness, ownership of the spent note).
 
@@ -208,7 +210,7 @@ If the note is funded by spending an existing note, the circuit MUST also prove 
    - timeout = now + 48h
    - salt = salt_A
 4. Generate deposit proof (see circuit above):
-   - Public inputs: commitment_A, pk_stealth_B, H(R_A), H(pk_meta_B, salt_A), H(encrypted_salt_A)
+   - Public inputs: commitment_A, pk_stealth_B, H(swapId), H(R_A), H(pk_meta_B, salt_A), H(encrypted_salt_A)
    - Nullifies old note (old nullifier added to NullifierSet)
    - Inserts new commitment into CommitmentTree
 5. Submit proof on Network 1 (USD chain)
@@ -230,7 +232,7 @@ If the note is funded by spending an existing note, the circuit MUST also prove 
    - timeout = now + 48h
    - salt = salt_B
 4. Generate deposit proof (see circuit above):
-   - Public inputs: commitment_B, pk_stealth_A, H(R_B), H(pk_meta_A, salt_B), H(encrypted_salt_B)
+   - Public inputs: commitment_B, pk_stealth_A, H(swapId), H(R_B), H(pk_meta_A, salt_B), H(encrypted_salt_B)
    - Nullifies old note (old nullifier added to NullifierSet)
    - Inserts new commitment into CommitmentTree
 5. Submit proof on Network 2 (BOND chain)
@@ -243,7 +245,7 @@ If the note is funded by spending an existing note, the circuit MUST also prove 
 
 ### Phase 2: TEE Verification
 
-The TEE combines on-chain proof data with off-chain submissions to verify swap correctness. The deposit proofs have already been verified on-chain by the ZK verifier contract, which guarantees the mathematical correctness of stealth address derivation and salt encryption (Phase 1 circuit constraints 1-5). The TEE's role is to verify that the off-chain data matches the on-chain binding commitments, and that the swap terms are compatible.
+The TEE combines on-chain proof data with off-chain submissions to verify swap correctness. The deposit proofs have already been verified on-chain by the ZK verifier contract, which guarantees the mathematical correctness of stealth address derivation and salt encryption (Phase 1 circuit constraints 1-6). The TEE's role is to verify that the off-chain data matches the on-chain binding commitments, and that the swap terms are compatible.
 
 ```
 TEE receives via attested channel:
@@ -251,34 +253,38 @@ TEE receives via attested channel:
   - From Party B: (swapId, R_B, encrypted_salt_B, noteDetails_B)
 
 TEE reads from on-chain (public inputs of verified deposit proofs):
-  - From Network 1: commitment_A, pk_stealth_B, h_R_A, h_meta_A, h_enc_A
-  - From Network 2: commitment_B, pk_stealth_A, h_R_B, h_meta_B, h_enc_B
+  - From Network 1: commitment_A, pk_stealth_B, h_swap_A, h_R_A, h_meta_A, h_enc_A
+  - From Network 2: commitment_B, pk_stealth_A, h_swap_B, h_R_B, h_meta_B, h_enc_B
 
 TEE MUST verify:
 
   1. Deposit proofs exist and are verified on their respective chains
 
-  2. Commitment correctness (noteDetails match on-chain commitments):
+  2. Swap binding (both deposits reference the same swap):
+     - H(swapId) == h_swap_A
+     - H(swapId) == h_swap_B
+
+  3. Commitment correctness (noteDetails match on-chain commitments):
      - H("tee_swap.commitment", noteDetails_A) == commitment_A
      - H("tee_swap.commitment", noteDetails_B) == commitment_B
 
-  3. Binding commitment openings (off-chain data matches on-chain commitments):
+  4. Binding commitment openings (off-chain data matches on-chain commitments):
      - H(R_A) == h_R_A
      - H(pk_meta_B, noteDetails_A.salt) == h_meta_A
      - H(encrypted_salt_A) == h_enc_A
      (same three checks for Party B's data against h_R_B, h_meta_B, h_enc_B)
 
-  4. Swap terms match (amounts, assets, chain IDs)
-  5. Both notes have matching timeout
-  6. Timeout has not expired
+  5. Swap terms match (amounts, assets, chain IDs)
+  6. Both notes have matching timeout
+  7. Timeout has not expired
 ```
 
 **Why binding commitments are trustworthy.** The TEE performs only hash comparisons, no elliptic curve operations. The security argument:
 
-- The on-chain ZK verifier has already verified the deposit proof. Circuit constraint 2 guarantees `pk_stealth` is correctly derived from the prover's ephemeral key `r` and `pk_meta_counterparty`. Constraints 3-5 guarantee `h_R`, `h_meta`, and `h_enc` are consistent with the same `r` and `pk_meta_counterparty`.
+- The on-chain ZK verifier has already verified the deposit proof. Circuit constraint 2 guarantees `pk_stealth` is correctly derived from the prover's ephemeral key `r` and `pk_meta_counterparty`. Constraint 3 binds the deposit to a specific swapId. Constraints 4-6 guarantee `h_R`, `h_meta`, and `h_enc` are consistent with the same `r` and `pk_meta_counterparty`.
 - When the TEE opens `h_meta_A` and finds it matches `H(pk_meta_B, salt_A)`, it confirms the note targets Party B specifically (not some other pk_meta). A malicious Party A cannot produce a valid proof for a different pk_meta that opens to `H(pk_meta_B, salt_A)`, because the circuit enforces the binding internally.
 - When the TEE opens `h_R_A` and finds it matches `H(R_A)`, it confirms the `R_A` received off-chain is the same ephemeral key used in the proof. Party A cannot later provide a different R without failing this check.
-- When the TEE opens `h_enc_A` and finds it matches `H(encrypted_salt_A)`, it confirms the encrypted salt is correctly derived (the circuit proved this in constraint 5). Party A cannot substitute a garbage encrypted salt.
+- When the TEE opens `h_enc_A` and finds it matches `H(encrypted_salt_A)`, it confirms the encrypted salt is correctly derived (the circuit proved this in constraint 6). Party A cannot substitute a garbage encrypted salt.
 
 If all checks pass, the TEE proceeds to Phase 3.
 
@@ -293,17 +299,19 @@ If all checks pass, the TEE proceeds to Phase 3.
 ```solidity
 function announceSwap(
     bytes32 swapId,
-    bytes32 ephemeralKey_A,       // R_A (Party B uses to derive sk_stealth)
-    bytes32 ephemeralKey_B,       // R_B (Party A uses to derive sk_stealth)
+    bytes ephemeralKey_A,         // R_A (Party B uses to derive sk_stealth)
+    bytes ephemeralKey_B,         // R_B (Party A uses to derive sk_stealth)
     bytes32 encrypted_salt_A,     // salt_A encrypted for Party B
     bytes32 encrypted_salt_B      // salt_B encrypted for Party A
 ) external onlyTEE {
+    require(!announcements[swapId].revealed, "already revealed");
     announcements[swapId] = SwapAnnouncement({
         ephemKey_A: ephemeralKey_A,
         ephemKey_B: ephemeralKey_B,
         encSalt_A: encrypted_salt_A,
         encSalt_B: encrypted_salt_B,
-        timestamp: block.timestamp
+        timestamp: block.timestamp,
+        revealed: true
     });
     emit SwapRevealed(swapId);
 }
@@ -320,11 +328,15 @@ function announceSwap(
 
 **Atomicity:** TEE reveals both keys and encrypted salts in a single operation, or neither. This guarantees both parties can claim their notes, or both can refund. Works identically for same-network and cross-chain swaps.
 
+> **TEE rollback note:** TEE platforms are susceptible to rollback attacks where the enclave state is restored to a previous snapshot. A rolled-back TEE could re-announce a swap it already processed. The on-chain `require(!revealed)` guard prevents duplicate announcements regardless of TEE state.
+
 ---
 
 ### Phase 4: Claim or Refund
 
 > **Privacy note:** Parties SHOULD stagger their claim transactions with a random delay after the announcement (see T7). Claiming simultaneously creates a timing correlation that links both legs of the swap.
+
+> **Finality note:** Parties SHOULD wait for the announcement transaction to reach finality before submitting a claim proof.
 
 **Party B claims USD (normal path):**
 
@@ -380,7 +392,7 @@ Party A refunds USD:
      - Proves Merkle inclusion in CommitmentTree
      - Proves nullifier == H("tee_swap.nullifier", commitment_A, salt_A)
      - Proves knowledge of sk_A where sk_A·G == fallbackOwner
-     - Proves current_timestamp > timeout (current_timestamp is a public input; verifier contract checks it matches block.timestamp)
+     - Exposes timeout as a public output (circuit proves it matches the committed value; verifier contract checks block.timestamp > timeout)
   5. Submit proof. Nullifier is added to NullifierSet. Party A reclaims USD
 
 Party B refunds BOND (same process, using salt_B and note details which they created)
