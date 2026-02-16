@@ -22,11 +22,11 @@ A protocol for atomic cross-chain swaps of private UTXO notes using stealth addr
 
 All hashes use an explicit domain tag as the first argument to prevent cross-purpose collisions in a cross-chain context:
 
-| Domain | Tag | Purpose |
-|--------|-----|---------|
-| Commitment | `"tee_swap.commitment"` | Note commitment derivation |
-| Nullifier | `"tee_swap.nullifier"` | Nullifier derivation |
-| Stealth | `"tee_swap.stealth"` | Stealth address key derivation |
+| Domain     | Tag                     | Purpose                        |
+| ---------- | ----------------------- | ------------------------------ |
+| Commitment | `"tee_swap.commitment"` | Note commitment derivation     |
+| Nullifier  | `"tee_swap.nullifier"`  | Nullifier derivation           |
+| Stealth    | `"tee_swap.stealth"`    | Stealth address key derivation |
 
 Convention: `H(domain, ...)` denotes `Hash(domain_tag ‖ ...)` where `‖` is concatenation.
 
@@ -51,12 +51,14 @@ Note {
 ```
 
 **Derived values:**
+
 - `commitment = H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt)`
 - `nullifier = H("tee_swap.nullifier", commitment, salt)`
 
 **Spending conditions (enforced by circuit):**
 
 The circuit proves ALL of the following:
+
 ```
 1. Commitment preimage: commitment == H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt)
 2. Merkle inclusion: commitment exists in the commitment tree at the given root
@@ -94,6 +96,7 @@ StealthAddress {
 ```
 
 **Derivation:**
+
 ```
 Sender (knows pk_meta_recipient, generates r):
   shared_secret = ECDH(r, pk_meta_recipient) = r·pk_meta
@@ -124,6 +127,7 @@ NullifierSet {
 **Invariant:** Each commitment in the tree maps to exactly one nullifier (`H("tee_swap.nullifier", commitment, salt)`). Once that nullifier appears in the set, the note cannot be spent again via any path.
 
 **Transaction flow:**
+
 1. **Create note:** insert `commitment` into `CommitmentTree`
 2. **Spend note:** verify ZK proof, check `nullifier ∉ NullifierSet`, add `nullifier` to `NullifierSet`
 
@@ -152,6 +156,7 @@ SwapIntent {
 ### Phase 1: Lock Notes to Stealth Addresses
 
 **Party A (swapping USD for BOND):**
+
 ```
 1. Generate ephemeral key: r_A, random salt_A
 2. Compute:
@@ -171,6 +176,7 @@ SwapIntent {
 ```
 
 **Party B (swapping BOND for USD):**
+
 ```
 1. Generate ephemeral key: r_B, random salt_B
 2. Compute:
@@ -201,15 +207,22 @@ TEE receives from both parties:
   - (swapId, R_B, noteDetails_B) from B
 
 TEE verifies:
-  1. Both commitments exist on their respective chains ✓
-  2. Commitments match provided note details ✓
+  1. Both commitments exist on their respective chains
+  2. Commitments match provided note details
   3. Stealth addresses correctly derived:
-     - pk_stealth_B = pk_meta_B + H("tee_swap.stealth", ECDH(R_A, pk_meta_B))·G ✓
-     - pk_stealth_A = pk_meta_A + H("tee_swap.stealth", ECDH(R_B, pk_meta_A))·G ✓
-  4. Swap terms match (amounts, assets) ✓
-  5. Both notes have same timeout ✓
-  6. Timeout hasn't expired ✓
+     - pk_stealth_B = pk_meta_B + H("tee_swap.stealth", ECDH(R_A, pk_meta_B))·G
+     - pk_stealth_A = pk_meta_A + H("tee_swap.stealth", ECDH(R_B, pk_meta_A))·G
+  4. Swap terms match (amounts, assets)
+  5. Both notes have same timeout
+  6. Timeout hasn't expired
+
+If all checks pass, TEE prepares encrypted payloads for the announcement:
+  7. encryptedNoteA_forB = ECIES.Encrypt(pk_meta_B, noteDetails_A)
+  8. encryptedNoteB_forA = ECIES.Encrypt(pk_meta_A, noteDetails_B)
+     where noteDetails = (chainId, value, assetId, owner, fallbackOwner, timeout, salt)
 ```
+
+> **RPC trust assumption:** Step 1 relies on an external RPC endpoint (e.g., Infura, Alchemy) to read on-chain state. The TEE trusts the RPC provider to return correct commitment data — a compromised or malicious RPC could feed false state, causing the TEE to approve a swap against a non-existent commitment. To tighten this, a light client such as [Helios](https://github.com/a16z/helios) could run inside the TEE, verifying state proofs against the consensus and eliminating RPC trust entirely.
 
 ---
 
@@ -239,6 +252,7 @@ function announceSwap(
 **Both parties monitor announcement location (contract on either network, or off-chain service).**
 
 **What each party receives from the announcement:**
+
 - Party A: `R_B` (to derive sk_stealth_A) + encrypted Note_B details including `salt_B` (to compute nullifier)
 - Party B: `R_A` (to derive sk_stealth_B) + encrypted Note_A details including `salt_A` (to compute nullifier)
 
@@ -251,6 +265,7 @@ function announceSwap(
 > **Privacy note:** Parties should stagger their claim transactions with a random delay after the announcement (see T7). Claiming simultaneously creates a timing correlation that links both legs of the swap.
 
 **Party B claims USD (normal path):**
+
 ```
 1. Reads R_A and encrypted Note_A details from announcement contract
 2. Decrypts Note_A details with sk_meta_B → obtains (value, assetId, salt_A, owner, fallbackOwner, timeout)
@@ -266,6 +281,7 @@ function announceSwap(
 ```
 
 **Party A claims BOND (normal path):**
+
 ```
 1. Reads R_B and encrypted Note_B details from announcement contract
 2. Decrypts Note_B details with sk_meta_A → obtains (value, assetId, salt_B, owner, fallbackOwner, timeout)
@@ -276,6 +292,7 @@ function announceSwap(
 ```
 
 **Refund scenario (TEE failed to reveal before timeout):**
+
 ```
 Party A refunds USD:
   1. Wait until block.timestamp > timeout
@@ -303,6 +320,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 **Attack:** TEE attempts to spend users' notes.
 
 **Mitigation:**
+
 - ✅ Users never share spending keys with TEE
 - ✅ TEE only receives ephemeral public keys (R), not private keys (r)
 - ✅ TEE cannot derive stealth private keys without user's meta private key
@@ -317,6 +335,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 **Attack:** Intel/AMD/AWS extracts plaintext from TEE during execution.
 
 **Mitigation:**
+
 - ❌ No cryptographic defense against manufacturer
 - ⚠️ Institutional users may accept this risk (already trust HSMs from same vendors)
 - ⚠️ Multi-TEE approach: require M-of-N TEEs from different manufacturers
@@ -330,6 +349,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 **Attack:** TEE reveals R_A (Party B claims USD) but crashes before revealing R_B (Party A can't claim BOND).
 
 **Mitigation:**
+
 - ✅ TEE reveals both R_A and R_B in a single atomic operation (both or neither)
 - ✅ Atomicity enforced by TEE, not by blockchain - works cross-chain
 - ✅ If TEE fails before revelation → timeout refunds activate for both parties
@@ -344,6 +364,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 **Attack:** MEV bot sees announcement transaction in mempool, tries to claim notes before legitimate parties.
 
 **Mitigation:**
+
 - ✅ Only recipient with sk_meta can derive sk_stealth from revealed R
 - ✅ Attacker seeing R_A cannot derive sk_stealth_B without sk_meta_B
 - ✅ Announcement reveals public key R, not private key
@@ -357,6 +378,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 **Attack:** TEE reveals keys for one party but refuses to reveal for the other.
 
 **Mitigation:**
+
 - ✅ Announcement contract enforces atomic revelation (both keys or neither)
 - ✅ Timeout refunds provide escape hatch if TEE goes offline
 - ⚠️ TEE can censor by never revealing at all → users wait until timeout
@@ -370,6 +392,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 **Attack:** Malicious party sets timeout = now + 1 minute, immediately refunds after locking.
 
 **Mitigation:**
+
 - ✅ TEE verifies timeout is reasonable (e.g., minimum 24-48h)
 - ✅ TEE rejects swaps with insufficient timeout window
 - ✅ Both parties' notes must have matching timeout
@@ -383,6 +406,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 **Attack:** Observer links locked notes to claims via timing/amount analysis.
 
 **Mitigation:**
+
 - ✅ All notes look identical on-chain (same commitment structure)
 - ✅ Time-locked notes indistinguishable from normal notes
 - ✅ Spending with stealth key vs refund path produces identical on-chain footprint
@@ -398,6 +422,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 **Attack:** Parties monitor different announcement locations, miss the revelation.
 
 **Mitigation:**
+
 - ✅ Announcement location agreed upon during swap negotiation
 - ✅ Can be on-chain contract (either network) or off-chain service
 - ✅ Both parties must monitor the same location
@@ -410,6 +435,7 @@ Party B refunds BOND (same process, using salt_B which they created)
 ## Security Properties
 
 **Guaranteed (cryptographic):**
+
 - Users cannot lose funds to TEE
 - Users can always recover via timeout refund
 - Double-spend prevention: canonical nullifier per note (`H("tee_swap.nullifier", commitment, salt)`) ensures a note spent via one path cannot be spent again via the other
@@ -418,11 +444,13 @@ Party B refunds BOND (same process, using salt_B which they created)
 - Atomic swaps: both parties can claim or both refund (no partial execution)
 
 **Atomicity source:**
+
 - **TEE's atomic revelation of both ephemeral keys** - not blockchain consensus
 - Works identically for same-network and cross-chain swaps
 - Independent of which network(s) hold the notes
 
 **Trusted:**
+
 - TEE hardware manufacturer (can see plaintext, cannot steal)
 - TEE operator (can censor by not revealing, cannot steal)
 - Both parties monitor agreed announcement location
@@ -431,15 +459,83 @@ Party B refunds BOND (same process, using salt_B which they created)
 
 ## Comparison to Alternatives
 
-| Property | This Protocol | Client-Side ZK (Railgun) | Traditional TEE DvP |
-|----------|---------------|--------------------------|---------------------|
-| User keeps spending keys | ✅ Yes | ✅ Yes | ❌ No (TEE has keys) |
-| TEE can steal funds | ❌ No | N/A | ⚠️ Yes |
-| Timeout recovery | ✅ Yes | N/A | ❌ No |
-| Anonymity set | All notes | All notes | Only swaps |
-| Atomic swaps | ✅ Yes (TEE revelation) | N/A | ✅ Yes (but risky) |
-| Works cross-chain | ✅ Yes | N/A | ❌ No |
-| Proof generation | Client-side | Client-side | TEE-side |
-| Trust requirement | HW manufacturer | None | TEE operator + HW |
+| Property                 | This Protocol           | Client-Side ZK (Railgun) | Traditional TEE DvP  |
+| ------------------------ | ----------------------- | ------------------------ | -------------------- |
+| User keeps spending keys | ✅ Yes                  | ✅ Yes                   | ❌ No (TEE has keys) |
+| TEE can steal funds      | ❌ No                   | N/A                      | ⚠️ Yes               |
+| Timeout recovery         | ✅ Yes                  | N/A                      | ❌ No                |
+| Anonymity set            | All notes               | All notes                | Only swaps           |
+| Atomic swaps             | ✅ Yes (TEE revelation) | N/A                      | ✅ Yes (but risky)   |
+| Works cross-chain        | ✅ Yes                  | N/A                      | ❌ No                |
+| Proof generation         | Client-side             | Client-side              | TEE-side             |
+| Trust requirement        | HW manufacturer         | None                     | TEE operator + HW    |
 
 **Key innovation:** Atomicity via TEE's revelation mechanism (not blockchain consensus) enables cross-chain swaps while users retain custody of spending keys. Privacy maintained through stealth addresses and large anonymity sets.
+
+---
+
+## TEE Key Management
+
+The TEE must submit transactions on-chain (swap announcements in Phase 3). This raises practical questions: how does the TEE pay for gas, how does it authenticate to the contract, and how are enclave keys rotated?
+
+### Problem
+
+A naive approach — funding an EOA inside the TEE — has drawbacks:
+
+- The TEE needs ETH for gas, requiring external top-ups
+- The EOA's secp256k1 key may not match the enclave's native key type (e.g., P-256 for SGX, RSA for some attestation flows)
+- All swap announcements are linked to a single `msg.sender`, creating a correlation point
+- Key rotation requires redeploying or updating every contract that references the TEE address
+
+### Solution: Account Abstraction (EIP-4337)
+
+The TEE operates through a smart account, using its enclave-derived key pair as the signing authority.
+
+**Architecture:**
+
+```
+TEE signs UserOp with enclave key
+        ↓
+Bundler submits to EntryPoint
+        ↓
+EntryPoint → SmartAccount.validateUserOp()  // verifies TEE signature
+           → SmartAccount.execute()
+               → AnnouncementContract.announceSwap()
+```
+
+In `announceSwap`, `msg.sender` is the smart account address. The announcement contract authenticates via:
+
+```solidity
+modifier onlyTEE() {
+    require(msg.sender == teeSmartAccount);
+    _;
+}
+```
+
+The smart account handles TEE signature verification internally — the announcement contract is decoupled from the TEE's key type or rotation schedule.
+
+**Benefits:**
+
+- **Gas abstraction:** A paymaster sponsors UserOps. The TEE never holds ETH.
+- **Flexible signature schemes:** `validateUserOp` can verify P-256, RSA, or any scheme the enclave uses — not limited to secp256k1.
+- **Stable identity:** The smart account address is permanent. Contracts reference this address regardless of the underlying TEE key.
+
+### Key Rotation
+
+TEE enclaves rotate keys on redeployment, attestation refresh, or hardware migration. The smart account supports this natively:
+
+1. TEE generates a new key pair inside the enclave
+2. TEE signs a UserOp **with the current (old) key** calling `smartAccount.rotateSigner(newPubKey)`
+3. Smart account updates its authorized signer
+4. Subsequent UserOps must be signed with the new key
+
+The smart account address does not change — no update required in the announcement contract or any other contract referencing `teeSmartAccount`.
+
+### Trust Implications
+
+The smart account introduces no additional trust assumptions beyond the TEE itself:
+
+- Only the enclave can produce valid signatures for UserOps
+- The bundler is untrusted — it relays but cannot forge UserOps
+- The paymaster is untrusted — it sponsors gas but cannot influence execution
+- The `onlyTEE` check in the announcement contract remains equivalent to verifying the TEE's authority, just mediated through the smart account
