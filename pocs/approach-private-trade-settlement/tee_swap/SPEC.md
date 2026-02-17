@@ -71,6 +71,8 @@ Note {
 The circuit proves ALL of the following:
 
 ```
+Public inputs: nullifier, root, timeout
+
 1. Commitment preimage: commitment == H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt)
 2. Merkle inclusion: commitment exists in the commitment tree at the given root
 3. Nullifier correctness: nullifier == H("tee_swap.nullifier", commitment, salt)
@@ -80,7 +82,7 @@ The circuit proves ALL of the following:
       AND block.timestamp > timeout                  (refund path)
 ```
 
-**Timeout enforcement:** The `timeout` field is part of the note commitment. The refund proof exposes `timeout` as a **public output** (the circuit proves it matches the committed value). The on-chain verifier contract then checks `block.timestamp > timeout` directly.
+**Timeout enforcement:** The `timeout` field is both part of the note commitment and a public input of both deposit and spend circuits. Both claim and refund paths expose `timeout`, producing identical on-chain footprints. For the refund path, the on-chain verifier contract checks `block.timestamp > timeout` directly. Notes with `timeout = 0` are standard (non-swap) notes; the timestamp check is trivially satisfied and effectively a no-op.
 
 > **Why `H("tee_swap.nullifier", commitment, salt)` and not `Hash(commitment, spendingKey)`?** The nullifier MUST be unique per note AND independent of which spending path is used. If the nullifier varied by spending key, the owner path and fallback path would produce different nullifiers for the same note, enabling a double-spend where Party B claims and Party A refunds the same note. With `H("tee_swap.nullifier", commitment, salt)`, the nullifier is canonical: whichever path is used first, the second attempt is rejected by the nullifier set.
 
@@ -123,16 +125,13 @@ Recipient (knows sk_meta, receives R):
 
 Each network maintains:
 
+```solidity
+mapping(bytes32 => bool) public commitments;   // All note commitments ever inserted
+mapping(bytes32 => bool) public roots;          // Valid Merkle roots (historical)
+mapping(bytes32 => bool) public nullifiers;     // All nullifiers ever submitted (spent notes)
 ```
-CommitmentTree {
-    tree: MerkleTree,          // Append-only Merkle tree of all note commitments
-    roots: bytes32[]           // History of recent roots (for proof flexibility)
-}
 
-NullifierSet {
-    nullifiers: Set<bytes32>   // All nullifiers ever submitted (spent notes)
-}
-```
+The contract records each commitment on insertion and stores every resulting Merkle root. Each counterparty MUST maintain a local copy of the Merkle tree by indexing commitment insertion events, in order to compute inclusion proofs when spending notes.
 
 **Invariant:** Each commitment in the tree maps to exactly one nullifier (`H("tee_swap.nullifier", commitment, salt)`). Once that nullifier appears in the set, the note MUST NOT be spent again via any path.
 
@@ -172,8 +171,9 @@ Each party creates a time-locked note for the counterparty and generates a depos
 ```
 Public inputs:
   commitment            // New note commitment (inserted into CommitmentTree)
+  timeout               // Time-lock expiry (0 for standard notes, >0 for swap notes)
   pk_stealth            // Stealth address (note owner). Safe to publish: unlinkable without R
-  h_swap                // H("tee_swap.bind_swap", swapId): binds the deposit to a specific swap
+  h_swap                // H("tee_swap.bind_swap", swapId, salt): binds the deposit to a specific swap
   h_R                   // H("tee_swap.bind_R", R): binds the proof to a specific ephemeral public key
   h_meta                // H("tee_swap.bind_meta", pk_meta_counterparty, salt): binds to the intended counterparty
   h_enc                 // H("tee_swap.bind_enc", encrypted_salt): binds to a correctly encrypted salt
@@ -182,13 +182,13 @@ Private inputs:
   swapId                // Swap identifier (agreed off-chain)
   r                     // Ephemeral private key (never leaves the prover)
   pk_meta_counterparty  // Counterparty's meta public key
-  chainId, value, assetId, fallbackOwner, timeout, salt   // Note fields
+  chainId, value, assetId, fallbackOwner, salt             // Note fields
   encrypted_salt        // Pre-computed by prover
 
 Circuit constraints:
   1. commitment == H("tee_swap.commitment", chainId, value, assetId, pk_stealth, fallbackOwner, timeout, salt)
   2. pk_stealth == pk_meta_counterparty + H("tee_swap.stealth", r · pk_meta_counterparty)·G
-  3. h_swap == H("tee_swap.bind_swap", swapId)
+  3. h_swap == H("tee_swap.bind_swap", swapId, salt)
   4. h_R == H("tee_swap.bind_R", r·G)
   5. h_meta == H("tee_swap.bind_meta", pk_meta_counterparty, salt)
   6. h_enc == H("tee_swap.bind_enc", encrypted_salt)
@@ -265,8 +265,8 @@ TEE MUST verify:
   1. Deposit proofs exist and are verified on their respective chains
 
   2. Swap binding (both deposits reference the same swap):
-     - H("tee_swap.bind_swap", swapId) == h_swap_A
-     - H("tee_swap.bind_swap", swapId) == h_swap_B
+     - H("tee_swap.bind_swap", swapId, noteDetails_A.salt) == h_swap_A
+     - H("tee_swap.bind_swap", swapId, noteDetails_B.salt) == h_swap_B
 
   3. Commitment correctness (noteDetails match on-chain commitments):
      - H("tee_swap.commitment", noteDetails_A) == commitment_A
@@ -285,7 +285,7 @@ TEE MUST verify:
 
 **Why binding commitments are trustworthy.** The TEE performs only hash comparisons, no elliptic curve operations. The security argument:
 
-- The on-chain ZK verifier has already verified the deposit proof. Circuit constraint 2 guarantees `pk_stealth` is correctly derived from the prover's ephemeral key `r` and `pk_meta_counterparty`. Constraint 3 binds the deposit to a specific swapId. Constraints 4-6 guarantee `h_R`, `h_meta`, and `h_enc` are consistent with the same `r` and `pk_meta_counterparty`.
+- The on-chain ZK verifier has already verified the deposit proof. Circuit constraint 2 guarantees `pk_stealth` is correctly derived from the prover's ephemeral key `r` and `pk_meta_counterparty`. Constraint 3 binds the deposit to a specific swapId (salted per-party to prevent cross-chain linkability). Constraints 4-6 guarantee `h_R`, `h_meta`, and `h_enc` are consistent with the same `r` and `pk_meta_counterparty`.
 - When the TEE opens `h_meta_A` and finds it matches `H("tee_swap.bind_meta", pk_meta_B, salt_A)`, it confirms the note targets Party B specifically (not some other pk_meta). A malicious Party A cannot produce a valid proof for a different pk_meta that opens to `H("tee_swap.bind_meta", pk_meta_B, salt_A)`, because the circuit enforces the binding internally.
 - When the TEE opens `h_R_A` and finds it matches `H("tee_swap.bind_R", R_A)`, it confirms the `R_A` received off-chain is the same ephemeral key used in the proof. Party A cannot later provide a different R without failing this check.
 - When the TEE opens `h_enc_A` and finds it matches `H("tee_swap.bind_enc", encrypted_salt_A)`, it confirms the encrypted salt is correctly derived (the circuit proved this in constraint 6). Party A cannot substitute a garbage encrypted salt.
@@ -590,17 +590,26 @@ The smart account introduces no additional trust assumptions beyond the TEE itse
 
 ### T7: Anonymity Set Attacks
 
-**Attack:** Observer links locked notes to claims via timing/amount analysis.
+**Attack:** Observer links swap notes to each other or to claim transactions via timing, timeout values, or on-chain metadata.
 
 **Mitigation:** Partially mitigated.
 
-- All notes look identical on-chain (same commitment structure)
-- Time-locked notes indistinguishable from normal notes
-- Spending with stealth key vs refund path produces identical on-chain footprint
-- Large anonymity set: swap notes mix with all system notes
-- Claim transactions SHOULD be staggered. If both parties claim shortly after the TEE announcement, an observer can correlate the two spend transactions by timing, linking the USD and BOND legs of the same swap. Parties SHOULD introduce a random delay (e.g., minutes to hours) between the announcement and their claim submission. The timeout window (48h) provides ample room for this.
+- `timeout` is a public input in both deposit and spend circuits. Notes with `timeout > 0` are identifiable as swap (time-locked) notes; notes with `timeout = 0` are standard notes. This is an accepted trade-off: during the swap window, an observer can see that a locked note exists and when it expires, but not who owns it, what it contains, or who the counterparty is.
+- **Deposit timing correlation:** Both parties lock notes within a narrow window. An observer monitoring multiple chains can correlate two deposits by timing and matching timeout values, linking the two legs of a swap with high confidence. This reveals that a swap occurred and approximately when, but not the amounts, asset types, or participant identities.
+- **Spending path indistinguishability:** Both claim and refund paths expose the same public inputs (`nullifier`, `root`, `timeout`), producing identical on-chain footprints. An observer cannot distinguish claims from refunds.
+- **Nullifier-commitment unlinkability:** The nullifier is derived from `H("tee_swap.nullifier", commitment, salt)` where `salt` is private. An observer cannot link a nullifier back to a specific commitment in the tree.
+- **Re-potting:** After claiming a swap note (`timeout > 0`), the recipient SHOULD spend it into a fresh note with `timeout = 0`. Because the spend circuit keeps the commitment private (only the nullifier and root are public), the new note is indistinguishable from any standard note and re-enters the general anonymity set.
+- **Claim staggering:** Parties SHOULD introduce a random delay (minutes to hours) between the TEE announcement and their claim submission to avoid timing correlation. The timeout window (48h) provides ample room for this.
 
-**Impact:** Minimal metadata leakage with proper claim staggering. Without staggering, timing correlation can link swap legs across chains.
+**What is leaked:**
+
+| Leaked | Hidden |
+| ------ | ------ |
+| A time-locked note exists | Amount and asset type |
+| When it expires (timeout) | Owner / recipient identity |
+| Probabilistic link between two swap legs (via timing) | Which note was spent (nullifier unlinkability) |
+
+**Impact:** Swap notes are transiently distinguishable during the lock window. After settlement and re-potting, they dissolve back into the general anonymity set. The residual leakage is that an observer can detect a swap occurred and approximately when, but learns nothing about the participants or economic terms.
 
 ---
 
