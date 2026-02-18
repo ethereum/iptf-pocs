@@ -1,0 +1,23 @@
+[profile.default]
+src = "contracts/src"
+out = "contracts/out"
+libs = ["contracts/dependencies", "dependencies"]
+test = "contracts/test"
+script = "contracts/script"
+cache_path = "contracts/cache"
+broadcast = "contracts/broadcast"
+gas_limit = 30000000
+remappings = [
+    "forge-std/=dependencies/forge-std-1.14.0",
+]
+fs_permissions = [{ access = "read-write", path = "./" }]
+optimizer = true
+optimizer_runs = 100
+
+[soldeer]
+remappings_generate = true
+remappings_prefix = "@"
+remappings_location = "config"
+
+[dependencies]
+forge-std = "1.14.0"

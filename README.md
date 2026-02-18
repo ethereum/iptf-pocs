@@ -29,6 +29,7 @@ Each PoC is independent—own language and tooling. No shared dependencies betwe
 | Name | Privacy Primitive | Status |
 |------|-------------------|--------|
 | [private-bond](./pocs/private-bond/) | Confidential bond transfers | In Progress |
+| [approach-private-trade-settlement](./pocs/approach-private-trade-settlement/) | Confidential atomic DvP settlement | Draft |
 
 ## Contributing
 
