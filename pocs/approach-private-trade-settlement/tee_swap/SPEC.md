@@ -38,6 +38,7 @@ All hashes MUST use an explicit domain tag as the first argument to prevent cros
 | Bind R     | `"tee_swap.bind_R"`      | Binding commitment over ephemeral key|
 | Bind meta  | `"tee_swap.bind_meta"`   | Binding commitment over counterparty |
 | Bind enc   | `"tee_swap.bind_enc"`    | Binding commitment over encrypted salt|
+| Swap ID    | `"tee_swap.swap_id"`     | Deterministic swap identifier from agreed terms|
 
 Convention: `H(domain, ...)` denotes `Hash(domain_tag ‖ ...)` where `‖` is concatenation.
 
@@ -144,9 +145,25 @@ The contract records each commitment on insertion and stores every resulting Mer
 
 ### Swap State
 
+**Swap ID derivation:**
+
+The `swapId` is a deterministic commitment to the agreed swap terms. Both parties independently compute it from the negotiated parameters during intent matching (before the protocol begins):
+
+```
+swapId = H("tee_swap.swap_id",
+    valueA, assetIdA, chainIdA,         // Party A's leg (what A locks for B)
+    valueB, assetIdB, chainIdB,         // Party B's leg (what B locks for A)
+    timeout,                            // Agreed swap expiry
+    pk_meta_A, pk_meta_B,              // Both parties' meta public keys
+    nonce                               // Random nonce for uniqueness per deal
+)
+```
+
+Because the `swapId` is derived from the terms, it acts as a mutual commitment: both parties can only produce the same `swapId` if they agree on every parameter. The TEE can later recompute it from `noteDetails` to verify that locked notes match the agreed terms (see Phase 2, step 5).
+
 ```
 SwapIntent {
-    swapId: bytes32,                    // Unique swap identifier
+    swapId: bytes32,                    // Deterministic swap identifier (derived from terms)
     partyA_commitment: bytes32,         // A's locked note commitment
     partyB_commitment: bytes32,         // B's locked note commitment
     partyA_ephemeralKey: Point,         // R_A (for B to derive sk_stealth)
@@ -154,6 +171,7 @@ SwapIntent {
     encrypted_salt_A: bytes32,          // salt_A encrypted for Party B via ECDH(r_A, pk_meta_B)
     encrypted_salt_B: bytes32,          // salt_B encrypted for Party A via ECDH(r_B, pk_meta_A)
     timeout: uint256,                   // Swap expiry
+    nonce: bytes32,                     // Random nonce (agreed during intent matching)
     revealed: bool                      // TEE has revealed ephemeral keys
 }
 ```
@@ -199,6 +217,14 @@ Constraint 2 guarantees the stealth address is correctly derived. Constraint 3 b
 
 If the note is funded by spending an existing note, the circuit MUST also prove standard spend operations (Merkle inclusion, nullifier correctness, ownership of the spent note).
 
+**Both parties (before locking):**
+
+```
+0. Derive swapId from agreed terms:
+   swapId = H("tee_swap.swap_id", valueA, assetIdA, chainIdA, valueB, assetIdB, chainIdB, timeout, pk_meta_A, pk_meta_B, nonce)
+   Both parties compute this independently and MUST arrive at the same value.
+```
+
 **Party A (swapping USD for BOND):**
 
 ```
@@ -218,7 +244,7 @@ If the note is funded by spending an existing note, the circuit MUST also prove 
    - Nullifies old note (old nullifier added to NullifierSet)
    - Inserts new commitment into CommitmentTree
 5. Submit proof on Network 1 (USD chain)
-6. Send to TEE (via attested channel): (swapId, R_A, encrypted_salt_A, noteDetails_A)
+6. Send to TEE (via attested channel): (swapId, nonce, R_A, encrypted_salt_A, noteDetails_A)
 ```
 
 **Party B (swapping BOND for USD):**
@@ -240,7 +266,7 @@ If the note is funded by spending an existing note, the circuit MUST also prove 
    - Nullifies old note (old nullifier added to NullifierSet)
    - Inserts new commitment into CommitmentTree
 5. Submit proof on Network 2 (BOND chain)
-6. Send to TEE (via attested channel): (swapId, R_B, encrypted_salt_B, noteDetails_B)
+6. Send to TEE (via attested channel): (swapId, nonce, R_B, encrypted_salt_B, noteDetails_B)
 ```
 
 > **Why R MUST remain secret until Phase 3.** The ephemeral public key R is the stealth address "unlock": given R, the counterparty can derive sk_stealth and claim the note. If R were a public output of the deposit proof, the counterparty could claim immediately after deposit, before locking their own note. Publishing only `H("tee_swap.bind_R", R)` at deposit time preserves atomicity. R is revealed later in the TEE's atomic announcement (Phase 3).
@@ -253,8 +279,8 @@ The TEE combines on-chain proof data with off-chain submissions to verify swap c
 
 ```
 TEE receives via attested channel:
-  - From Party A: (swapId, R_A, encrypted_salt_A, noteDetails_A)
-  - From Party B: (swapId, R_B, encrypted_salt_B, noteDetails_B)
+  - From Party A: (swapId, nonce, R_A, encrypted_salt_A, noteDetails_A)
+  - From Party B: (swapId, nonce, R_B, encrypted_salt_B, noteDetails_B)
 
 TEE reads from on-chain (public inputs of verified deposit proofs):
   - From Network 1: commitment_A, pk_stealth_B, h_swap_A, h_R_A, h_meta_A, h_enc_A
@@ -278,7 +304,16 @@ TEE MUST verify:
      - H("tee_swap.bind_enc", encrypted_salt_A) == h_enc_A
      (same three checks for Party B's data against h_R_B, h_meta_B, h_enc_B)
 
-  5. Swap terms match (amounts, assets, chain IDs)
+  5. Swap terms match agreed deal (swapId encodes the terms):
+     - Recompute: expected_swapId = H("tee_swap.swap_id",
+         noteDetails_A.value, noteDetails_A.assetId, noteDetails_A.chainId,
+         noteDetails_B.value, noteDetails_B.assetId, noteDetails_B.chainId,
+         timeout, pk_meta_A, pk_meta_B, nonce)
+     - Verify: expected_swapId == swapId
+     This guarantees the locked notes match the terms both parties committed
+     to during intent matching. If either party deviates (e.g., locks 80 USD
+     instead of the agreed 100 USD), the recomputed swapId will differ and
+     the TEE rejects the swap.
   6. Both notes have matching timeout
   7. Timeout has not expired
 ```
