@@ -19,9 +19,10 @@ pub(crate) fn fr_to_b256(value: Fr) -> B256 {
     B256::from_slice(&bytes)
 }
 
-// ── Domain tag constants (Poseidon-hash-derived, hardcoded for cross-language matching) ──
+// ── Domain tag constants (SHA-256-derived, hardcoded for cross-language matching) ──
 //
-// These values are deterministic Poseidon hashes of the domain strings.
+// These values are deterministic SHA-256 hashes of the domain strings
+// with the most significant byte zeroed to fit within the BN254 scalar field.
 // They MUST be identical across Rust, Noir, and Solidity.
 
 /// `H("tee_swap.commitment")`
@@ -339,10 +340,30 @@ mod tests {
 
     // ── Domain constant tests ──
 
-    // TODO: Add derivation test once the generation method is confirmed
-    // (Noir Poseidon2? Different construction from Circom Poseidon).
     // These constants are agreed cross-language values — do NOT change without
     // coordinating with Noir and Solidity implementations.
+
+    /// Derive a domain tag constant: SHA-256(label) with MSB zeroed.
+    fn derive_domain_constant(label: &str) -> B256 {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(label.as_bytes());
+        let mut bytes: [u8; 32] = hash.into();
+        bytes[0] = 0x00;
+        B256::from(bytes)
+    }
+
+    #[test]
+    fn test_domain_constants_match_derivation() {
+        assert_eq!(DOMAIN_COMMITMENT, derive_domain_constant("tee_swap.commitment"));
+        assert_eq!(DOMAIN_NULLIFIER, derive_domain_constant("tee_swap.nullifier"));
+        assert_eq!(DOMAIN_STEALTH, derive_domain_constant("tee_swap.stealth"));
+        assert_eq!(DOMAIN_SALT_ENC, derive_domain_constant("tee_swap.salt_enc"));
+        assert_eq!(DOMAIN_BIND_SWAP, derive_domain_constant("tee_swap.bind_swap"));
+        assert_eq!(DOMAIN_BIND_R, derive_domain_constant("tee_swap.bind_R"));
+        assert_eq!(DOMAIN_BIND_META, derive_domain_constant("tee_swap.bind_meta"));
+        assert_eq!(DOMAIN_BIND_ENC, derive_domain_constant("tee_swap.bind_enc"));
+        assert_eq!(DOMAIN_SWAP_ID, derive_domain_constant("tee_swap.swap_id"));
+    }
 
     #[test]
     fn test_domain_constants_are_nonzero() {

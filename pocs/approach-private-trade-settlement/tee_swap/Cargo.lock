@@ -1568,6 +1568,7 @@ dependencies = [
  "ark-std 0.5.0",
  "light-poseidon",
  "rand 0.8.5",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "zk-kit-lean-imt",
