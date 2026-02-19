@@ -8,7 +8,9 @@ cache_path = "contracts/cache"
 broadcast = "contracts/broadcast"
 gas_limit = 30000000
 remappings = [
+    "@zk-kit/=dependencies/zk-kit-v1/",
     "forge-std/=dependencies/forge-std-1.14.0",
+    "poseidon-solidity/=dependencies/poseidon-solidity-0.0.5/",
 ]
 fs_permissions = [{ access = "read-write", path = "./" }]
 optimizer = true
@@ -21,3 +23,5 @@ remappings_location = "config"
 
 [dependencies]
 forge-std = "1.14.0"
+poseidon-solidity = "0.0.5"
+zk-kit = { version = "v1", git = "https://github.com/zk-kit/zk-kit.solidity.git", rev = "a171c845ec7fdc50cdd1fe96c14c27d707cdfbed" }
