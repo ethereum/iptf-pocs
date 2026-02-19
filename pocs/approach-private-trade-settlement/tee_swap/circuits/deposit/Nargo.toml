@@ -1,0 +1,6 @@
+[package]
+name = "deposit"
+type = "bin"
+authors = [""]
+
+[dependencies]

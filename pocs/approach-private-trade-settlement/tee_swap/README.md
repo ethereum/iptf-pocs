@@ -32,6 +32,7 @@ What this does NOT protect against:
 
 - [Rust](https://www.rust-lang.org/tools/install)
 - [Foundry](https://getfoundry.sh/introduction/installation)
+- [Nargo](https://noir-lang.org/docs/getting_started/installation/) (Noir toolchain)
 
 ## Installation
 
@@ -44,8 +45,15 @@ forge soldeer install
 ## Building
 
 ```bash
+# Build Solidity contracts
 forge build
+
+# Check Rust TEE code
 cargo check
+
+# Build Noir circuits
+cd circuits/deposit && nargo check && cd ../..
+cd circuits/spend && nargo check && cd ../..
 ```
 
 ## Running
