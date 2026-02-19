@@ -3,7 +3,7 @@ use rand::Rng;
 
 use super::commitment::Commitment;
 use super::nullifier::Nullifier;
-use crate::crypto::poseidon::{domain_tag, poseidon3, poseidon8};
+use crate::crypto::poseidon::{poseidon3, poseidon8, DOMAIN_COMMITMENT, DOMAIN_NULLIFIER};
 
 /// A time-locked note representing a private UTXO in the TEE swap protocol.
 ///
@@ -74,13 +74,12 @@ impl Note {
     }
 
     /// Compute the commitment for this note.
-    /// commitment = H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt)
+    /// commitment = H(DOMAIN_COMMITMENT, chainId, value, assetId, owner, fallbackOwner, timeout, salt)
     pub fn commitment(&self) -> Commitment {
-        let tag = domain_tag("tee_swap.commitment");
         let value_b256: B256 = U256::from(self.value).into();
 
         let hash = poseidon8(
-            tag,
+            DOMAIN_COMMITMENT,
             self.chain_id,
             value_b256,
             self.asset_id,
@@ -93,14 +92,13 @@ impl Note {
     }
 
     /// Compute the nullifier for this note.
-    /// nullifier = H("tee_swap.nullifier", commitment, salt)
+    /// nullifier = H(DOMAIN_NULLIFIER, commitment, salt)
     ///
     /// The nullifier is canonical — it is the same regardless of whether
     /// the claim path or the refund path is used to spend the note.
     pub fn nullifier(&self) -> Nullifier {
-        let tag = domain_tag("tee_swap.nullifier");
         let commitment = self.commitment();
-        let hash = poseidon3(tag, commitment.0, self.salt);
+        let hash = poseidon3(DOMAIN_NULLIFIER, commitment.0, self.salt);
         Nullifier(hash)
     }
 }
