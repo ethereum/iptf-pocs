@@ -35,15 +35,13 @@ contract TeeLockTest is Test {
 
         teeLock.announceSwap(SWAP_ID, EPH_KEY_A, EPH_KEY_B, ENC_SALT_A, ENC_SALT_B);
 
-        (bool revealed, bytes32 ephA, bytes32 ephB, bytes32 encA, bytes32 encB, uint256 ts) =
-            teeLock.announcements(SWAP_ID);
+        (bool revealed, bytes32 ephA, bytes32 ephB, bytes32 encA, bytes32 encB) = teeLock.announcements(SWAP_ID);
 
         assertTrue(revealed);
         assertEq(ephA, EPH_KEY_A);
         assertEq(ephB, EPH_KEY_B);
         assertEq(encA, ENC_SALT_A);
         assertEq(encB, ENC_SALT_B);
-        assertEq(ts, block.timestamp);
     }
 
     function testAnnounceSwapRevertsNonTEE() public {
@@ -68,15 +66,15 @@ contract TeeLockTest is Test {
         vm.prank(teeAddress);
         teeLock.announceSwap(SWAP_ID_2, EPH_KEY_B, EPH_KEY_A, ENC_SALT_B, ENC_SALT_A);
 
-        (bool revealed1,,,,,) = teeLock.announcements(SWAP_ID);
-        (bool revealed2,,,,,) = teeLock.announcements(SWAP_ID_2);
+        (bool revealed1,,,,) = teeLock.announcements(SWAP_ID);
+        (bool revealed2,,,,) = teeLock.announcements(SWAP_ID_2);
 
         assertTrue(revealed1);
         assertTrue(revealed2);
     }
 
     function testAnnouncementNotRevealedByDefault() public view {
-        (bool revealed,,,,,) = teeLock.announcements(SWAP_ID);
+        (bool revealed,,,,) = teeLock.announcements(SWAP_ID);
         assertFalse(revealed);
     }
 

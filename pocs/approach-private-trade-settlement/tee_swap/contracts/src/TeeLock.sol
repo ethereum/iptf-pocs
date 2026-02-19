@@ -11,7 +11,6 @@ contract TeeLock {
         bytes32 ephemeralKeyB;
         bytes32 encryptedSaltA;
         bytes32 encryptedSaltB;
-        uint256 timestamp;
     }
 
     /// @notice TEE address (PoC: simple EOA, production: EIP-4337 smart account)
@@ -58,8 +57,7 @@ contract TeeLock {
             ephemeralKeyA: ephemeralKeyA,
             ephemeralKeyB: ephemeralKeyB,
             encryptedSaltA: encryptedSaltA,
-            encryptedSaltB: encryptedSaltB,
-            timestamp: block.timestamp
+            encryptedSaltB: encryptedSaltB
         });
 
         emit SwapRevealed(swapId);
