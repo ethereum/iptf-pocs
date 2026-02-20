@@ -3,8 +3,15 @@
 //! Exercises the full pipeline: off-chain state management → journal computation
 //! → on-chain contract interaction → state verification.
 //!
-//! Uses MockRiscZeroVerifier (accepts all proofs) so no guest ELF compilation
-//! is needed, but all roots, amounts, and hashes are computed from real off-chain
+//! Supports two modes:
+//! - **Mock proofs** (default, `RISC0_SKIP_BUILD=1`): Uses MockRiscZeroVerifier,
+//!   no guest ELF compilation needed.
+//! - **Real proofs** (guest ELFs compiled): Runs the RISC Zero prover for each
+//!   operation, verifies receipts locally, and asserts journal correctness.
+//!   On-chain still uses MockRiscZeroVerifier (real on-chain verification needs
+//!   non-zero `IMAGE_ID` + Groth16 verifier).
+//!
+//! In both modes, all roots, amounts, and hashes are computed from real off-chain
 //! state via the host library.
 //!
 //! ## Prerequisites
@@ -16,7 +23,11 @@
 //! ## Running
 //!
 //! ```bash
+//! # Mock proofs (default):
 //! cd pocs/diy-validium && RISC0_SKIP_BUILD=1 cargo test --test e2e_integration -- --nocapture
+//!
+//! # Real proofs (requires compiled guest ELFs):
+//! cd pocs/diy-validium && RISC0_DEV_MODE=1 cargo test --test e2e_integration -- --nocapture
 //! ```
 
 use std::path::PathBuf;
@@ -35,6 +46,7 @@ use sha2::{Digest, Sha256};
 
 use diy_validium_host::{
     accounts::{Account, AccountStore},
+    journal::{DisclosureJournal, TransferJournal, WithdrawalJournal},
     merkle::{
         account_commitment, compute_disclosure_key_hash, compute_new_root, compute_single_leaf_root,
     },
@@ -151,12 +163,179 @@ async fn get_state_root(provider: &impl Provider, addr: Address) -> FixedBytes<3
 }
 
 // ---------------------------------------------------------------------------
+// Real RISC Zero proof helpers (only called when guest ELFs are available)
+// ---------------------------------------------------------------------------
+
+/// Run the real RISC Zero prover for a transfer, verify receipt, return journal.
+#[allow(clippy::too_many_arguments)]
+fn prove_transfer(
+    sender_sk: &[u8; 32],
+    sender_balance: u64,
+    sender_salt: &[u8; 32],
+    sender_path: &[[u8; 32]],
+    sender_indices: &[bool],
+    amount: u64,
+    recipient_pubkey: &[u8; 32],
+    recipient_balance: u64,
+    recipient_salt: &[u8; 32],
+    recipient_path: &[[u8; 32]],
+    recipient_indices: &[bool],
+    new_sender_salt: &[u8; 32],
+    new_recipient_salt: &[u8; 32],
+) -> TransferJournal {
+    let env = risc0_zkvm::ExecutorEnv::builder()
+        .write(sender_sk)
+        .unwrap()
+        .write(&sender_balance)
+        .unwrap()
+        .write(sender_salt)
+        .unwrap()
+        .write(&sender_path.to_vec())
+        .unwrap()
+        .write(&sender_indices.to_vec())
+        .unwrap()
+        .write(&amount)
+        .unwrap()
+        .write(recipient_pubkey)
+        .unwrap()
+        .write(&recipient_balance)
+        .unwrap()
+        .write(recipient_salt)
+        .unwrap()
+        .write(&recipient_path.to_vec())
+        .unwrap()
+        .write(&recipient_indices.to_vec())
+        .unwrap()
+        .write(new_sender_salt)
+        .unwrap()
+        .write(new_recipient_salt)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let prover = risc0_zkvm::default_prover();
+    let prove_info = prover.prove(env, methods::TRANSFER_ELF).unwrap();
+    let receipt = prove_info.receipt;
+    receipt.verify(methods::TRANSFER_ID).unwrap();
+
+    TransferJournal::from_bytes(&receipt.journal.bytes).unwrap()
+}
+
+/// Run the real RISC Zero prover for a withdrawal, verify receipt, return journal.
+#[allow(clippy::too_many_arguments)]
+fn prove_withdrawal(
+    secret_key: &[u8; 32],
+    balance: u64,
+    salt: &[u8; 32],
+    path: &[[u8; 32]],
+    indices: &[bool],
+    amount: u64,
+    new_salt: &[u8; 32],
+    recipient: &[u8; 20],
+) -> WithdrawalJournal {
+    let env = risc0_zkvm::ExecutorEnv::builder()
+        .write(secret_key)
+        .unwrap()
+        .write(&balance)
+        .unwrap()
+        .write(salt)
+        .unwrap()
+        .write(&path.to_vec())
+        .unwrap()
+        .write(&indices.to_vec())
+        .unwrap()
+        .write(&amount)
+        .unwrap()
+        .write(new_salt)
+        .unwrap()
+        .write(recipient)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let prover = risc0_zkvm::default_prover();
+    let prove_info = prover.prove(env, methods::WITHDRAWAL_ELF).unwrap();
+    let receipt = prove_info.receipt;
+    receipt.verify(methods::WITHDRAWAL_ID).unwrap();
+
+    WithdrawalJournal::from_bytes(&receipt.journal.bytes).unwrap()
+}
+
+/// Run the real RISC Zero prover for a disclosure, verify receipt, return journal.
+fn prove_disclosure(
+    secret_key: &[u8; 32],
+    balance: u64,
+    salt: &[u8; 32],
+    path: &[[u8; 32]],
+    indices: &[bool],
+    threshold: u64,
+    auditor_pubkey: &[u8; 32],
+) -> DisclosureJournal {
+    let env = risc0_zkvm::ExecutorEnv::builder()
+        .write(secret_key)
+        .unwrap()
+        .write(&balance)
+        .unwrap()
+        .write(salt)
+        .unwrap()
+        .write(&path.to_vec())
+        .unwrap()
+        .write(&indices.to_vec())
+        .unwrap()
+        .write(&threshold)
+        .unwrap()
+        .write(auditor_pubkey)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let prover = risc0_zkvm::default_prover();
+    let prove_info = prover.prove(env, methods::DISCLOSURE_ELF).unwrap();
+    let receipt = prove_info.receipt;
+    receipt.verify(methods::DISCLOSURE_ID).unwrap();
+
+    DisclosureJournal::from_bytes(&receipt.journal.bytes).unwrap()
+}
+
+/// Run the real RISC Zero prover for a membership proof, verify receipt.
+fn prove_membership(
+    leaf: &[u8; 32],
+    path: &[[u8; 32]],
+    indices: &[bool],
+    expected_root: &[u8; 32],
+) {
+    let env = risc0_zkvm::ExecutorEnv::builder()
+        .write(leaf)
+        .unwrap()
+        .write(&path.to_vec())
+        .unwrap()
+        .write(&indices.to_vec())
+        .unwrap()
+        .write(expected_root)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let prover = risc0_zkvm::default_prover();
+    let prove_info = prover.prove(env, methods::MEMBERSHIP_ELF).unwrap();
+    prove_info.receipt.verify(methods::MEMBERSHIP_ID).unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // The test
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn e2e_full_lifecycle() {
     let tree_depth = 4;
+
+    // Auto-detect whether real RISC Zero guest ELFs are available
+    let real_proofs = !methods::TRANSFER_ELF.is_empty();
+    if real_proofs {
+        println!("\n  Real RISC Zero proofs ENABLED (guest ELFs available)");
+    } else {
+        println!("\n  Mock proofs (guest ELFs not compiled, set RISC0_SKIP_BUILD=0 to enable)");
+    }
 
     // ===================================================================
     // Step 0 — Off-chain setup
@@ -229,7 +408,8 @@ async fn e2e_full_lifecycle() {
     println!("  TransferVerifier:     {tv_addr}");
 
     // Deploy ValidiumBridge(IERC20 _token, IRiscZeroVerifier _verifier, bytes32 _initialRoot, bytes32 _allowlistRoot)
-    let allowlist_root = FixedBytes::from(sha256(b"allowlist"));
+    // Allowlist is a single-element depth-0 tree: root = Alice's pubkey
+    let allowlist_root = FixedBytes::from(alice_pubkey);
     let bridge_args =
         (token_addr, verifier_addr, initial_root_b32, allowlist_root).abi_encode_params();
     let bridge_addr = deploy(&provider, &bridge_bc, &bridge_args).await;
@@ -332,6 +512,13 @@ async fn e2e_full_lifecycle() {
     );
     println!("  Deposited {deposit_amount} tokens, bridge balance correct, root unchanged");
 
+    // Optionally verify allowlist membership proof with real prover
+    if real_proofs {
+        println!("  Generating real membership proof for allowlist...");
+        prove_membership(&alice_pubkey, &[], &[], &alice_pubkey);
+        println!("  Membership proof verified locally: OK");
+    }
+
     // ===================================================================
     // Step 4 — Transfer (Alice sends 1000 to Bob)
     // ===================================================================
@@ -359,6 +546,35 @@ async fn e2e_full_lifecycle() {
         &bob_proof.path,
     );
     let transfer_new_root_b32 = FixedBytes::from(transfer_new_root);
+
+    // Optionally verify transfer proof with real prover
+    if real_proofs {
+        println!("  Generating real transfer proof...");
+        let tj = prove_transfer(
+            &alice_sk,
+            alice_balance,
+            &alice_salt,
+            &alice_proof.path,
+            &alice_proof.indices,
+            transfer_amount,
+            &bob_pubkey,
+            bob_balance,
+            &bob_salt,
+            &bob_proof.path,
+            &bob_proof.indices,
+            &new_alice_salt,
+            &new_bob_salt,
+        );
+        assert_eq!(
+            tj.old_root, initial_root,
+            "Transfer journal old_root mismatch"
+        );
+        assert_eq!(
+            tj.new_root, transfer_new_root,
+            "Transfer journal new_root mismatch"
+        );
+        println!("  Transfer journal verified: old_root and new_root match");
+    }
 
     // Execute on-chain
     eth_send(
@@ -419,7 +635,40 @@ async fn e2e_full_lifecycle() {
     );
     let bridge_new_root_b32 = FixedBytes::from(bridge_new_root);
 
-    let recipient_addr = Address::repeat_byte(0xCC);
+    let recipient_raw: [u8; 20] = [0xCC; 20];
+    let recipient_addr = Address::from(recipient_raw);
+
+    // Optionally verify withdrawal proof with real prover
+    if real_proofs {
+        println!("  Generating real withdrawal proof...");
+        let wj = prove_withdrawal(
+            &bob_sk,
+            bob_balance,
+            &bob_salt,
+            &bob_proof_for_bridge.path,
+            &bob_proof_for_bridge.indices,
+            withdraw_amount,
+            &bob_withdraw_salt,
+            &recipient_raw,
+        );
+        assert_eq!(
+            wj.old_root, initial_root,
+            "Withdrawal journal old_root mismatch"
+        );
+        assert_eq!(
+            wj.new_root, bridge_new_root,
+            "Withdrawal journal new_root mismatch"
+        );
+        assert_eq!(
+            wj.amount, withdraw_amount,
+            "Withdrawal journal amount mismatch"
+        );
+        assert_eq!(
+            wj.recipient, recipient_raw,
+            "Withdrawal journal recipient mismatch"
+        );
+        println!("  Withdrawal journal verified: roots, amount, and recipient match");
+    }
 
     eth_send(
         &provider,
@@ -472,6 +721,34 @@ async fn e2e_full_lifecycle() {
     let threshold: u64 = 1000;
 
     let disclosure_key_hash = compute_disclosure_key_hash(&alice_pubkey, &auditor_pubkey);
+
+    // Optionally verify disclosure proof with real prover
+    if real_proofs {
+        println!("  Generating real disclosure proof...");
+        let alice_proof_for_disclosure = tree.prove(alice_idx);
+        let dj = prove_disclosure(
+            &alice_sk,
+            alice_balance,
+            &alice_salt,
+            &alice_proof_for_disclosure.path,
+            &alice_proof_for_disclosure.indices,
+            threshold,
+            &auditor_pubkey,
+        );
+        assert_eq!(
+            dj.merkle_root, initial_root,
+            "Disclosure journal root mismatch"
+        );
+        assert_eq!(
+            dj.threshold, threshold,
+            "Disclosure journal threshold mismatch"
+        );
+        assert_eq!(
+            dj.disclosure_key_hash, disclosure_key_hash,
+            "Disclosure journal key hash mismatch"
+        );
+        println!("  Disclosure journal verified: root, threshold, and key hash match");
+    }
 
     let dv_root_before = get_state_root(&provider, dv_addr).await;
 
