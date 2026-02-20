@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 use std::future::Future;
 
 /// Attestation report from the TEE runtime.
@@ -34,7 +34,7 @@ pub trait TeeRuntime: Send + Sync {
     ) -> impl Future<Output = Result<bool, TeeError>> + Send;
 
     /// Get the TEE's signing key address (for on-chain `onlyTEE` checks).
-    fn signer_address(&self) -> B256;
+    fn signer_address(&self) -> Address;
 }
 
 #[derive(Debug, thiserror::Error)]

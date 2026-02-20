@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 
 use crate::ports::tee::{AttestationReport, TeeError, TeeRuntime};
 
@@ -9,11 +9,11 @@ use crate::ports::tee::{AttestationReport, TeeError, TeeRuntime};
 /// using VirTEE crates.
 pub struct MockTeeRuntime {
     /// Mock TEE signer address (EOA for on-chain `onlyTEE` checks)
-    signer: B256,
+    signer: Address,
 }
 
 impl MockTeeRuntime {
-    pub fn new(signer: B256) -> Self {
+    pub fn new(signer: Address) -> Self {
         Self { signer }
     }
 }
@@ -38,7 +38,7 @@ impl TeeRuntime for MockTeeRuntime {
         Ok(report.tee_type == "mock")
     }
 
-    fn signer_address(&self) -> B256 {
+    fn signer_address(&self) -> Address {
         self.signer
     }
 }
@@ -49,7 +49,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_attestation_generation() {
-        let tee = MockTeeRuntime::new(B256::repeat_byte(0x42));
+        let tee = MockTeeRuntime::new(Address::repeat_byte(0x42));
         let pubkey_hash = B256::repeat_byte(0xAA);
 
         let report = tee.generate_attestation(pubkey_hash).await.unwrap();
@@ -60,7 +60,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_attestation_verification() {
-        let tee = MockTeeRuntime::new(B256::repeat_byte(0x42));
+        let tee = MockTeeRuntime::new(Address::repeat_byte(0x42));
 
         let mock_report = AttestationReport {
             tee_type: "mock".to_string(),
@@ -73,7 +73,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_rejects_non_mock_report() {
-        let tee = MockTeeRuntime::new(B256::repeat_byte(0x42));
+        let tee = MockTeeRuntime::new(Address::repeat_byte(0x42));
 
         let real_report = AttestationReport {
             tee_type: "tdx".to_string(),
@@ -86,7 +86,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_signer_address() {
-        let signer = B256::repeat_byte(0x42);
+        let signer = Address::repeat_byte(0x42);
         let tee = MockTeeRuntime::new(signer);
         assert_eq!(tee.signer_address(), signer);
     }
