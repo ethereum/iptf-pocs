@@ -342,7 +342,7 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - **Hash-based disclosure keys** — Production: threshold decryption or verifiable encryption (Penumbra, Aztec)
 - **Simple key derivation** (`pubkey = SHA256(sk)`) — Production: EC key derivation (ed25519)
 - **In-memory storage** — Production: persistent database
-- **IMAGE_ID placeholders** (`bytes32(0)`) — Contracts use placeholder image IDs because guest ELF compilation requires the riscv32im target. In production: compile guest programs (`cargo risczero build`), extract the image IDs from the generated `methods/src/lib.rs`, and pass them as constructor arguments during deployment. The deploy script (`Deploy.s.sol`) would read these from environment variables.
+- **IMAGE_IDs as constructor params** — Contracts accept IMAGE_IDs as immutable constructor parameters. The E2E test passes real IMAGE_IDs (from compiled guest ELFs) and real encoded seals via `risc0-ethereum-contracts`. The deploy script defaults to `bytes32(0)` for local/testnet use. Full on-chain verification requires swapping `MockRiscZeroVerifier` for `RiscZeroGroth16Verifier`, which needs Groth16 proof compression (Bonsai or x86 only — ARM Macs cannot produce Groth16 proofs natively).
 - **No batching** — One proof per operation; production would batch
 - **Single ERC20** — Production: add `asset_id` to commitment scheme
 - **No access control on contract functions** — Any address can submit a valid proof. Production: restrict `executeTransfer` / `withdraw` to an operator address or multisig to prevent front-running and ordering manipulation.

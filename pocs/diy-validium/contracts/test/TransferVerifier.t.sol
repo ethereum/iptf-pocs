@@ -33,7 +33,7 @@ contract TransferVerifierTest is Test {
     }
 
     // ---------------------------------------------------------------
-    // 2. IMAGE_ID is placeholder zero until guest is compiled
+    // 2. IMAGE_ID is set via constructor parameter
     // ---------------------------------------------------------------
     function test_imageId_isConstructorParam() public view {
         // IMAGE_ID is set via constructor parameter

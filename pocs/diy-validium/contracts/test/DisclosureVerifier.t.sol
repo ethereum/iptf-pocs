@@ -48,7 +48,7 @@ contract DisclosureVerifierTest is Test {
     }
 
     // ---------------------------------------------------------------
-    // 2. IMAGE_ID is placeholder zero until guest is compiled
+    // 2. IMAGE_ID is set via constructor parameter
     // ---------------------------------------------------------------
     function test_imageId_isConstructorParam() public view {
         assertEq(disclosureVerifier.IMAGE_ID(), bytes32(0));

@@ -187,7 +187,7 @@ diy-validium/
 - **Hash-based disclosure keys**: Uses `SHA256(pubkey || auditor_pubkey || "disclosure_v1")`, not encryption-based viewing keys. Production would use threshold decryption or verifiable encryption.
 - **Simple key derivation**: `pubkey = SHA256(secret_key)`. Production would use proper elliptic curve key derivation.
 - **In-memory storage**: Account state is held in memory. Production would use a persistent database.
-- **IMAGE_ID placeholders**: On-chain contracts use `bytes32(0)` as the guest image ID.
+- **IMAGE_IDs**: Contracts accept IMAGE_IDs as constructor params. The E2E test passes real IMAGE_IDs when guest ELFs are compiled; the deploy script defaults to `bytes32(0)` for local/testnet use.
 - **No transaction batching**: Each operation requires a separate proof.
 - **Single ERC20**: Bridge supports one token.
 - **Dev mode for tests**: Rust integration tests use `RISC0_DEV_MODE` (fake proofs) for speed.
