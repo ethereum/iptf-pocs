@@ -41,7 +41,8 @@ impl Note {
     ) -> Self {
         let mut rng = rand::thread_rng();
         let mut salt_bytes = [0u8; 32];
-        rng.fill(&mut salt_bytes[5..]); // keep within BN254 field
+        rng.fill(&mut salt_bytes);
+        salt_bytes[0] &= 0x1F; // zero top 3 bits → 253-bit, safe for XOR in BN254 field
 
         Self {
             chain_id,
