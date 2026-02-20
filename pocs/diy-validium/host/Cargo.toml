@@ -15,3 +15,8 @@ hex.workspace = true
 
 # Local methods crate for guest ELF binaries
 methods = { path = "../methods" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+alloy = { version = "1", features = ["node-bindings", "sol-types", "contract", "json-abi", "signer-local", "provider-http"] }
+serde_json = "1.0"
