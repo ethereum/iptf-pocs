@@ -1,6 +1,6 @@
 use alloy_primitives::B256;
 
-use crate::crypto::poseidon::{domain_tag, poseidon3};
+use crate::crypto::poseidon::{poseidon3, DOMAIN_NULLIFIER};
 use crate::domain::nullifier::Nullifier;
 
 /// A commitment is the on-chain representation of a note.
@@ -19,10 +19,9 @@ impl Commitment {
     }
 
     /// Compute the nullifier for this commitment given the salt.
-    /// nullifier = H("tee_swap.nullifier", commitment, salt)
+    /// nullifier = H(DOMAIN_NULLIFIER, commitment, salt)
     pub fn nullifier(&self, salt: B256) -> Nullifier {
-        let tag = domain_tag("tee_swap.nullifier");
-        let hash = poseidon3(tag, self.0, salt);
+        let hash = poseidon3(DOMAIN_NULLIFIER, self.0, salt);
         Nullifier(hash)
     }
 }

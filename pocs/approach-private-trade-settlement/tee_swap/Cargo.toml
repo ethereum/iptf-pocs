@@ -8,9 +8,29 @@ edition = "2024"
 path = "src/lib/lib.rs"
 
 [dependencies]
+# Poseidon
 light-poseidon = "0.4.0"
-alloy-primitives = "1"
 ark-bn254 = "0.5"
+
+# Grumpkin / arkworks
+ark-grumpkin = "0.5"
+ark-ec = "0.5"
 ark-ff = "0.5"
-rand = "0.8"
+ark-std = "0.5"
+ark-serialize = "0.5"
+
+# Ethereum types
+alloy-primitives = "1"
+
+# Merkle tree
 zk-kit-lean-imt = "0.1"
+
+# Async
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
+
+# Util
+thiserror = "2.0"
+rand = "0.8"
+
+[dev-dependencies]
+sha2 = "0.10"
