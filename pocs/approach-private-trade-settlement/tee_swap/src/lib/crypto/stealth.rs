@@ -13,6 +13,11 @@ pub fn affine_x_to_b256(point: &Affine) -> B256 {
     fr_to_b256(point.x)
 }
 
+/// Convert a Grumpkin affine point's y-coordinate to B256.
+pub fn affine_y_to_b256(point: &Affine) -> B256 {
+    fr_to_b256(point.y)
+}
+
 /// Convert a B256 to a Grumpkin scalar (BN254 Fq).
 /// The scalar is interpreted as big-endian bytes mod the Grumpkin scalar field order.
 pub fn b256_to_grumpkin_scalar(value: B256) -> GrumpkinScalar {

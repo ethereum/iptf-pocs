@@ -3,7 +3,9 @@ use rand::Rng;
 
 use super::commitment::Commitment;
 use super::nullifier::Nullifier;
-use crate::crypto::poseidon::{poseidon3, poseidon8, DOMAIN_COMMITMENT, DOMAIN_NULLIFIER};
+use crate::crypto::poseidon::{
+    DOMAIN_COMMITMENT, DOMAIN_NULLIFIER, poseidon3, poseidon8,
+};
 
 /// A time-locked note representing a private UTXO in the TEE swap protocol.
 ///
@@ -109,13 +111,13 @@ mod tests {
 
     fn test_note() -> Note {
         Note::with_salt(
-            B256::left_padding_from(&[1]),  // chain_id = 1
-            1000,                           // value
-            B256::repeat_byte(0xAA),        // asset_id
-            B256::repeat_byte(0xBB),        // owner
-            B256::repeat_byte(0xCC),        // fallback_owner
+            B256::left_padding_from(&[1]),          // chain_id = 1
+            1000,                                   // value
+            B256::repeat_byte(0xAA),                // asset_id
+            B256::repeat_byte(0xBB),                // owner
+            B256::repeat_byte(0xCC),                // fallback_owner
             B256::left_padding_from(&[0x01, 0x00]), // timeout
-            B256::repeat_byte(0x01),        // salt
+            B256::repeat_byte(0x01),                // salt
         )
     }
 
