@@ -100,6 +100,7 @@ cargo build
 RISC0_SKIP_BUILD=1 cargo test -p diy-validium-host
 
 # Solidity tests (transfer verifier, bridge, disclosure verifier)
+# Note: first run needs `forge test` (without --offline) to cache the solc binary
 cd contracts && forge test --offline
 ```
 
