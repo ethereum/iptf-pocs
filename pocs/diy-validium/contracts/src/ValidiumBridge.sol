@@ -29,15 +29,11 @@ contract ValidiumBridge {
     /// @notice Merkle root of the allowlist used for membership verification.
     bytes32 public allowlistRoot;
 
-    /// @notice Image ID for the membership proof guest program. Placeholder until guest ELF is compiled.
-    /// @dev Placeholder — real image ID requires `cargo risczero build` with riscv32im target.
-    ///      See SPEC.md Limitations section for the production deployment path.
-    bytes32 public constant MEMBERSHIP_IMAGE_ID = bytes32(0);
+    /// @notice Image ID for the membership proof guest program.
+    bytes32 public immutable MEMBERSHIP_IMAGE_ID;
 
-    /// @notice Image ID for the withdrawal proof guest program. Placeholder until guest ELF is compiled.
-    /// @dev Placeholder — real image ID requires `cargo risczero build` with riscv32im target.
-    ///      See SPEC.md Limitations section for the production deployment path.
-    bytes32 public constant WITHDRAWAL_IMAGE_ID = bytes32(0);
+    /// @notice Image ID for the withdrawal proof guest program.
+    bytes32 public immutable WITHDRAWAL_IMAGE_ID;
 
     /// @notice Emitted when oldRoot does not match the current stateRoot.
     error StaleState(bytes32 expected, bytes32 provided);
@@ -51,11 +47,20 @@ contract ValidiumBridge {
     /// @notice Emitted when a withdrawal is made.
     event Withdrawal(address indexed recipient, uint256 amount);
 
-    constructor(IERC20 _token, IRiscZeroVerifier _verifier, bytes32 _initialRoot, bytes32 _allowlistRoot) {
+    constructor(
+        IERC20 _token,
+        IRiscZeroVerifier _verifier,
+        bytes32 _initialRoot,
+        bytes32 _allowlistRoot,
+        bytes32 _membershipImageId,
+        bytes32 _withdrawalImageId
+    ) {
         token = _token;
         verifier = _verifier;
         stateRoot = _initialRoot;
         allowlistRoot = _allowlistRoot;
+        MEMBERSHIP_IMAGE_ID = _membershipImageId;
+        WITHDRAWAL_IMAGE_ID = _withdrawalImageId;
         operator = msg.sender;
     }
 

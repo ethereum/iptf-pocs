@@ -1875,6 +1875,7 @@ dependencies = [
  "clap",
  "hex",
  "methods",
+ "risc0-ethereum-contracts",
  "risc0-zkvm",
  "serde",
  "serde_json",
@@ -3761,6 +3762,21 @@ checksum = "b5b956a976b8ce4713694dcc6c370b522a42ccef4ba45da5b6e57dbf26cdb7b1"
 dependencies = [
  "bytemuck",
  "rand_core 0.9.5",
+]
+
+[[package]]
+name = "risc0-ethereum-contracts"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a604f09f459f456fd9ef4919c6efcaa6a787a6f9ffcd76cfc81eae1860584a1"
+dependencies = [
+ "alloy",
+ "alloy-sol-types",
+ "anyhow",
+ "cfg-if",
+ "risc0-zkvm",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

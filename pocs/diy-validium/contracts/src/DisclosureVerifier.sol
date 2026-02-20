@@ -13,17 +13,16 @@ contract DisclosureVerifier {
     /// @notice Merkle root of the current account state.
     bytes32 public stateRoot;
 
-    /// @notice Image ID of the guest program. Placeholder until guest ELF is compiled.
-    /// @dev Placeholder — real image ID requires `cargo risczero build` with riscv32im target.
-    ///      See SPEC.md Limitations section for the production deployment path.
-    bytes32 public constant IMAGE_ID = bytes32(0);
+    /// @notice Image ID of the disclosure guest program.
+    bytes32 public immutable IMAGE_ID;
 
     /// @notice Emitted when a disclosure proof is successfully verified.
     event DisclosureVerified(bytes32 indexed root, uint64 threshold, bytes32 indexed disclosureKeyHash);
 
-    constructor(IRiscZeroVerifier _verifier, bytes32 _stateRoot) {
+    constructor(IRiscZeroVerifier _verifier, bytes32 _stateRoot, bytes32 _imageId) {
         verifier = _verifier;
         stateRoot = _stateRoot;
+        IMAGE_ID = _imageId;
     }
 
     /// @notice Verify a regulatory disclosure proof without mutating state.

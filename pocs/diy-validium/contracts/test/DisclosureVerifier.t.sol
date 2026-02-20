@@ -36,7 +36,7 @@ contract DisclosureVerifierTest is Test {
 
     function setUp() public {
         mockVerifier = new MockRiscZeroVerifier();
-        disclosureVerifier = new DisclosureVerifier(mockVerifier, ROOT);
+        disclosureVerifier = new DisclosureVerifier(mockVerifier, ROOT, bytes32(0));
     }
 
     // ---------------------------------------------------------------
@@ -50,7 +50,7 @@ contract DisclosureVerifierTest is Test {
     // ---------------------------------------------------------------
     // 2. IMAGE_ID is placeholder zero until guest is compiled
     // ---------------------------------------------------------------
-    function test_imageId_isPlaceholderZero() public view {
+    function test_imageId_isConstructorParam() public view {
         assertEq(disclosureVerifier.IMAGE_ID(), bytes32(0));
     }
 
@@ -78,7 +78,7 @@ contract DisclosureVerifierTest is Test {
     function test_verifyDisclosure_callsVerifierWithCorrectJournal() public {
         // Deploy a capturing verifier to inspect the journal digest
         CapturingRiscZeroVerifier capturingVerifier = new CapturingRiscZeroVerifier();
-        DisclosureVerifier dv = new DisclosureVerifier(IRiscZeroVerifier(address(capturingVerifier)), ROOT);
+        DisclosureVerifier dv = new DisclosureVerifier(IRiscZeroVerifier(address(capturingVerifier)), ROOT, bytes32(0));
 
         dv.verifyDisclosure(hex"", ROOT, THRESHOLD, DK_HASH);
 

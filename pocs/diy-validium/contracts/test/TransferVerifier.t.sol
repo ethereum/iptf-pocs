@@ -20,7 +20,7 @@ contract TransferVerifierTest is Test {
 
     function setUp() public {
         mockVerifier = new MockRiscZeroVerifier();
-        transferVerifier = new TransferVerifier(mockVerifier, ROOT);
+        transferVerifier = new TransferVerifier(mockVerifier, ROOT, bytes32(0));
     }
 
     // ---------------------------------------------------------------
@@ -35,8 +35,8 @@ contract TransferVerifierTest is Test {
     // ---------------------------------------------------------------
     // 2. IMAGE_ID is placeholder zero until guest is compiled
     // ---------------------------------------------------------------
-    function test_imageId_isPlaceholderZero() public view {
-        // IMAGE_ID should be bytes32(0) until the guest ELF is compiled
+    function test_imageId_isConstructorParam() public view {
+        // IMAGE_ID is set via constructor parameter
         assertEq(transferVerifier.IMAGE_ID(), bytes32(0));
     }
 

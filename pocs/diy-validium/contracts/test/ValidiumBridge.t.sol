@@ -72,7 +72,12 @@ contract ValidiumBridgeTest is Test {
         mockVerifier = new MockRiscZeroVerifier();
         token = new MockERC20();
         bridge = new ValidiumBridge(
-            IERC20(address(token)), IRiscZeroVerifier(address(mockVerifier)), STATE_ROOT, ALLOWLIST_ROOT
+            IERC20(address(token)),
+            IRiscZeroVerifier(address(mockVerifier)),
+            STATE_ROOT,
+            ALLOWLIST_ROOT,
+            bytes32(0),
+            bytes32(0)
         );
     }
 

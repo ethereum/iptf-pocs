@@ -18,10 +18,8 @@ contract TransferVerifier {
     /// @notice Address of the operator who deployed the contract.
     address public operator;
 
-    /// @notice Image ID of the guest program. Placeholder until guest ELF is compiled.
-    /// @dev Placeholder — real image ID requires `cargo risczero build` with riscv32im target.
-    ///      See SPEC.md Limitations section for the production deployment path.
-    bytes32 public constant IMAGE_ID = bytes32(0);
+    /// @notice Image ID of the transfer guest program.
+    bytes32 public immutable IMAGE_ID;
 
     /// @notice Emitted when oldRoot does not match the current stateRoot.
     error StaleState(bytes32 expected, bytes32 provided);
@@ -29,9 +27,10 @@ contract TransferVerifier {
     /// @notice Emitted when a transfer proof is successfully verified and state is updated.
     event Transfer(bytes32 indexed oldRoot, bytes32 indexed newRoot);
 
-    constructor(IRiscZeroVerifier _verifier, bytes32 _initialRoot) {
+    constructor(IRiscZeroVerifier _verifier, bytes32 _initialRoot, bytes32 _imageId) {
         verifier = _verifier;
         stateRoot = _initialRoot;
+        IMAGE_ID = _imageId;
         operator = msg.sender;
     }
 

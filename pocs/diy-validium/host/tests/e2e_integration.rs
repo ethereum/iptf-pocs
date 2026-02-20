@@ -5,11 +5,11 @@
 //!
 //! Supports two modes:
 //! - **Mock proofs** (default, `RISC0_SKIP_BUILD=1`): Uses MockRiscZeroVerifier,
-//!   no guest ELF compilation needed.
+//!   no guest ELF compilation needed. Zero IMAGE_IDs and empty seals.
 //! - **Real proofs** (guest ELFs compiled): Runs the RISC Zero prover for each
-//!   operation, verifies receipts locally, and asserts journal correctness.
-//!   On-chain still uses MockRiscZeroVerifier (real on-chain verification needs
-//!   non-zero `IMAGE_ID` + Groth16 verifier).
+//!   operation, encodes seals via `risc0-ethereum-contracts`, and passes real
+//!   IMAGE_IDs and seals to contracts. On-chain uses MockRiscZeroVerifier;
+//!   swapping to a Groth16 verifier requires Bonsai or x86 for proof compression.
 //!
 //! In both modes, all roots, amounts, and hashes are computed from real off-chain
 //! state via the host library.
@@ -84,6 +84,12 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(data);
     h.finalize().into()
+}
+
+/// Convert a RISC Zero image ID ([u32; 8]) to a Solidity-compatible bytes32.
+fn image_id_to_bytes32(id: [u32; 8]) -> FixedBytes<32> {
+    let bytes: Vec<u8> = id.iter().flat_map(|w| w.to_le_bytes()).collect();
+    FixedBytes::from_slice(&bytes)
 }
 
 /// Path to the forge `contracts/out/` directory.
@@ -182,7 +188,7 @@ fn prove_transfer(
     recipient_indices: &[bool],
     new_sender_salt: &[u8; 32],
     new_recipient_salt: &[u8; 32],
-) -> TransferJournal {
+) -> (TransferJournal, Bytes) {
     let env = risc0_zkvm::ExecutorEnv::builder()
         .write(sender_sk)
         .unwrap()
@@ -217,8 +223,9 @@ fn prove_transfer(
     let prove_info = prover.prove(env, methods::TRANSFER_ELF).unwrap();
     let receipt = prove_info.receipt;
     receipt.verify(methods::TRANSFER_ID).unwrap();
-
-    TransferJournal::from_bytes(&receipt.journal.bytes).unwrap()
+    let seal = risc0_ethereum_contracts::encode_seal(&receipt).unwrap();
+    let journal = TransferJournal::from_bytes(&receipt.journal.bytes).unwrap();
+    (journal, Bytes::from(seal))
 }
 
 /// Run the real RISC Zero prover for a withdrawal, verify receipt, return journal.
@@ -232,7 +239,7 @@ fn prove_withdrawal(
     amount: u64,
     new_salt: &[u8; 32],
     recipient: &[u8; 20],
-) -> WithdrawalJournal {
+) -> (WithdrawalJournal, Bytes) {
     let env = risc0_zkvm::ExecutorEnv::builder()
         .write(secret_key)
         .unwrap()
@@ -257,8 +264,9 @@ fn prove_withdrawal(
     let prove_info = prover.prove(env, methods::WITHDRAWAL_ELF).unwrap();
     let receipt = prove_info.receipt;
     receipt.verify(methods::WITHDRAWAL_ID).unwrap();
-
-    WithdrawalJournal::from_bytes(&receipt.journal.bytes).unwrap()
+    let seal = risc0_ethereum_contracts::encode_seal(&receipt).unwrap();
+    let journal = WithdrawalJournal::from_bytes(&receipt.journal.bytes).unwrap();
+    (journal, Bytes::from(seal))
 }
 
 /// Run the real RISC Zero prover for a disclosure, verify receipt, return journal.
@@ -270,7 +278,7 @@ fn prove_disclosure(
     indices: &[bool],
     threshold: u64,
     auditor_pubkey: &[u8; 32],
-) -> DisclosureJournal {
+) -> (DisclosureJournal, Bytes) {
     let env = risc0_zkvm::ExecutorEnv::builder()
         .write(secret_key)
         .unwrap()
@@ -293,8 +301,9 @@ fn prove_disclosure(
     let prove_info = prover.prove(env, methods::DISCLOSURE_ELF).unwrap();
     let receipt = prove_info.receipt;
     receipt.verify(methods::DISCLOSURE_ID).unwrap();
-
-    DisclosureJournal::from_bytes(&receipt.journal.bytes).unwrap()
+    let seal = risc0_ethereum_contracts::encode_seal(&receipt).unwrap();
+    let journal = DisclosureJournal::from_bytes(&receipt.journal.bytes).unwrap();
+    (journal, Bytes::from(seal))
 }
 
 /// Run the real RISC Zero prover for a membership proof, verify receipt.
@@ -303,7 +312,7 @@ fn prove_membership(
     path: &[[u8; 32]],
     indices: &[bool],
     expected_root: &[u8; 32],
-) {
+) -> Bytes {
     let env = risc0_zkvm::ExecutorEnv::builder()
         .write(leaf)
         .unwrap()
@@ -318,7 +327,10 @@ fn prove_membership(
 
     let prover = risc0_zkvm::default_prover();
     let prove_info = prover.prove(env, methods::MEMBERSHIP_ELF).unwrap();
-    prove_info.receipt.verify(methods::MEMBERSHIP_ID).unwrap();
+    let receipt = prove_info.receipt;
+    receipt.verify(methods::MEMBERSHIP_ID).unwrap();
+    let seal = risc0_ethereum_contracts::encode_seal(&receipt).unwrap();
+    Bytes::from(seal)
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +348,24 @@ async fn e2e_full_lifecycle() {
     } else {
         println!("\n  Mock proofs (guest ELFs not compiled, set RISC0_SKIP_BUILD=0 to enable)");
     }
+
+    // Compute IMAGE_IDs for contract deployment
+    let (transfer_image_id, membership_image_id, withdrawal_image_id, disclosure_image_id) =
+        if real_proofs {
+            (
+                image_id_to_bytes32(methods::TRANSFER_ID),
+                image_id_to_bytes32(methods::MEMBERSHIP_ID),
+                image_id_to_bytes32(methods::WITHDRAWAL_ID),
+                image_id_to_bytes32(methods::DISCLOSURE_ID),
+            )
+        } else {
+            (
+                FixedBytes::ZERO,
+                FixedBytes::ZERO,
+                FixedBytes::ZERO,
+                FixedBytes::ZERO,
+            )
+        };
 
     // ===================================================================
     // Step 0 — Off-chain setup
@@ -403,20 +433,27 @@ async fn e2e_full_lifecycle() {
     println!("  MockERC20:            {token_addr}");
 
     // Deploy TransferVerifier(address _verifier, bytes32 _initialRoot)
-    let tv_args = (verifier_addr, initial_root_b32).abi_encode_params();
+    let tv_args = (verifier_addr, initial_root_b32, transfer_image_id).abi_encode_params();
     let tv_addr = deploy(&provider, &transfer_verifier_bc, &tv_args).await;
     println!("  TransferVerifier:     {tv_addr}");
 
     // Deploy ValidiumBridge(IERC20 _token, IRiscZeroVerifier _verifier, bytes32 _initialRoot, bytes32 _allowlistRoot)
     // Allowlist is a single-element depth-0 tree: root = Alice's pubkey
     let allowlist_root = FixedBytes::from(alice_pubkey);
-    let bridge_args =
-        (token_addr, verifier_addr, initial_root_b32, allowlist_root).abi_encode_params();
+    let bridge_args = (
+        token_addr,
+        verifier_addr,
+        initial_root_b32,
+        allowlist_root,
+        membership_image_id,
+        withdrawal_image_id,
+    )
+        .abi_encode_params();
     let bridge_addr = deploy(&provider, &bridge_bc, &bridge_args).await;
     println!("  ValidiumBridge:       {bridge_addr}");
 
     // Deploy DisclosureVerifier(IRiscZeroVerifier _verifier, bytes32 _stateRoot)
-    let dv_args = (verifier_addr, initial_root_b32).abi_encode_params();
+    let dv_args = (verifier_addr, initial_root_b32, disclosure_image_id).abi_encode_params();
     let dv_addr = deploy(&provider, &disclosure_bc, &dv_args).await;
     println!("  DisclosureVerifier:   {dv_addr}");
 
@@ -474,14 +511,24 @@ async fn e2e_full_lifecycle() {
     )
     .await;
 
-    // Deposit with empty membership seal
+    // Generate membership seal (real or empty)
+    let membership_seal = if real_proofs {
+        println!("  Generating real membership proof for allowlist...");
+        let seal = prove_membership(&alice_pubkey, &[], &[], &alice_pubkey);
+        println!("  Membership proof verified locally: OK");
+        seal
+    } else {
+        Bytes::new()
+    };
+
+    // Deposit with membership seal
     eth_send(
         &provider,
         bridge_addr,
         depositCall {
             amount: U256::from(deposit_amount),
             pubkey: FixedBytes::from(alice_pubkey),
-            membershipSeal: Bytes::new(),
+            membershipSeal: membership_seal,
         }
         .abi_encode(),
     )
@@ -512,13 +559,6 @@ async fn e2e_full_lifecycle() {
     );
     println!("  Deposited {deposit_amount} tokens, bridge balance correct, root unchanged");
 
-    // Optionally verify allowlist membership proof with real prover
-    if real_proofs {
-        println!("  Generating real membership proof for allowlist...");
-        prove_membership(&alice_pubkey, &[], &[], &alice_pubkey);
-        println!("  Membership proof verified locally: OK");
-    }
-
     // ===================================================================
     // Step 4 — Transfer (Alice sends 1000 to Bob)
     // ===================================================================
@@ -547,10 +587,10 @@ async fn e2e_full_lifecycle() {
     );
     let transfer_new_root_b32 = FixedBytes::from(transfer_new_root);
 
-    // Optionally verify transfer proof with real prover
-    if real_proofs {
+    // Generate transfer proof (real or empty seal)
+    let transfer_seal = if real_proofs {
         println!("  Generating real transfer proof...");
-        let tj = prove_transfer(
+        let (tj, seal) = prove_transfer(
             &alice_sk,
             alice_balance,
             &alice_salt,
@@ -574,14 +614,17 @@ async fn e2e_full_lifecycle() {
             "Transfer journal new_root mismatch"
         );
         println!("  Transfer journal verified: old_root and new_root match");
-    }
+        seal
+    } else {
+        Bytes::new()
+    };
 
     // Execute on-chain
     eth_send(
         &provider,
         tv_addr,
         executeTransferCall {
-            seal: Bytes::new(),
+            seal: transfer_seal,
             oldRoot: initial_root_b32,
             newRoot: transfer_new_root_b32,
         }
@@ -638,10 +681,10 @@ async fn e2e_full_lifecycle() {
     let recipient_raw: [u8; 20] = [0xCC; 20];
     let recipient_addr = Address::from(recipient_raw);
 
-    // Optionally verify withdrawal proof with real prover
-    if real_proofs {
+    // Generate withdrawal proof (real or empty seal)
+    let withdrawal_seal = if real_proofs {
         println!("  Generating real withdrawal proof...");
-        let wj = prove_withdrawal(
+        let (wj, seal) = prove_withdrawal(
             &bob_sk,
             bob_balance,
             &bob_salt,
@@ -668,13 +711,16 @@ async fn e2e_full_lifecycle() {
             "Withdrawal journal recipient mismatch"
         );
         println!("  Withdrawal journal verified: roots, amount, and recipient match");
-    }
+        seal
+    } else {
+        Bytes::new()
+    };
 
     eth_send(
         &provider,
         bridge_addr,
         withdrawCall {
-            seal: Bytes::new(),
+            seal: withdrawal_seal,
             oldRoot: initial_root_b32,
             newRoot: bridge_new_root_b32,
             amount: withdraw_amount,
@@ -722,11 +768,11 @@ async fn e2e_full_lifecycle() {
 
     let disclosure_key_hash = compute_disclosure_key_hash(&alice_pubkey, &auditor_pubkey);
 
-    // Optionally verify disclosure proof with real prover
-    if real_proofs {
+    // Generate disclosure proof (real or empty seal)
+    let disclosure_seal = if real_proofs {
         println!("  Generating real disclosure proof...");
         let alice_proof_for_disclosure = tree.prove(alice_idx);
-        let dj = prove_disclosure(
+        let (dj, seal) = prove_disclosure(
             &alice_sk,
             alice_balance,
             &alice_salt,
@@ -748,7 +794,10 @@ async fn e2e_full_lifecycle() {
             "Disclosure journal key hash mismatch"
         );
         println!("  Disclosure journal verified: root, threshold, and key hash match");
-    }
+        seal
+    } else {
+        Bytes::new()
+    };
 
     let dv_root_before = get_state_root(&provider, dv_addr).await;
 
@@ -756,7 +805,7 @@ async fn e2e_full_lifecycle() {
         &provider,
         dv_addr,
         verifyDisclosureCall {
-            seal: Bytes::new(),
+            seal: disclosure_seal,
             root: initial_root_b32,
             threshold,
             disclosureKeyHash: FixedBytes::from(disclosure_key_hash),

@@ -20,3 +20,4 @@ methods = { path = "../methods" }
 tokio = { version = "1", features = ["full"] }
 alloy = { version = "1", features = ["node-bindings", "sol-types", "contract", "json-abi", "signer-local", "provider-http"] }
 serde_json = "1.0"
+risc0-ethereum-contracts = "3.0"

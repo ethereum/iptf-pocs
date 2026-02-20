@@ -58,20 +58,23 @@ contract Deploy is Script {
         }
 
         // Transfer verifier
-        TransferVerifier transferVerifier = new TransferVerifier(IRiscZeroVerifier(verifierAddr), accountsRoot);
+        TransferVerifier transferVerifier =
+            new TransferVerifier(IRiscZeroVerifier(verifierAddr), accountsRoot, bytes32(0));
         console.log("Deployed TransferVerifier at:", address(transferVerifier));
 
         // ValidiumBridge (ERC20 bridge with membership-gated deposit)
         if (tokenAddr != address(0)) {
-            ValidiumBridge bridge =
-                new ValidiumBridge(IERC20(tokenAddr), IRiscZeroVerifier(verifierAddr), accountsRoot, allowlistRoot);
+            ValidiumBridge bridge = new ValidiumBridge(
+                IERC20(tokenAddr), IRiscZeroVerifier(verifierAddr), accountsRoot, allowlistRoot, bytes32(0), bytes32(0)
+            );
             console.log("Deployed ValidiumBridge at:", address(bridge));
         } else {
             console.log("Skipping ValidiumBridge (set TOKEN_ADDRESS to deploy)");
         }
 
         // DisclosureVerifier (compliance disclosure)
-        DisclosureVerifier disclosureVerifier = new DisclosureVerifier(IRiscZeroVerifier(verifierAddr), accountsRoot);
+        DisclosureVerifier disclosureVerifier =
+            new DisclosureVerifier(IRiscZeroVerifier(verifierAddr), accountsRoot, bytes32(0));
         console.log("Deployed DisclosureVerifier at:", address(disclosureVerifier));
 
         vm.stopBroadcast();
