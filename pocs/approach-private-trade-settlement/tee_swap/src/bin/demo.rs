@@ -10,26 +10,32 @@ use alloy_primitives::B256;
 use ark_ec::{CurveGroup, PrimeGroup};
 use ark_grumpkin::Projective;
 
+use std::collections::HashMap;
+
+use tee_swap::adapters::memory_store::InMemorySwapStore;
 use tee_swap::adapters::merkle_tree::LocalMerkleTree;
-use tee_swap::crypto::poseidon::{bind_enc, bind_meta, bind_r, bind_swap, swap_id_hash};
+use tee_swap::adapters::mock_chain::MockChainPort;
+use tee_swap::coordinator::{SubmissionResult, SwapCoordinator};
 use tee_swap::crypto::stealth::affine_x_to_b256;
 use tee_swap::domain::note::Note;
 use tee_swap::domain::stealth::MetaKeyPair;
-use tee_swap::domain::swap::{SwapAnnouncement, SwapTerms};
+use tee_swap::domain::swap::SwapTerms;
 use tee_swap::party::{prepare_claim, prepare_lock, prepare_refund, PartyRole};
+use tee_swap::ports::SwapLockData;
 
-fn main() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     println!("=== TEE-Coordinated Private Atomic Swap ===");
     println!("=== Protocol Demo (PoC — no real proofs) ===\n");
 
-    scenario_happy_path();
+    scenario_happy_path().await;
     println!("\n{}\n", "=".repeat(60));
     scenario_refund_path();
 
     println!("\n=== All scenarios completed successfully ===");
 }
 
-fn scenario_happy_path() {
+async fn scenario_happy_path() {
     println!("--- Scenario 1: Happy Path (Lock → TEE Verify → Claim) ---\n");
 
     // ── Setup ──
@@ -140,71 +146,74 @@ fn scenario_happy_path() {
         &hex::encode(&lock_b.locked_note.commitment().0 .0)[..16]
     );
 
-    // ── Phase 2: TEE Verification (inline, hash-only) ──
-    println!("\n[Phase 2] TEE verifying submissions (hash-only)...");
+    // ── Phase 2-3: TEE Verification + On-Chain Announcement (via SwapCoordinator) ──
+    println!("\n[Phase 2-3] TEE verifying submissions + announcing on-chain...");
 
-    // Verify both swapIds match
-    assert_eq!(lock_a.submission.swap_id, lock_b.submission.swap_id);
-    println!("  ✓ Both parties submitted same swap_id");
+    // Create mock chains (simulates PrivateUTXO contracts on each chain)
+    let chain_1 = MockChainPort::new(); // USD chain
+    let chain_2 = MockChainPort::new(); // BOND chain
 
-    // Verify commitment correctness
-    assert_eq!(
-        lock_a.locked_note.commitment().0,
-        lock_a.witness.new_commitment
-    );
-    assert_eq!(
-        lock_b.locked_note.commitment().0,
-        lock_b.witness.new_commitment
-    );
-    println!("  ✓ Commitment preimages match on-chain commitments");
-
-    // Verify binding commitments for Party A
-    let recomputed_h_swap_a = bind_swap(terms.swap_id, lock_a.locked_note.salt);
-    let recomputed_h_r_a = bind_r(lock_a.submission.ephemeral_pubkey);
-    let recomputed_h_meta_a = bind_meta(meta_b.pk_x(), lock_a.locked_note.salt);
-    let recomputed_h_enc_a = bind_enc(lock_a.submission.encrypted_salt);
-    assert_eq!(lock_a.witness.h_swap, recomputed_h_swap_a);
-    assert_eq!(lock_a.witness.h_r, recomputed_h_r_a);
-    assert_eq!(lock_a.witness.h_meta, recomputed_h_meta_a);
-    assert_eq!(lock_a.witness.h_enc, recomputed_h_enc_a);
-    println!("  ✓ Party A binding commitments verified (h_swap, h_R, h_meta, h_enc)");
-
-    // Verify binding commitments for Party B
-    let recomputed_h_swap_b = bind_swap(terms.swap_id, lock_b.locked_note.salt);
-    let recomputed_h_r_b = bind_r(lock_b.submission.ephemeral_pubkey);
-    let recomputed_h_meta_b = bind_meta(meta_a.pk_x(), lock_b.locked_note.salt);
-    let recomputed_h_enc_b = bind_enc(lock_b.submission.encrypted_salt);
-    assert_eq!(lock_b.witness.h_swap, recomputed_h_swap_b);
-    assert_eq!(lock_b.witness.h_r, recomputed_h_r_b);
-    assert_eq!(lock_b.witness.h_meta, recomputed_h_meta_b);
-    assert_eq!(lock_b.witness.h_enc, recomputed_h_enc_b);
-    println!("  ✓ Party B binding commitments verified");
-
-    // Verify swapId encodes the agreed terms
-    let recomputed_swap_id = swap_id_hash(
-        lock_a.locked_note.value,
-        lock_a.locked_note.asset_id,
-        lock_a.locked_note.chain_id,
-        lock_b.locked_note.value,
-        lock_b.locked_note.asset_id,
-        lock_b.locked_note.chain_id,
-        terms.timeout,
-        meta_a.pk_x(),
-        meta_b.pk_x(),
-        terms.nonce,
-    );
-    assert_eq!(recomputed_swap_id, terms.swap_id);
-    println!("  ✓ Recomputed swap_id matches agreed terms");
-
-    // ── Phase 3: Atomic Announcement ──
-    println!("\n[Phase 3] TEE announcing swap (atomic revelation)...");
-    let announcement = SwapAnnouncement {
-        swap_id: terms.swap_id,
-        ephemeral_key_a: lock_a.submission.ephemeral_pubkey,
-        ephemeral_key_b: lock_b.submission.ephemeral_pubkey,
-        encrypted_salt_a: lock_a.submission.encrypted_salt,
-        encrypted_salt_b: lock_b.submission.encrypted_salt,
+    // Populate mock chains with lock data (simulates SwapNoteLocked events)
+    let lock_data_a = SwapLockData {
+        commitment: lock_a.locked_note.commitment().0,
+        timeout: lock_a.witness.timeout,
+        pk_stealth: lock_a.witness.pk_stealth,
+        h_swap: lock_a.witness.h_swap,
+        h_r: lock_a.witness.h_r,
+        h_meta: lock_a.witness.h_meta,
+        h_enc: lock_a.witness.h_enc,
     };
+    chain_1
+        .insert_lock_data(lock_data_a.commitment, lock_data_a)
+        .await;
+
+    let lock_data_b = SwapLockData {
+        commitment: lock_b.locked_note.commitment().0,
+        timeout: lock_b.witness.timeout,
+        pk_stealth: lock_b.witness.pk_stealth,
+        h_swap: lock_b.witness.h_swap,
+        h_r: lock_b.witness.h_r,
+        h_meta: lock_b.witness.h_meta,
+        h_enc: lock_b.witness.h_enc,
+    };
+    chain_2
+        .insert_lock_data(lock_data_b.commitment, lock_data_b)
+        .await;
+
+    // Create coordinator with both chains; Chain 1 hosts the TeeLock contract
+    let mut chains = HashMap::new();
+    chains.insert(terms.chain_id_a, chain_1);
+    chains.insert(terms.chain_id_b, chain_2);
+    let coordinator = SwapCoordinator::new(InMemorySwapStore::new(), chains, terms.chain_id_a);
+
+    // Party A submits to TEE — first submission, returns Pending
+    let result_a = coordinator
+        .handle_submission(lock_a.submission.clone())
+        .await
+        .expect("Party A submission failed");
+    assert!(matches!(result_a, SubmissionResult::Pending));
+    println!("  Party A submitted to TEE (pending counterparty)");
+
+    // Party B submits to TEE — second submission, triggers verification + on-chain announcement
+    let result_b = coordinator
+        .handle_submission(lock_b.submission.clone())
+        .await
+        .expect("Party B submission failed");
+    let announcement = match result_b {
+        SubmissionResult::Verified {
+            announcement,
+            tx_receipt,
+        } => {
+            println!(
+                "  Announcement tx: 0x{}... (success: {})",
+                &hex::encode(&tx_receipt.tx_hash.0)[..16],
+                tx_receipt.success
+            );
+            announcement
+        }
+        SubmissionResult::Pending => panic!("Expected Verified after both submissions"),
+    };
+    println!("  ✓ Both submissions verified (swap_id, commitments, bindings, timeouts)");
     println!(
         "  R_A: 0x{}...",
         &hex::encode(&announcement.ephemeral_key_a.0)[..16]
