@@ -6,6 +6,7 @@ import {Config} from "forge-std/src/Config.sol";
 import {PrivateUTXO} from "../src/PrivateUTXO.sol";
 import {TeeLock} from "../src/TeeLock.sol";
 import {MockVerifier} from "../src/mocks/MockVerifier.sol";
+import {HonkVerifier} from "../src/verifiers/TransferVerifier.sol";
 
 /// @title Deploy
 /// @notice Deployment script for TEE swap contracts
@@ -24,8 +25,9 @@ contract Deploy is Script, Config {
             verifierAddress = address(mockVerifier);
             console.log("MockVerifier deployed at:", verifierAddress);
         } else {
-            verifierAddress = config.get("verifier_address").toAddress();
-            console.log("Using existing verifier at:", verifierAddress);
+            HonkVerifier transferVerifier = new HonkVerifier();
+            verifierAddress = address(transferVerifier);
+            console.log("TransferVerifier deployed at:", verifierAddress);
         }
 
         // Deploy PrivateUTXO

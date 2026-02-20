@@ -349,7 +349,6 @@ function announceSwap(
         ephemKey_B: ephemeralKey_B,
         encSalt_A: encrypted_salt_A,
         encSalt_B: encrypted_salt_B,
-        timestamp: block.timestamp,
         revealed: true
     });
     emit SwapRevealed(swapId);
