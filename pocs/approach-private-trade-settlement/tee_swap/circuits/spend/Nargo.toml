@@ -1,6 +1,0 @@
-[package]
-name = "spend"
-type = "bin"
-authors = [""]
-
-[dependencies]
