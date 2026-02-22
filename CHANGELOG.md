@@ -24,6 +24,11 @@ Use `[repo]` for repository-wide changes (CI, templates, docs).
 
 ## Unreleased
 
+### [diy-validium]
+- **Changed**: IMAGE_IDs from hardcoded `bytes32(0)` constants to immutable constructor params in all contracts
+- **Added**: `risc0-ethereum-contracts` for real seal encoding in E2E test
+- **Added**: E2E test passes real IMAGE_IDs and encoded seals when guest ELFs are compiled
+
 ### [private-bond]
 - **Added**: `privacy-l2` — Stablecoin contract (minimal private ERC20 for DvP payment leg)
 - **Added**: `privacy-l2` — DvP contract (atomic bond↔stablecoin swap via authwit)
