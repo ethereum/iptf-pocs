@@ -73,6 +73,13 @@ fn field_to_scalar(f: Field) -> EmbeddedCurveScalar {
     EmbeddedCurveScalar { lo, hi }
 }
 
+/// Zero the top 3 bits of a field element, ensuring it fits in 253 bits (< BN254 p).
+fn mask_253(f: Field) -> Field {
+    let mut bytes: [u8; 32] = f.to_be_bytes();
+    bytes[0] &= 0x1F;
+    Field::from_be_bytes::<32>(bytes)
+}
+
 /// salt encryption
 fn xor_fields(a: Field, b: Field) -> Field {
     let a_bytes: [u8; 32] = a.to_be_bytes();
@@ -262,8 +269,8 @@ fn main(
 
         assert(hash_3([DOMAIN_BIND_META, pk_meta_x, out_salt]) == h_meta);
 
-        // Salt encryption verification
-        let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+        // Salt encryption verification (enc_key masked to 253 bits for XOR safety)
+        let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
         let computed_enc_salt = xor_fields(out_salt, enc_key);
         assert(computed_enc_salt == encrypted_salt);
         assert(hash_2([DOMAIN_BIND_ENC, encrypted_salt]) == h_enc);
@@ -425,7 +432,7 @@ fn test_valid_lock() {
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
 
     // Salt encryption
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 
@@ -982,7 +989,7 @@ fn test_lock_wrong_stealth() {
     let big_r = fixed_base_scalar_mul(r_scalar);
     let h_R_val = hash_2([DOMAIN_BIND_R, big_r.x]);
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 
@@ -1062,7 +1069,7 @@ fn test_lock_wrong_h_swap() {
     let big_r = fixed_base_scalar_mul(r_scalar);
     let h_R_val = hash_2([DOMAIN_BIND_R, big_r.x]);
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 
@@ -1191,7 +1198,7 @@ fn test_lock_timeout_must_match_output() {
     let big_r = fixed_base_scalar_mul(r_scalar);
     let h_R_val = hash_2([DOMAIN_BIND_R, big_r.x]);
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 
@@ -1380,7 +1387,7 @@ fn test_lock_relock_prevention() {
     let big_r = fixed_base_scalar_mul(r_scalar);
     let h_R_val = hash_2([DOMAIN_BIND_R, big_r.x]);
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 
@@ -1461,7 +1468,7 @@ fn test_lock_out_owner_must_equal_stealth() {
     let big_r = fixed_base_scalar_mul(r_scalar);
     let h_R_val = hash_2([DOMAIN_BIND_R, big_r.x]);
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 
@@ -1539,7 +1546,7 @@ fn test_lock_wrong_h_R() {
     let h_swap_val = hash_3([DOMAIN_BIND_SWAP, swap_id, out_salt]);
     let wrong_h_R = hash_2([DOMAIN_BIND_R, 0xdead]);
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 
@@ -1618,7 +1625,7 @@ fn test_lock_wrong_h_meta() {
     let big_r = fixed_base_scalar_mul(r_scalar);
     let h_R_val = hash_2([DOMAIN_BIND_R, big_r.x]);
     let wrong_h_meta = hash_3([DOMAIN_BIND_META, 0xdead, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 
@@ -1697,7 +1704,7 @@ fn test_lock_wrong_h_enc() {
     let big_r = fixed_base_scalar_mul(r_scalar);
     let h_R_val = hash_2([DOMAIN_BIND_R, big_r.x]);
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let wrong_h_enc = hash_2([DOMAIN_BIND_ENC, 0xdead]);
 
@@ -1776,7 +1783,7 @@ fn test_lock_wrong_encrypted_salt() {
     let big_r = fixed_base_scalar_mul(r_scalar);
     let h_R_val = hash_2([DOMAIN_BIND_R, big_r.x]);
     let h_meta_val = hash_3([DOMAIN_BIND_META, pk_meta.x, out_salt]);
-    let enc_key = hash_2([DOMAIN_SALT_ENC, shared.x]);
+    let enc_key = mask_253(hash_2([DOMAIN_SALT_ENC, shared.x]));
     let encrypted_salt_val = xor_fields(out_salt, enc_key);
     let h_enc_val = hash_2([DOMAIN_BIND_ENC, encrypted_salt_val]);
 

@@ -13,14 +13,25 @@ pub fn xor_b256(a: B256, b: B256) -> B256 {
     B256::from(result)
 }
 
+/// Zero the top 3 bits of a B256 value, ensuring it fits in 253 bits (< BN254 p).
+/// This guarantees that XOR of two masked values stays below the field prime.
+fn mask_253(v: B256) -> B256 {
+    let mut bytes: [u8; 32] = v.into();
+    bytes[0] &= 0x1F;
+    B256::from(bytes)
+}
+
 /// Encrypt a salt using XOR with an ECDH-derived key.
 ///
 /// ```text
-/// encryption_key = H(DOMAIN_SALT_ENC, shared_secret.x)
+/// encryption_key = mask_253(H(DOMAIN_SALT_ENC, shared_secret.x))
 /// encrypted_salt = salt XOR encryption_key
 /// ```
+///
+/// The encryption key is masked to 253 bits. Combined with 253-bit salts,
+/// this guarantees `salt XOR enc_key < 2^253 < p` (BN254 field prime).
 pub fn encrypt_salt(salt: B256, shared_secret_x: B256) -> B256 {
-    let enc_key = poseidon2(DOMAIN_SALT_ENC, shared_secret_x);
+    let enc_key = mask_253(poseidon2(DOMAIN_SALT_ENC, shared_secret_x));
     xor_b256(salt, enc_key)
 }
 

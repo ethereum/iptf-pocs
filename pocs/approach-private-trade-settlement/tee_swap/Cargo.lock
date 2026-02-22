@@ -1566,6 +1566,7 @@ dependencies = [
  "ark-grumpkin",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
+ "hex",
  "light-poseidon",
  "rand 0.8.5",
  "sha2",
