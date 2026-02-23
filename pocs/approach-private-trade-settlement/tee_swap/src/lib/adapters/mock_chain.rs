@@ -76,8 +76,13 @@ impl ChainPort for MockChainPort {
         unimplemented!("MockChainPort: transfer not needed by coordinator")
     }
 
-    async fn get_announcement(&self, _swap_id: B256) -> Result<SwapAnnouncement, ChainError> {
-        unimplemented!("MockChainPort: get_announcement not needed by coordinator")
+    async fn get_announcement(&self, swap_id: B256) -> Result<SwapAnnouncement, ChainError> {
+        self.announcements
+            .lock()
+            .await
+            .get(&swap_id)
+            .cloned()
+            .ok_or(ChainError::AnnouncementNotFound(swap_id))
     }
 
     async fn get_commitment_root(&self) -> Result<B256, ChainError> {

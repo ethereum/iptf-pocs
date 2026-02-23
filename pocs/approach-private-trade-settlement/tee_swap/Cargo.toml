@@ -25,21 +25,39 @@ ark-serialize = "0.5"
 
 # Ethereum
 alloy = { version = "1.1", features = ["sol-types", "essentials"] }
+# Ethereum types
+alloy-primitives = { version = "1", features = ["serde"] }
 
 # Merkle tree
 zk-kit-lean-imt = "0.1"
 
+# RA-TLS server
+axum = { version = "0.8", features = ["json"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rcgen = "0.13"
+rustls = { version = "0.23", features = ["ring"] }
+x509-parser = "0.16"
+sha2 = "0.10"
+
+# RA-TLS client
+reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+
 # Async
-tokio = { version = "1", features = ["sync", "macros", "rt", "process"] }
+tokio = { version = "1", features = ["sync", "macros", "rt", "process", "full"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.8"
+
 
 # Util
 thiserror = "2.0"
 rand = "0.8"
 hex = "0.4"
 
-[dev-dependencies]
-sha2 = "0.10"
+[features]
+default = ["mock-tee"]
+mock-tee = []
+tdx = []         # future: virtee/tdx for real attestation
+sev-snp = []     # future: virtee/sev for real attestation

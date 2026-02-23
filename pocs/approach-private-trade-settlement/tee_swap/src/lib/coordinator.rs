@@ -151,6 +151,23 @@ impl<C: ChainPort, S: SwapStore> SwapCoordinator<C, S> {
             }
         }
     }
+
+    /// Check if a pending (first-party) submission exists for this swap.
+    pub async fn has_pending(&self, swap_id: B256) -> Result<bool, CoordinatorError> {
+        Ok(self.store.has_pending(swap_id).await?)
+    }
+
+    /// Retrieve a swap announcement from the announcement chain.
+    pub async fn get_announcement(
+        &self,
+        swap_id: B256,
+    ) -> Result<SwapAnnouncement, CoordinatorError> {
+        let chain = self
+            .chains
+            .get(&self.announcement_chain_id)
+            .ok_or(CoordinatorError::UnknownChain(self.announcement_chain_id))?;
+        Ok(chain.get_announcement(swap_id).await?)
+    }
 }
 
 /// Pure hash-only verification of two swap submissions against on-chain lock data.
