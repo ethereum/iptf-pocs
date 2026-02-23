@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 use std::future::Future;
 
 use crate::domain::swap::PartySubmission;

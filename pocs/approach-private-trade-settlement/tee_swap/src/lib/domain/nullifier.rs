@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 
 /// A nullifier prevents double-spending by marking a commitment as spent.
 /// In the TEE swap protocol, the nullifier is derived from the commitment and salt,

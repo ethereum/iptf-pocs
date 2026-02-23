@@ -1,4 +1,4 @@
-use alloy_primitives::{Address, B256};
+use alloy::primitives::{Address, B256};
 use std::future::Future;
 
 /// Attestation report from the TEE runtime.

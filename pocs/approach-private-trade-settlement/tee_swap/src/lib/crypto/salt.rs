@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 
 use super::poseidon::{poseidon2, DOMAIN_SALT_ENC};
 

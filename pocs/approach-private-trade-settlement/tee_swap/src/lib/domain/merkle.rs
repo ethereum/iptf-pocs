@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
 use lean_imt::hashed_tree::{HashedLeanIMT, LeanIMTHasher};

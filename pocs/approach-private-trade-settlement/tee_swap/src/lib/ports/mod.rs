@@ -3,7 +3,7 @@ pub mod prover;
 pub mod store;
 pub mod tee;
 
-use alloy_primitives::B256;
+use alloy::primitives::{B256, Bytes};
 
 /// Public inputs for the unified transfer circuit (9 fields).
 ///
@@ -30,6 +30,25 @@ pub struct TransferPublicInputs {
     pub h_meta: B256,
     /// Lock: binding commitment for encrypted salt. Others: 0.
     pub h_enc: B256,
+}
+
+/// A proof for the unified transfer circuit
+#[derive(Debug, Clone)]
+pub struct TransferProof {
+    /// Serialized proof in Barretenberg format
+    pub proof: Bytes,
+    /// Public inputs extracted from the witness
+    pub public_inputs: TransferPublicInputs,
+}
+
+impl TransferProof {
+    /// Create a new `TransferProof` from raw proof bytes and the public inputs.
+    pub fn new(proof: Bytes, public_inputs: TransferPublicInputs) -> Self {
+        Self {
+            proof,
+            public_inputs,
+        }
+    }
 }
 
 /// On-chain lock data read from a `SwapNoteLocked` event.
