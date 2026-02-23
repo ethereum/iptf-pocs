@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 use ark_ec::{CurveGroup, PrimeGroup};
 use ark_ff::PrimeField;
 use ark_grumpkin::{Affine, Fr as GrumpkinScalar, Projective};

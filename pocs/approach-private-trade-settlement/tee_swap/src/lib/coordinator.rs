@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 use tokio::sync::Mutex;
 
 use crate::crypto::poseidon::{bind_enc, bind_meta, bind_r, bind_swap, commitment_hash, swap_id_hash};

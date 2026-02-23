@@ -23,14 +23,18 @@ ark-ff = "0.5"
 ark-std = "0.5"
 ark-serialize = "0.5"
 
-# Ethereum types
-alloy-primitives = "1"
+# Ethereum
+alloy = { version = "1.1", features = ["sol-types", "essentials"] }
 
 # Merkle tree
 zk-kit-lean-imt = "0.1"
 
 # Async
-tokio = { version = "1", features = ["sync", "macros", "rt"] }
+tokio = { version = "1", features = ["sync", "macros", "rt", "process"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 # Util
 thiserror = "2.0"

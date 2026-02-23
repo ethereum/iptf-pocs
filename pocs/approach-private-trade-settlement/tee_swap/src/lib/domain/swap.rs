@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 
 use super::note::Note;
 use crate::crypto::poseidon::swap_id_hash;

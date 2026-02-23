@@ -6,7 +6,7 @@
 //!
 //! Run with: `cargo run --bin demo`
 
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 use ark_ec::{CurveGroup, PrimeGroup};
 use ark_grumpkin::Projective;
 

@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 
 use crate::crypto::poseidon::{poseidon3, DOMAIN_NULLIFIER};
 use crate::domain::nullifier::Nullifier;
