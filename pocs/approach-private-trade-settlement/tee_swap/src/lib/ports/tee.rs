@@ -5,7 +5,7 @@ use std::future::Future;
 ///
 /// In production, this would be a TDX/SEV-SNP quote. For the PoC, it's a mock
 /// report that is embedded in the RA-TLS certificate's custom X.509 extension.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AttestationReport {
     /// TEE type identifier ("mock", "tdx", "sev-snp")
     pub tee_type: String,

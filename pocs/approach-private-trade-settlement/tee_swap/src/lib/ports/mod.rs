@@ -121,7 +121,7 @@ pub struct TransferWitness {
 }
 
 /// Minimal transaction receipt for PoC.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TxReceipt {
     pub tx_hash: B256,
     pub success: bool,

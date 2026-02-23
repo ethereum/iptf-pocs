@@ -11,7 +11,7 @@ use crate::crypto::poseidon::{
 ///
 /// Notes support dual spending conditions: a primary owner (stealth address)
 /// for claiming, and a fallback owner for refunding after timeout.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Note {
     /// Network identifier (binds note to a specific chain)
     pub chain_id: B256,

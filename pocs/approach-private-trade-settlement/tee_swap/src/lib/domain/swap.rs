@@ -78,7 +78,7 @@ impl SwapTerms {
 }
 
 /// What each party sends to the TEE (via RA-TLS) after locking their note.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PartySubmission {
     /// Swap identifier (both parties must submit the same swap_id)
     pub swap_id: B256,
@@ -96,7 +96,7 @@ pub struct PartySubmission {
 ///
 /// A single `announceSwap` transaction reveals both ephemeral keys + encrypted salts
 /// atomically, enabling both parties to claim their counterparty's note.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SwapAnnouncement {
     /// Swap identifier
     pub swap_id: B256,
