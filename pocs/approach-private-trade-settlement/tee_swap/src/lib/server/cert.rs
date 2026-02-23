@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 use rcgen::{
     CertificateParams, CustomExtension, DistinguishedName, DnType, KeyPair,
     PKCS_ECDSA_P256_SHA256,
@@ -93,7 +93,7 @@ pub enum CertError {
 mod tests {
     use super::*;
     use crate::adapters::mock_tee::MockTeeRuntime;
-    use alloy_primitives::Address;
+    use alloy::primitives::Address;
     use x509_parser::prelude::*;
 
     async fn test_cert() -> RaTlsCertificate {

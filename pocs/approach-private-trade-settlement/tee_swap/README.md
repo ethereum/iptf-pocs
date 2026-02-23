@@ -58,10 +58,19 @@ cd circuits/spend && nargo check && cd ../..
 
 ## Running
 
+### Mock mode
+
 ```bash
-# How to run the PoC
-cargo run
+cargo run --bin demo
 ```
+
+### Full e2e demo with real proof generation + onchain verification + tee swap coordination
+
+```bash
+cargo run --bin e2e
+```
+
+> **note**: you may use `--release` to make the demos execute faster
 
 ## Tests
 

@@ -67,6 +67,7 @@ sol! {
 }
 
 /// Ethereum RPC adapter
+#[derive(Clone)]
 pub struct EthereumRpc {
     provider: DynProvider,
     private_utxo: Address,
