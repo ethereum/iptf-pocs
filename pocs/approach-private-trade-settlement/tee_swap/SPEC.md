@@ -24,28 +24,6 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 ---
 
-## Hash Domain Separation
-
-All hashes MUST use an explicit domain tag as the first argument to prevent cross-purpose collisions in a cross-chain context:
-
-| Domain     | Tag                      | Purpose                              |
-| ---------- | ------------------------ | ------------------------------------ |
-| Commitment | `"tee_swap.commitment"`  | Note commitment derivation           |
-| Nullifier  | `"tee_swap.nullifier"`   | Nullifier derivation                 |
-| Stealth    | `"tee_swap.stealth"`     | Stealth address key derivation       |
-| Salt       | `"tee_swap.salt_enc"`    | Salt encryption key derivation       |
-| Bind swap  | `"tee_swap.bind_swap"`   | Binding commitment over swap ID      |
-| Bind R     | `"tee_swap.bind_R"`      | Binding commitment over ephemeral key|
-| Bind meta  | `"tee_swap.bind_meta"`   | Binding commitment over counterparty |
-| Bind enc   | `"tee_swap.bind_enc"`    | Binding commitment over encrypted salt|
-| Swap ID    | `"tee_swap.swap_id"`     | Deterministic swap identifier from agreed terms|
-
-Convention: `H(domain, ...)` denotes `Hash(domain_tag ‖ ...)` where `‖` is concatenation.
-
-> **Why domain separation?** Without it, a hash computed for one purpose (e.g., a commitment) could collide with a hash computed for another purpose (e.g., a nullifier or stealth key). In a cross-chain protocol, this risk is amplified. Domain tags ensure each hash is unambiguously scoped to its intended use.
-
----
-
 ## Data Types
 
 ### Time-Locked Note
@@ -66,28 +44,6 @@ Note {
 
 - `commitment = H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt)`
 - `nullifier = H("tee_swap.nullifier", commitment, salt)`
-
-**Spending conditions (enforced by circuit):**
-
-The circuit proves ALL of the following:
-
-```
-Public inputs: nullifier, root, timeout
-
-1. Commitment preimage: commitment == H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt)
-2. Merkle inclusion: commitment exists in the commitment tree at the given root
-3. Nullifier correctness: nullifier == H("tee_swap.nullifier", commitment, salt)
-4. Ownership: EITHER
-   a. Know sk_owner where sk_owner·G == owner       (claim path)
-   b. Know sk_fallback where sk_fallback·G == fallbackOwner
-      AND block.timestamp > timeout                  (refund path)
-```
-
-**Timeout enforcement:** The `timeout` field is both part of the note commitment and a public input of both deposit and spend circuits. Both claim and refund paths expose `timeout`, producing identical on-chain footprints. For the refund path, the on-chain verifier contract checks `block.timestamp > timeout` directly. Notes with `timeout = 0` are standard (non-swap) notes; the timestamp check is trivially satisfied and effectively a no-op.
-
-> **Why `H("tee_swap.nullifier", commitment, salt)` and not `Hash(commitment, spendingKey)`?** The nullifier MUST be unique per note AND independent of which spending path is used. If the nullifier varied by spending key, the owner path and fallback path would produce different nullifiers for the same note, enabling a double-spend where Party B claims and Party A refunds the same note. With `H("tee_swap.nullifier", commitment, salt)`, the nullifier is canonical: whichever path is used first, the second attempt is rejected by the nullifier set.
-
----
 
 ### Stealth Address Components
 
@@ -120,26 +76,23 @@ Recipient (knows sk_meta, receives R):
   sk_stealth = sk_meta + H("tee_swap.stealth", shared_secret)
 ```
 
----
-
 ### On-Chain State (per network)
 
-Each network maintains:
+Each network maintains a private UTXO contract per asset:
 
 ```solidity
+bytes32 public immutable assetId;              // Asset this contract manages
 mapping(bytes32 => bool) public commitments;   // All note commitments ever inserted
-mapping(bytes32 => bool) public roots;          // Valid Merkle roots (historical)
-mapping(bytes32 => bool) public nullifiers;     // All nullifiers ever submitted (spent notes)
+mapping(bytes32 => bool) public roots;         // Valid Merkle roots (historical)
+mapping(bytes32 => bool) public nullifiers;    // All nullifiers ever submitted (spent notes)
 ```
-
-The contract records each commitment on insertion and stores every resulting Merkle root. Each counterparty MUST maintain a local copy of the Merkle tree by indexing commitment insertion events, in order to compute inclusion proofs when spending notes.
 
 **Invariant:** Each commitment in the tree maps to exactly one nullifier (`H("tee_swap.nullifier", commitment, salt)`). Once that nullifier appears in the set, the note MUST NOT be spent again via any path.
 
 **Transaction flow:**
 
-1. **Create note:** insert `commitment` into `CommitmentTree`
-2. **Spend note:** verify ZK proof, check `nullifier ∉ NullifierSet`, add `nullifier` to `NullifierSet`
+1. **Create note:** insert `commitment` into `commitments`
+2. **Spend note:** verify ZK proof, check `nullifier ∉ nullifiers`, add `nullifier` to `nullifiers`
 
 ---
 
@@ -161,21 +114,6 @@ swapId = H("tee_swap.swap_id",
 
 Because the `swapId` is derived from the terms, it acts as a mutual commitment: both parties can only produce the same `swapId` if they agree on every parameter. The TEE can later recompute it from `noteDetails` to verify that locked notes match the agreed terms (see Phase 2, step 5).
 
-```
-SwapIntent {
-    swapId: bytes32,                    // Deterministic swap identifier (derived from terms)
-    partyA_commitment: bytes32,         // A's locked note commitment
-    partyB_commitment: bytes32,         // B's locked note commitment
-    partyA_ephemeralKey: Point,         // R_A (for B to derive sk_stealth)
-    partyB_ephemeralKey: Point,         // R_B (for A to derive sk_stealth)
-    encrypted_salt_A: bytes32,          // salt_A encrypted for Party B via ECDH(r_A, pk_meta_B)
-    encrypted_salt_B: bytes32,          // salt_B encrypted for Party A via ECDH(r_B, pk_meta_A)
-    timeout: uint256,                   // Swap expiry
-    nonce: bytes32,                     // Random nonce (agreed during intent matching)
-    revealed: bool                      // TEE has revealed ephemeral keys
-}
-```
-
 ---
 
 ## Atomic Swap Protocol
@@ -188,7 +126,8 @@ Each party creates a time-locked note for the counterparty and generates a depos
 
 ```
 Public inputs:
-  commitment            // New note commitment (inserted into CommitmentTree)
+  commitment            // New note commitment (inserted into commitments)
+  chainId               // Network identifier (contract verifies it matches its own chain ID)
   timeout               // Time-lock expiry (0 for standard notes, >0 for swap notes)
   pk_stealth            // Stealth address (note owner). Safe to publish: unlinkable without R
   h_swap                // H("tee_swap.bind_swap", swapId, salt): binds the deposit to a specific swap
@@ -200,7 +139,7 @@ Private inputs:
   swapId                // Swap identifier (agreed off-chain)
   r                     // Ephemeral private key (never leaves the prover)
   pk_meta_counterparty  // Counterparty's meta public key
-  chainId, value, assetId, fallbackOwner, salt             // Note fields
+  value, assetId, fallbackOwner, salt                      // Note fields
   encrypted_salt        // Pre-computed by prover
 
 Circuit constraints:
@@ -217,13 +156,7 @@ Constraint 2 guarantees the stealth address is correctly derived. Constraint 3 b
 
 If the note is funded by spending an existing note, the circuit MUST also prove standard spend operations (Merkle inclusion, nullifier correctness, ownership of the spent note).
 
-**Both parties (before locking):**
-
-```
-0. Derive swapId from agreed terms:
-   swapId = H("tee_swap.swap_id", valueA, assetIdA, chainIdA, valueB, assetIdB, chainIdB, timeout, pk_meta_A, pk_meta_B, nonce)
-   Both parties compute this independently and MUST arrive at the same value.
-```
+> **Why `H("tee_swap.nullifier", commitment, salt)` and not `Hash(commitment, spendingKey)`?** The nullifier MUST be unique per note AND independent of which spending path is used. If the nullifier varied by spending key, the owner path and fallback path would produce different nullifiers for the same note, enabling a double-spend where Party B claims and Party A refunds the same note. With `H("tee_swap.nullifier", commitment, salt)`, the nullifier is canonical: whichever path is used first, the second attempt is rejected by the nullifier set.
 
 **Party A (swapping USD for BOND):**
 
@@ -240,36 +173,15 @@ If the note is funded by spending an existing note, the circuit MUST also prove 
    - timeout = now + 48h
    - salt = salt_A
 4. Generate deposit proof (see circuit above):
-   - Public inputs: commitment_A, pk_stealth_B, H("tee_swap.bind_swap", swapId), H("tee_swap.bind_R", R_A), H("tee_swap.bind_meta", pk_meta_B, salt_A), H("tee_swap.bind_enc", encrypted_salt_A)
-   - Nullifies old note (old nullifier added to NullifierSet)
-   - Inserts new commitment into CommitmentTree
+   - Public inputs: commitment_A, chainId, pk_stealth_B, H("tee_swap.bind_swap", swapId, salt_A), H("tee_swap.bind_R", R_A), H("tee_swap.bind_meta", pk_meta_B, salt_A), H("tee_swap.bind_enc", encrypted_salt_A)
+   - Nullifies old note (old nullifier added to nullifiers)
+   - Inserts new commitment into commitments
+   - Contract verifies chainId matches its own chain ID
 5. Submit proof on Network 1 (USD chain)
-6. Send to TEE (via attested channel): (swapId, nonce, R_A, encrypted_salt_A, noteDetails_A)
+6. Send to TEE (via attested channel): (swapId, nonce, R_A, encrypted_salt_A, pk_meta_B, noteDetails_A)
 ```
 
-**Party B (swapping BOND for USD):**
-
-```
-1. Generate ephemeral key pair (r_B, R_B = r_B·G) and random salt_B
-2. Compute:
-   - shared_secret_BA = r_B · pk_meta_A
-   - pk_stealth_A = pk_meta_A + H("tee_swap.stealth", shared_secret_BA)·G
-   - encrypted_salt_B = salt_B XOR H("tee_swap.salt_enc", shared_secret_BA)
-3. Create time-locked note:
-   - chainId = Network 2 chain ID
-   - owner = pk_stealth_A
-   - fallbackOwner = pk_B
-   - timeout = now + 48h
-   - salt = salt_B
-4. Generate deposit proof (see circuit above):
-   - Public inputs: commitment_B, pk_stealth_A, H("tee_swap.bind_swap", swapId), H("tee_swap.bind_R", R_B), H("tee_swap.bind_meta", pk_meta_A, salt_B), H("tee_swap.bind_enc", encrypted_salt_B)
-   - Nullifies old note (old nullifier added to NullifierSet)
-   - Inserts new commitment into CommitmentTree
-5. Submit proof on Network 2 (BOND chain)
-6. Send to TEE (via attested channel): (swapId, nonce, R_B, encrypted_salt_B, noteDetails_B)
-```
-
-> **Why R MUST remain secret until Phase 3.** The ephemeral public key R is the stealth address "unlock": given R, the counterparty can derive sk_stealth and claim the note. If R were a public output of the deposit proof, the counterparty could claim immediately after deposit, before locking their own note. Publishing only `H("tee_swap.bind_R", R)` at deposit time preserves atomicity. R is revealed later in the TEE's atomic announcement (Phase 3).
+Party B will mirror the same operations.
 
 ---
 
@@ -279,12 +191,12 @@ The TEE combines on-chain proof data with off-chain submissions to verify swap c
 
 ```
 TEE receives via attested channel:
-  - From Party A: (swapId, nonce, R_A, encrypted_salt_A, noteDetails_A)
-  - From Party B: (swapId, nonce, R_B, encrypted_salt_B, noteDetails_B)
+  - From Party A: (swapId, nonce, R_A, encrypted_salt_A, pk_meta_B, noteDetails_A)
+  - From Party B: (swapId, nonce, R_B, encrypted_salt_B, pk_meta_A, noteDetails_B)
 
 TEE reads from on-chain (public inputs of verified deposit proofs):
-  - From Network 1: commitment_A, pk_stealth_B, h_swap_A, h_R_A, h_meta_A, h_enc_A
-  - From Network 2: commitment_B, pk_stealth_A, h_swap_B, h_R_B, h_meta_B, h_enc_B
+  - From Network 1: commitment_A, chainId_A, pk_stealth_B, h_swap_A, h_R_A, h_meta_A, h_enc_A
+  - From Network 2: commitment_B, chainId_B, pk_stealth_A, h_swap_B, h_R_B, h_meta_B, h_enc_B
 
 TEE MUST verify:
 
@@ -318,12 +230,7 @@ TEE MUST verify:
   7. Timeout has not expired
 ```
 
-**Why binding commitments are trustworthy.** The TEE performs only hash comparisons, no elliptic curve operations. The security argument:
-
-- The on-chain ZK verifier has already verified the deposit proof. Circuit constraint 2 guarantees `pk_stealth` is correctly derived from the prover's ephemeral key `r` and `pk_meta_counterparty`. Constraint 3 binds the deposit to a specific swapId (salted per-party to prevent cross-chain linkability). Constraints 4-6 guarantee `h_R`, `h_meta`, and `h_enc` are consistent with the same `r` and `pk_meta_counterparty`.
-- When the TEE opens `h_meta_A` and finds it matches `H("tee_swap.bind_meta", pk_meta_B, salt_A)`, it confirms the note targets Party B specifically (not some other pk_meta). A malicious Party A cannot produce a valid proof for a different pk_meta that opens to `H("tee_swap.bind_meta", pk_meta_B, salt_A)`, because the circuit enforces the binding internally.
-- When the TEE opens `h_R_A` and finds it matches `H("tee_swap.bind_R", R_A)`, it confirms the `R_A` received off-chain is the same ephemeral key used in the proof. Party A cannot later provide a different R without failing this check.
-- When the TEE opens `h_enc_A` and finds it matches `H("tee_swap.bind_enc", encrypted_salt_A)`, it confirms the encrypted salt is correctly derived (the circuit proved this in constraint 6). Party A cannot substitute a garbage encrypted salt.
+**Why binding commitments are trustworthy.** The on-chain ZK verifier has already proved that `h_R`, `h_meta`, and `h_enc` are internally consistent with the same ephemeral key `r` and `pk_meta_counterparty` used in the deposit (circuit constraints 2-6). The TEE only needs to open these commitments via hash comparisons — no elliptic curve operations. A party cannot substitute different off-chain values without failing the hash check against the on-chain binding commitments.
 
 If all checks pass, the TEE proceeds to Phase 3.
 
@@ -333,7 +240,7 @@ If all checks pass, the TEE proceeds to Phase 3.
 
 ### Phase 3: Atomic Revelation
 
-**The TEE MUST atomically publish both ephemeral keys and encrypted salts:**
+The TEE publishes both ephemeral keys and encrypted salts to an on-chain announcement contract. Both parties MUST monitor this contract. The announcement reveals only ephemeral public keys (random curve points) and encrypted salts (random-looking 32-byte values) — no amounts, asset types, or party identities.
 
 ```solidity
 function announceSwap(
@@ -355,181 +262,39 @@ function announceSwap(
 }
 ```
 
-**Both parties MUST monitor the agreed-upon announcement location (contract on either network, or off-chain service).**
+The `require(!revealed)` guard prevents duplicate announcements, including from a rolled-back TEE.
 
-**What each party receives from the announcement:**
-
-- Party A: `R_B` (to derive sk_stealth_A) + `encrypted_salt_B` (to decrypt salt_B and compute nullifier)
-- Party B: `R_A` (to derive sk_stealth_B) + `encrypted_salt_A` (to decrypt salt_A and compute nullifier)
-
-**On-chain footprint:** The announcement contains only ephemeral public keys (random curve points) and encrypted salts (random-looking 32-byte values). No amounts, asset types, or party identities are revealed. A post-quantum adversary who breaks the ECDH underlying the salt encryption recovers only the salt, a random blinding factor with no semantic meaning without the full note details.
-
-**Atomicity:** TEE reveals both keys and encrypted salts in a single operation, or neither. This guarantees both parties can claim their notes, or both can refund. Works identically for same-network and cross-chain swaps.
-
-> **TEE rollback note:** TEE platforms are susceptible to rollback attacks where the enclave state is restored to a previous snapshot. A rolled-back TEE could re-announce a swap it already processed. The on-chain `require(!revealed)` guard prevents duplicate announcements regardless of TEE state.
+**Protocol atomicity** derives from three properties working together: (1) revealing both stealth constructions publicly gives both parties the ability to claim, (2) if the TEE never reveals, both parties refund via `fallbackOwner`, and (3) the `timeout` prevents indefinite lockup. The outcome is always all-or-nothing — both parties can claim or both refund — regardless of whether notes are on the same network or different networks.
 
 ---
 
 ### Phase 4: Claim or Refund
 
-> **Privacy note:** Parties SHOULD stagger their claim transactions with a random delay after the announcement (see T7). Claiming simultaneously creates a timing correlation that links both legs of the swap.
+Parties SHOULD stagger their claim transactions with a random delay after the announcement (see T7) and wait for announcement finality before submitting a claim proof.
 
-> **Finality note:** Parties SHOULD wait for the announcement transaction to reach finality before submitting a claim proof.
-
-**Party B claims USD (normal path):**
+**Claim path (shown for Party B claiming USD; Party A mirrors on Network 2):**
 
 ```
 1. Read R_A and encrypted_salt_A from announcement contract
-2. Compute shared secret:
-   - shared_secret_AB = sk_meta_B · R_A
-3. Decrypt salt:
-   - salt_A = encrypted_salt_A XOR H("tee_swap.salt_enc", shared_secret_AB)
-4. Derive stealth key:
-   - sk_stealth_B = sk_meta_B + H("tee_swap.stealth", shared_secret_AB)
-5. Reconstruct note details from swap terms + decrypted salt:
-   - chainId = Network 1 chain ID (known from swap terms)
-   - value = agreed USD amount (known from swap terms)
-   - assetId = USD identifier (known from swap terms)
-   - owner = pk_stealth_B = pk_meta_B + H("tee_swap.stealth", shared_secret_AB)·G
-   - fallbackOwner = pk_A (known from swap terms)
-   - timeout = agreed timeout (known from swap terms)
-   - salt = salt_A (decrypted above)
-6. Compute:
-   - commitment_A = H("tee_swap.commitment", chainId, value, assetId, owner, fallbackOwner, timeout, salt_A)
-   - nullifier = H("tee_swap.nullifier", commitment_A, salt_A)
-7. Generate ZK proof:
-   - Proves knowledge of commitment preimage (with domain tag)
-   - Proves Merkle inclusion of commitment_A in Network 1's CommitmentTree
-   - Proves nullifier == H("tee_swap.nullifier", commitment_A, salt_A)
-   - Proves knowledge of sk_stealth_B where sk_stealth_B·G == owner
-8. Submit proof to Network 1. Nullifier is added to NullifierSet. Party B receives USD
+2. Compute shared secret: shared_secret_AB = sk_meta_B · R_A
+3. Decrypt salt: salt_A = encrypted_salt_A XOR H("tee_swap.salt_enc", shared_secret_AB)
+4. Derive stealth key: sk_stealth_B = sk_meta_B + H("tee_swap.stealth", shared_secret_AB)
+5. Reconstruct note details from swap terms + decrypted salt, compute commitment and nullifier
+6. Generate ZK proof (Merkle inclusion, nullifier correctness, ownership via sk_stealth_B)
+7. Submit proof. Nullifier is added to nullifiers
 ```
 
-**Party A claims BOND (normal path):**
+**Refund path (TEE failed to reveal before timeout):**
 
 ```
-1. Read R_B and encrypted_salt_B from announcement contract
-2. Compute: shared_secret_BA = sk_meta_A · R_B
-3. Decrypt: salt_B = encrypted_salt_B XOR H("tee_swap.salt_enc", shared_secret_BA)
-4. Derive: sk_stealth_A = sk_meta_A + H("tee_swap.stealth", shared_secret_BA)
-5. Reconstruct note details (same process as Party B, using Network 2 parameters)
-6. Compute commitment_B, nullifier
-7. Generate ZK proof (same structure as above, proving sk_stealth_A)
-8. Submit proof to Network 2. Nullifier is added to NullifierSet. Party A receives BOND
+1. Wait until block.timestamp > timeout
+2. The refunding party already knows salt and all note details (they created the note)
+3. Generate ZK proof (Merkle inclusion, nullifier correctness, ownership via sk_fallback)
+   - timeout is a public output; the verifier contract checks block.timestamp > timeout
+4. Submit proof. Nullifier is added to nullifiers
 ```
 
-**Refund scenario (TEE failed to reveal before timeout):**
-
-```
-Party A refunds USD:
-  1. Wait until block.timestamp > timeout
-  2. Party A already knows salt_A and all note details (they created the note)
-  3. Compute: nullifier = H("tee_swap.nullifier", commitment_A, salt_A)
-  4. Generate ZK proof:
-     - Proves knowledge of commitment preimage (with domain tag)
-     - Proves Merkle inclusion in CommitmentTree
-     - Proves nullifier == H("tee_swap.nullifier", commitment_A, salt_A)
-     - Proves knowledge of sk_A where sk_A·G == fallbackOwner
-     - Exposes timeout as a public output (circuit proves it matches the committed value; verifier contract checks block.timestamp > timeout)
-  5. Submit proof. Nullifier is added to NullifierSet. Party A reclaims USD
-
-Party B refunds BOND (same process, using salt_B and note details which they created)
-```
-
-> **Note:** If Party B already claimed (nullifier in set), Party A's refund attempt is rejected because the nullifier is the same regardless of spending path. This is the core double-spend protection.
-
----
-
-## Security Properties
-
-**Guaranteed (cryptographic):**
-
-- Users cannot lose funds to TEE
-- Users can always recover via timeout refund
-- Double-spend prevention: canonical nullifier per note (`H("tee_swap.nullifier", commitment, salt)`) ensures a note spent via one path cannot be spent again via the other
-- Front-running impossible (stealth address protection)
-- Large anonymity set (all notes indistinguishable)
-- Atomic swaps: both parties can claim or both refund (no partial execution)
-
-**Atomicity source:**
-
-- **TEE's atomic revelation of both ephemeral keys** - not blockchain consensus
-- Works identically for same-network and cross-chain swaps
-- Independent of which network(s) hold the notes
-
-**Trusted:**
-
-- TEE hardware manufacturer (can see plaintext, cannot steal)
-- TEE operator (can censor by not revealing, cannot steal)
-- Both parties monitor agreed announcement location
-
-For detailed threat analysis and mitigation status of each vector, see [Annex A: Threat Model](#annex-a-threat-model).
-
----
-
-## TEE Key Management
-
-The TEE must submit transactions on-chain (swap announcements in Phase 3). This raises practical questions: how does the TEE pay for gas, how does it authenticate to the contract, and how are enclave keys rotated?
-
-### Problem
-
-A naive approach (funding an EOA inside the TEE) has drawbacks:
-
-- The TEE needs ETH for gas, requiring external top-ups
-- The EOA's secp256k1 key may not match the enclave's native key type (e.g., P-256 for SGX, RSA for some attestation flows)
-- All swap announcements are linked to a single `msg.sender`, creating a correlation point
-- Key rotation requires redeploying or updating every contract that references the TEE address
-
-### Solution: Account Abstraction (EIP-4337)
-
-The TEE operates through a smart account, using its enclave-derived key pair as the signing authority.
-
-**Architecture:**
-
-```
-1. TEE signs UserOp with enclave key
-2. Bundler submits UserOp to EntryPoint
-3. EntryPoint calls SmartAccount.validateUserOp()   // verifies TEE signature
-4. EntryPoint calls SmartAccount.execute()
-5.   SmartAccount calls AnnouncementContract.announceSwap()
-```
-
-In `announceSwap`, `msg.sender` is the smart account address. The announcement contract authenticates via:
-
-```solidity
-modifier onlyTEE() {
-    require(msg.sender == teeSmartAccount);
-    _;
-}
-```
-
-The smart account handles TEE signature verification internally. The announcement contract is decoupled from the TEE's key type or rotation schedule.
-
-**Benefits:**
-
-- **Gas abstraction:** A paymaster sponsors UserOps. The TEE never holds ETH.
-- **Flexible signature schemes:** `validateUserOp` can verify P-256, RSA, or any scheme the enclave uses, and is not limited to secp256k1.
-- **Stable identity:** The smart account address is permanent. Contracts reference this address regardless of the underlying TEE key.
-
-### Key Rotation
-
-TEE enclaves rotate keys on redeployment, attestation refresh, or hardware migration. The smart account supports this natively:
-
-1. TEE generates a new key pair inside the enclave
-2. TEE signs a UserOp **with the current (old) key** calling `smartAccount.rotateSigner(newPubKey)`
-3. Smart account updates its authorized signer
-4. Subsequent UserOps must be signed with the new key
-
-The smart account address does not change. No update is required in the announcement contract or any other contract referencing `teeSmartAccount`.
-
-### Trust Implications
-
-The smart account introduces no additional trust assumptions beyond the TEE itself:
-
-- Only the enclave can produce valid signatures for UserOps
-- The bundler is untrusted: it relays but cannot forge UserOps
-- The paymaster is untrusted: it sponsors gas but cannot influence execution
-- The `onlyTEE` check in the announcement contract remains equivalent to verifying the TEE's authority, mediated through the smart account
+Both paths produce the same nullifier for a given note. If one party claims, the other's refund is rejected by the nullifier set for double-spend protection.
 
 ---
 
@@ -637,10 +402,10 @@ The smart account introduces no additional trust assumptions beyond the TEE itse
 
 **What is leaked:**
 
-| Leaked | Hidden |
-| ------ | ------ |
-| A time-locked note exists | Amount and asset type |
-| When it expires (timeout) | Owner / recipient identity |
+| Leaked                                                | Hidden                                         |
+| ----------------------------------------------------- | ---------------------------------------------- |
+| A time-locked note exists                             | Amount and asset type                          |
+| When it expires (timeout)                             | Owner / recipient identity                     |
 | Probabilistic link between two swap legs (via timing) | Which note was spent (nullifier unlinkability) |
 
 **Impact:** Swap notes are transiently distinguishable during the lock window. After settlement and re-potting, they dissolve back into the general anonymity set. The residual leakage is that an observer can detect a swap occurred and approximately when, but learns nothing about the participants or economic terms.
@@ -659,3 +424,41 @@ The smart account introduces no additional trust assumptions beyond the TEE itse
 - If party misses announcement, timeout refund available
 
 **Impact:** Coordination issue, not security issue. Parties can always refund if they miss announcement.
+
+---
+
+## Annex B: Hash Domain Separation
+
+All hashes MUST use an explicit domain tag as the first argument to prevent cross-purpose collisions in a cross-chain context:
+
+| Domain     | Tag                     | Purpose                                         |
+| ---------- | ----------------------- | ----------------------------------------------- |
+| Commitment | `"tee_swap.commitment"` | Note commitment derivation                      |
+| Nullifier  | `"tee_swap.nullifier"`  | Nullifier derivation                            |
+| Stealth    | `"tee_swap.stealth"`    | Stealth address key derivation                  |
+| Salt       | `"tee_swap.salt_enc"`   | Salt encryption key derivation                  |
+| Bind swap  | `"tee_swap.bind_swap"`  | Binding commitment over swap ID                 |
+| Bind R     | `"tee_swap.bind_R"`     | Binding commitment over ephemeral key           |
+| Bind meta  | `"tee_swap.bind_meta"`  | Binding commitment over counterparty            |
+| Bind enc   | `"tee_swap.bind_enc"`   | Binding commitment over encrypted salt          |
+| Swap ID    | `"tee_swap.swap_id"`    | Deterministic swap identifier from agreed terms |
+
+Convention: `H(domain, ...)` denotes `Hash(domain_tag ‖ ...)` where `‖` is concatenation.
+
+> **Why domain separation?** Without it, a hash computed for one purpose (e.g., a commitment) could collide with a hash computed for another purpose (e.g., a nullifier or stealth key). In a cross-chain protocol, this risk is amplified. Domain tags ensure each hash is unambiguously scoped to its intended use.
+
+---
+
+## Annex C: TEE Key Management
+
+The TEE submits swap announcements on-chain (Phase 3). Rather than funding an EOA directly, the TEE operates through a smart account (EIP-4337), which solves gas funding, signature scheme flexibility, and key rotation in one abstraction.
+
+```
+1. TEE signs UserOp with enclave key
+2. Bundler submits UserOp to EntryPoint
+3. EntryPoint calls SmartAccount.validateUserOp()   // verifies TEE signature
+4. EntryPoint calls SmartAccount.execute()
+5.   SmartAccount calls AnnouncementContract.announceSwap()
+```
+
+The announcement contract authenticates via `require(msg.sender == teeSmartAccount)`. The smart account address is permanent — key rotation happens internally (`rotateSigner(newPubKey)`) without updating any external contract. A paymaster sponsors gas, so the TEE never holds ETH. The bundler and paymaster are untrusted: they relay and sponsor but cannot forge or influence execution.
