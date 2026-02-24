@@ -66,7 +66,6 @@ Secondary market trading of tokenized securities on public blockchains exposes t
 ## 6. Out of Scope (PoC)
 
 - Central limit order book (CLOB) matching
-
 - Margin trading or derivatives
 - Fiat on/off ramps
 - Netting and batch settlement
