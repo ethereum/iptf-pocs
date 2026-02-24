@@ -10,12 +10,13 @@ use axum::Router;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 use crate::adapters::memory_store::InMemorySwapStore;
-use crate::adapters::mock_chain::MockChainPort;
-use crate::adapters::mock_tee::MockTeeRuntime;
 use crate::coordinator::SwapCoordinator;
+use crate::ports::chain::ChainPort;
 
 use self::cert::generate_ra_tls_cert;
-use self::routes::{announcement_handler, status_handler, submit_handler, AppState};
+use self::routes::{
+    announcement_handler, attestation_handler, status_handler, submit_handler, AppState,
+};
 
 /// Start the RA-TLS HTTPS server.
 ///
@@ -24,9 +25,9 @@ use self::routes::{announcement_handler, status_handler, submit_handler, AppStat
 /// 3. Binds an HTTPS server with axum routes
 ///
 /// Returns the `axum_server::Handle` for graceful shutdown and the bound address.
-pub async fn start_server(
-    coordinator: Arc<SwapCoordinator<MockChainPort, InMemorySwapStore>>,
-    tee: &MockTeeRuntime,
+pub async fn start_server<C: ChainPort>(
+    coordinator: Arc<SwapCoordinator<C, InMemorySwapStore>>,
+    tee: &impl crate::ports::tee::TeeRuntime,
     addr: SocketAddr,
 ) -> Result<(axum_server::Handle, SocketAddr), ServerError> {
     // 1. Generate RA-TLS certificate
@@ -38,11 +39,15 @@ pub async fn start_server(
     let server_config = build_server_config(&ra_cert.cert_der, &ra_cert.key_der)?;
 
     // 3. Build axum Router
-    let state = AppState { coordinator };
+    let state = AppState {
+        coordinator,
+        attestation: ra_cert.attestation.clone(),
+    };
     let app = Router::new()
-        .route("/submit", post(submit_handler))
-        .route("/status/{swap_id}", get(status_handler))
-        .route("/announcement/{swap_id}", get(announcement_handler))
+        .route("/submit", post(submit_handler::<C>))
+        .route("/status/{swap_id}", get(status_handler::<C>))
+        .route("/announcement/{swap_id}", get(announcement_handler::<C>))
+        .route("/attestation", get(attestation_handler::<C>))
         .with_state(state);
 
     // 4. Serve with axum-server + rustls
@@ -101,6 +106,8 @@ pub enum ServerError {
 mod tests {
     use super::*;
     use crate::adapters::merkle_tree::LocalMerkleTree;
+    use crate::adapters::mock_chain::MockChainPort;
+    use crate::adapters::mock_tee::MockTeeRuntime;
     use crate::domain::note::Note;
     use crate::domain::stealth::MetaKeyPair;
     use crate::domain::swap::{SwapAnnouncement, SwapTerms};
@@ -108,7 +115,7 @@ mod tests {
     use crate::ports::SwapLockData;
     use crate::server::routes::SwapStatus;
     use crate::server::verifier::build_ra_tls_client;
-    use alloy_primitives::{Address, B256};
+    use alloy::primitives::{Address, B256};
     use std::collections::HashMap;
 
     #[tokio::test]

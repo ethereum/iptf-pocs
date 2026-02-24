@@ -9,7 +9,7 @@ use crate::domain::swap::SwapAnnouncement;
 /// Implementations:
 /// - `EthereumChainClient` (alloy, future)
 /// - Mock implementation for testing
-pub trait ChainPort: Send + Sync {
+pub trait ChainPort: Send + Sync + 'static {
     /// Read on-chain lock data for a commitment (from `SwapNoteLocked` event).
     fn get_swap_lock_data(
         &self,

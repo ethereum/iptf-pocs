@@ -33,6 +33,17 @@ What this does NOT protect against:
 - [Rust](https://www.rust-lang.org/tools/install)
 - [Foundry](https://getfoundry.sh/introduction/installation)
 - [Nargo](https://noir-lang.org/docs/getting_started/installation/) (Noir toolchain)
+- [Barretenberg](https://barretenberg.aztec.network/docs/getting_started/)
+
+## Prerequisite versions at the time of development
+
+- rust: v1.90
+- forge: v1.5.1 (Installed with foundry)
+- nargo: v1.0.0-beta.18
+- bb: v3.0.0-nightly.20260102
+
+> [!NOTE]
+> if proof generation / verification fails for you, run `./scripts/generate-verifiers.sh` to regenerate the verifiers. this can happen when there is a mismatch in tooling versions for bb / nargo
 
 ## Installation
 
@@ -58,10 +69,25 @@ cd circuits/spend && nargo check && cd ../..
 
 ## Running
 
+### Mock mode
+
 ```bash
-# How to run the PoC
-cargo run
+cargo run --bin demo
 ```
+
+### Full e2e demo with real proof generation + onchain verification + tee swap coordination (happy path)
+
+```bash
+cargo run --bin e2e
+```
+
+### Full e2e demo with real proof generation + onchain verification + tee swap coordination (tee crashes, refund path)
+
+```bash
+cargo run --bin e2e -- refund
+```
+
+> **note**: you may use `--release` to make the demos execute faster
 
 ## Tests
 

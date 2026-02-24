@@ -1,21 +1,31 @@
 use std::sync::Arc;
 
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 
 use crate::adapters::memory_store::InMemorySwapStore;
-use crate::adapters::mock_chain::MockChainPort;
 use crate::coordinator::{CoordinatorError, SwapCoordinator};
 use crate::domain::swap::{PartySubmission, SwapAnnouncement};
+use crate::ports::chain::ChainPort;
+use crate::ports::tee::AttestationReport;
 use crate::ports::TxReceipt;
 
 /// Shared application state for axum route handlers.
-#[derive(Clone)]
-pub struct AppState {
-    pub coordinator: Arc<SwapCoordinator<MockChainPort, InMemorySwapStore>>,
+pub struct AppState<C: ChainPort> {
+    pub coordinator: Arc<SwapCoordinator<C, InMemorySwapStore>>,
+    pub attestation: AttestationReport,
+}
+
+impl<C: ChainPort> Clone for AppState<C> {
+    fn clone(&self) -> Self {
+        Self {
+            coordinator: self.coordinator.clone(),
+            attestation: self.attestation.clone(),
+        }
+    }
 }
 
 // ── Response types ──
@@ -45,8 +55,8 @@ pub struct SwapStatus {
 // ── Route handlers ──
 
 /// POST /submit — receives a `PartySubmission`, forwards to the coordinator.
-pub async fn submit_handler(
-    State(state): State<AppState>,
+pub async fn submit_handler<C: ChainPort>(
+    State(state): State<AppState<C>>,
     Json(submission): Json<PartySubmission>,
 ) -> Result<Json<SubmitResponse>, AppError> {
     let result = state.coordinator.handle_submission(submission).await?;
@@ -67,8 +77,8 @@ pub async fn submit_handler(
 
 /// GET /status/:swap_id — returns whether a pending submission exists and
 /// whether an announcement has been posted.
-pub async fn status_handler(
-    State(state): State<AppState>,
+pub async fn status_handler<C: ChainPort>(
+    State(state): State<AppState<C>>,
     Path(swap_id_hex): Path<String>,
 ) -> Result<Json<SwapStatus>, AppError> {
     let swap_id = parse_b256(&swap_id_hex)?;
@@ -80,8 +90,8 @@ pub async fn status_handler(
 }
 
 /// GET /announcement/:swap_id — returns the `SwapAnnouncement` if it exists.
-pub async fn announcement_handler(
-    State(state): State<AppState>,
+pub async fn announcement_handler<C: ChainPort>(
+    State(state): State<AppState<C>>,
     Path(swap_id_hex): Path<String>,
 ) -> Result<Json<SwapAnnouncement>, AppError> {
     let swap_id = parse_b256(&swap_id_hex)?;
@@ -96,6 +106,13 @@ pub async fn announcement_handler(
     )?;
 
     Ok(Json(announcement))
+}
+
+/// GET /attestation — returns the RA-TLS attestation report.
+pub async fn attestation_handler<C: ChainPort>(
+    State(state): State<AppState<C>>,
+) -> Json<AttestationReport> {
+    Json(state.attestation.clone())
 }
 
 // ── Error handling ──

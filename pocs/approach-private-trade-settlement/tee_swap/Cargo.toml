@@ -11,6 +11,10 @@ path = "src/lib/lib.rs"
 name = "demo"
 path = "src/bin/demo.rs"
 
+[[bin]]
+name = "e2e"
+path = "src/bin/e2e.rs"
+
 [dependencies]
 # Poseidon
 light-poseidon = "0.4.0"
@@ -24,9 +28,7 @@ ark-std = "0.5"
 ark-serialize = "0.5"
 
 # Ethereum
-alloy = { version = "1.1", features = ["sol-types", "essentials"] }
-# Ethereum types
-alloy-primitives = { version = "1", features = ["serde"] }
+alloy = { version = "1.1", features = ["sol-types", "essentials", "node-bindings", "serde"] }
 
 # Merkle tree
 zk-kit-lean-imt = "0.1"
@@ -43,7 +45,7 @@ sha2 = "0.10"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 
 # Async
-tokio = { version = "1", features = ["sync", "macros", "rt", "process", "full"] }
+tokio = { version = "1", features = ["full"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

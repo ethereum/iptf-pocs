@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy_primitives::B256;
+use alloy::primitives::B256;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -180,7 +180,7 @@ mod tests {
     use super::*;
     use crate::adapters::mock_tee::MockTeeRuntime;
     use crate::server::cert::generate_ra_tls_cert;
-    use alloy_primitives::Address;
+    use alloy::primitives::Address;
     use rustls::pki_types::ServerName;
 
     async fn test_cert_der() -> Vec<u8> {

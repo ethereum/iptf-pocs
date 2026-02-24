@@ -12,7 +12,8 @@ import {HonkVerifier} from "../src/verifiers/TransferVerifier.sol";
 /// @notice Deployment script for TEE swap contracts
 contract Deploy is Script, Config {
     function run() public {
-        _loadConfig("./deployments.toml", true);
+        string memory configPath = vm.envOr("DEPLOY_CONFIG", string("./deployments.toml"));
+        _loadConfig(configPath, true);
 
         bool useMockVerifier = config.get("use_mock_verifier").toBool();
 
