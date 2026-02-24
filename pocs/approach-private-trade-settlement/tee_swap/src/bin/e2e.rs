@@ -1,6 +1,8 @@
 //! E2E harness for the TEE swap protocol.
 //!
-//! Run with: `cargo run --bin e2e`
+//! Run with:
+//!   cargo run --bin e2e              # happy path (default)
+//!   cargo run --bin e2e -- refund    # refund after TEE failure
 
 use std::collections::HashMap;
 use std::fmt;
@@ -19,13 +21,19 @@ use tee_swap::coordinator::SwapCoordinator;
 use tee_swap::domain::note::Note;
 use tee_swap::domain::stealth::MetaKeyPair;
 use tee_swap::domain::swap::{SwapAnnouncement, SwapTerms};
-use tee_swap::party::{prepare_claim, prepare_lock, PartyRole};
+use tee_swap::party::{prepare_claim, prepare_lock, prepare_refund, PartyRole};
 use tee_swap::ports::chain::{ChainError, ChainPort as _};
 use tee_swap::ports::prover::Prover;
 use tee_swap::ports::tee::AttestationReport;
 use tee_swap::server::routes::SwapStatus;
 use tee_swap::server::start_server;
 use tee_swap::server::verifier::build_ra_tls_client;
+
+#[derive(Debug, Clone, Copy)]
+enum Scenario {
+    HappyPath,
+    Refund,
+}
 
 /// First deterministic anvil private key (hex, no 0x prefix).
 const ANVIL_KEY_0: &str =
@@ -371,9 +379,47 @@ impl E2eHarness {
     }
 }
 
+/// Warp an Anvil node's clock to the given unix timestamp and mine a block.
+async fn anvil_warp_time(endpoint: &str, timestamp: u64) -> Result<(), E2eError> {
+    let client = reqwest::Client::new();
+    let ts_hex = format!("0x{timestamp:x}");
+
+    // Set the timestamp for the next block
+    client
+        .post(endpoint)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "evm_setNextBlockTimestamp",
+            "params": [ts_hex],
+            "id": 1
+        }))
+        .send()
+        .await?;
+
+    // Mine a block so the timestamp takes effect
+    client
+        .post(endpoint)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "evm_mine",
+            "params": [],
+            "id": 2
+        }))
+        .send()
+        .await?;
+
+    Ok(())
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), E2eError> {
-    println!("================== TEE Swap E2E Harness ==================\n");
+    let scenario = match std::env::args().nth(1).as_deref() {
+        None | Some("happy_path") => Scenario::HappyPath,
+        Some("refund") => Scenario::Refund,
+        Some(other) => panic!("unknown scenario '{other}'; use 'happy_path' or 'refund'"),
+    };
+
+    println!("================== TEE Swap E2E Harness ({scenario:?}) ==================\n");
 
     let mut harness = E2eHarness::start().await?;
 
@@ -496,165 +542,296 @@ async fn main() -> Result<(), E2eError> {
         .tree
         .insert_commitment(&lock_b.locked_note.commitment());
 
-    // ── Phase 9: Submit to TEE via RA-TLS ──
-    println!("\n[9/10] Submitting to TEE via RA-TLS...");
+    match scenario {
+        Scenario::HappyPath => {
+            // ── Phase 9: Submit to TEE via RA-TLS ──
+            println!("\n[9/10] Submitting to TEE via RA-TLS...");
 
-    // Alice submits first → expect "pending"
-    let resp = harness
-        .client
-        .post(format!("{}/submit", harness.base_url))
-        .json(&lock_a.submission)
-        .send()
-        .await?;
-    let body: serde_json::Value = resp.json().await?;
-    let status = body["status"]
-        .as_str()
-        .ok_or_else(|| E2eError::Json("missing status field".into()))?;
-    println!("  Alice submitted → status: {status}");
-    assert_eq!(status, "pending", "first submission should be pending");
-
-    // Bob submits second → expect "verified" with announcement
-    let resp = harness
-        .client
-        .post(format!("{}/submit", harness.base_url))
-        .json(&lock_b.submission)
-        .send()
-        .await?;
-    let body: serde_json::Value = resp.json().await?;
-    let status = body["status"]
-        .as_str()
-        .ok_or_else(|| E2eError::Json("missing status field".into()))?;
-    println!("  Bob   submitted → status: {status}");
-    assert_eq!(status, "verified", "second submission should be verified");
-
-    let announcement: SwapAnnouncement =
-        serde_json::from_value(body["announcement"].clone())
-            .map_err(|e| E2eError::Json(format!("parse announcement: {e}")))?;
-    println!(
-        "  swap_id:         0x{}...",
-        &hex::encode(announcement.swap_id.0)[..16]
-    );
-    println!(
-        "  ephemeral_key_a: 0x{}...",
-        &hex::encode(announcement.ephemeral_key_a.0)[..16]
-    );
-    println!(
-        "  ephemeral_key_b: 0x{}...",
-        &hex::encode(announcement.ephemeral_key_b.0)[..16]
-    );
-
-    // Wait for announcement to be confirmed on-chain
-    let swap_id_hex = format!("0x{}", hex::encode(harness.terms.swap_id));
-    let announced = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
+            // Alice submits first → expect "pending"
             let resp = harness
                 .client
-                .get(format!("{}/status/{swap_id_hex}", harness.base_url))
+                .post(format!("{}/submit", harness.base_url))
+                .json(&lock_a.submission)
                 .send()
-                .await
-                .ok();
-            if let Some(resp) = resp {
-                if let Ok(status) = resp.json::<SwapStatus>().await {
-                    if status.announced {
-                        return;
+                .await?;
+            let body: serde_json::Value = resp.json().await?;
+            let status = body["status"]
+                .as_str()
+                .ok_or_else(|| E2eError::Json("missing status field".into()))?;
+            println!("  Alice submitted → status: {status}");
+            assert_eq!(status, "pending", "first submission should be pending");
+
+            // Bob submits second → expect "verified" with announcement
+            let resp = harness
+                .client
+                .post(format!("{}/submit", harness.base_url))
+                .json(&lock_b.submission)
+                .send()
+                .await?;
+            let body: serde_json::Value = resp.json().await?;
+            let status = body["status"]
+                .as_str()
+                .ok_or_else(|| E2eError::Json("missing status field".into()))?;
+            println!("  Bob   submitted → status: {status}");
+            assert_eq!(status, "verified", "second submission should be verified");
+
+            let announcement: SwapAnnouncement =
+                serde_json::from_value(body["announcement"].clone())
+                    .map_err(|e| E2eError::Json(format!("parse announcement: {e}")))?;
+            println!(
+                "  swap_id:         0x{}...",
+                &hex::encode(announcement.swap_id.0)[..16]
+            );
+            println!(
+                "  ephemeral_key_a: 0x{}...",
+                &hex::encode(announcement.ephemeral_key_a.0)[..16]
+            );
+            println!(
+                "  ephemeral_key_b: 0x{}...",
+                &hex::encode(announcement.ephemeral_key_b.0)[..16]
+            );
+
+            // Wait for announcement to be confirmed on-chain
+            let swap_id_hex = format!("0x{}", hex::encode(harness.terms.swap_id));
+            let announced = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let resp = harness
+                        .client
+                        .get(format!("{}/status/{swap_id_hex}", harness.base_url))
+                        .send()
+                        .await
+                        .ok();
+                    if let Some(resp) = resp {
+                        if let Ok(status) = resp.json::<SwapStatus>().await {
+                            if status.announced {
+                                return;
+                            }
+                        }
                     }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            })
+            .await;
+            assert!(announced.is_ok(), "announcement should be confirmed within 5s");
+            println!("  Announcement confirmed on-chain");
+
+            // ── Phase 10: Prove and send claims on-chain ──
+            println!("\n[10/10] Proving and sending claim transactions on-chain...");
+
+            // Prepare claim witnesses
+            let locked_idx_a = 1u64; // second leaf in tree_a
+            let locked_proof_a = harness
+                .chain_a
+                .tree
+                .generate_proof(locked_idx_a)
+                .expect("proof for locked note a");
+            let locked_root_a = harness.chain_a.tree.current_root().expect("locked root a");
+
+            let locked_idx_b = 1u64; // second leaf in tree_b
+            let locked_proof_b = harness
+                .chain_b
+                .tree
+                .generate_proof(locked_idx_b)
+                .expect("proof for locked note b");
+            let locked_root_b = harness.chain_b.tree.current_root().expect("locked root b");
+
+            // Alice (role A) claims Bob's note on chain B
+            let claim_a = prepare_claim(
+                &announcement,
+                &harness.alice.meta_key,
+                &lock_b.ephemeral_keypair.r_pub.into(),
+                &harness.terms,
+                PartyRole::A,
+                &locked_proof_b,
+                locked_root_b,
+            );
+
+            // Bob (role B) claims Alice's note on chain A
+            let claim_b = prepare_claim(
+                &announcement,
+                &harness.bob.meta_key,
+                &lock_a.ephemeral_keypair.r_pub.into(),
+                &harness.terms,
+                PartyRole::B,
+                &locked_proof_a,
+                locked_root_a,
+            );
+
+            // Generate claim proofs
+            let claim_proof_a = harness.prover.prove_transfer(&claim_a.witness).await?;
+            println!(
+                "  Alice claim proof generated ({} bytes), nullifier: 0x{}...",
+                claim_proof_a.proof.len(),
+                &hex::encode(claim_a.witness.nullifier.0)[..16]
+            );
+
+            let claim_proof_b = harness.prover.prove_transfer(&claim_b.witness).await?;
+            println!(
+                "  Bob   claim proof generated ({} bytes), nullifier: 0x{}...",
+                claim_proof_b.proof.len(),
+                &hex::encode(claim_b.witness.nullifier.0)[..16]
+            );
+
+            // Alice claims Bob's note on chain B
+            let claim_tx_a = harness
+                .chain_b
+                .rpc
+                .transfer(&claim_proof_a.proof, &claim_proof_a.public_inputs)
+                .await?;
+            println!("  Alice claim tx (chain B): {} (success: {})", claim_tx_a.tx_hash, claim_tx_a.success);
+
+            // Bob claims Alice's note on chain A
+            let claim_tx_b = harness
+                .chain_a
+                .rpc
+                .transfer(&claim_proof_b.proof, &claim_proof_b.public_inputs)
+                .await?;
+            println!("  Bob   claim tx (chain A): {} (success: {})", claim_tx_b.tx_hash, claim_tx_b.success);
+
+            println!(
+                "  Alice output: 0x{}...",
+                &hex::encode(claim_a.output_note.commitment().0)[..16]
+            );
+            println!(
+                "  Bob   output: 0x{}...",
+                &hex::encode(claim_b.output_note.commitment().0)[..16]
+            );
+
+            harness.server_handle.shutdown();
+
+            println!("\n================== E2E Complete (Happy Path) ==================");
+            println!("  All 10 phases succeeded.");
+            println!("  Alice: {VALUE_A} USD (Chain A) → {VALUE_B} BOND (Chain B)");
+            println!("  Bob:   {VALUE_B} BOND (Chain B) → {VALUE_A} USD (Chain A)");
         }
-    })
-    .await;
-    assert!(announced.is_ok(), "announcement should be confirmed within 5s");
-    println!("  Announcement confirmed on-chain");
 
-    // ── Phase 10: Prove and send claims on-chain ──
-    println!("\n[10/10] Proving and sending claim transactions on-chain...");
+        Scenario::Refund => {
+            // ── Phase 9: Submit to TEE, then crash ──
+            println!("\n[9/10] Alice submits to TEE, then TEE crashes...");
 
-    // Prepare claim witnesses
-    let locked_idx_a = 1u64; // second leaf in tree_a
-    let locked_proof_a = harness
-        .chain_a
-        .tree
-        .generate_proof(locked_idx_a)
-        .expect("proof for locked note a");
-    let locked_root_a = harness.chain_a.tree.current_root().expect("locked root a");
+            // Alice submits first → expect "pending"
+            let resp = harness
+                .client
+                .post(format!("{}/submit", harness.base_url))
+                .json(&lock_a.submission)
+                .send()
+                .await?;
+            let body: serde_json::Value = resp.json().await?;
+            let status = body["status"]
+                .as_str()
+                .ok_or_else(|| E2eError::Json("missing status field".into()))?;
+            println!("  Alice submitted → status: {status}");
+            assert_eq!(status, "pending", "first submission should be pending");
 
-    let locked_idx_b = 1u64; // second leaf in tree_b
-    let locked_proof_b = harness
-        .chain_b
-        .tree
-        .generate_proof(locked_idx_b)
-        .expect("proof for locked note b");
-    let locked_root_b = harness.chain_b.tree.current_root().expect("locked root b");
+            // Simulate TEE crash — shut down the server before Bob can submit
+            harness.server_handle.shutdown();
+            println!("  TEE server shut down (simulating crash)");
+            println!("  Bob cannot submit; swap will not complete");
 
-    // Alice (role A) claims Bob's note on chain B
-    let claim_a = prepare_claim(
-        &announcement,
-        &harness.alice.meta_key,
-        &lock_b.ephemeral_keypair.r_pub.into(),
-        &harness.terms,
-        PartyRole::A,
-        &locked_proof_b,
-        locked_root_b,
-    );
+            // ── Phase 10: Warp time and refund ──
+            println!("\n[10/10] Warping time past timeout and submitting refunds...");
 
-    // Bob (role B) claims Alice's note on chain A
-    let claim_b = prepare_claim(
-        &announcement,
-        &harness.bob.meta_key,
-        &lock_a.ephemeral_keypair.r_pub.into(),
-        &harness.terms,
-        PartyRole::B,
-        &locked_proof_a,
-        locked_root_a,
-    );
+            // Extract timeout from swap terms
+            let timeout_u64 = u64::from_be_bytes(
+                harness.terms.timeout.0[24..32]
+                    .try_into()
+                    .expect("timeout bytes"),
+            );
+            let warp_to = timeout_u64 + 1;
+            println!("  Timeout: {timeout_u64}, warping to: {warp_to}");
 
-    // Generate claim proofs
-    let claim_proof_a = harness.prover.prove_transfer(&claim_a.witness).await?;
-    println!(
-        "  Alice claim proof generated ({} bytes), nullifier: 0x{}...",
-        claim_proof_a.proof.len(),
-        &hex::encode(claim_a.witness.nullifier.0)[..16]
-    );
+            let endpoint_a = harness._anvil.anvil_a.endpoint();
+            let endpoint_b = harness._anvil.anvil_b.endpoint();
+            anvil_warp_time(&endpoint_a, warp_to).await?;
+            anvil_warp_time(&endpoint_b, warp_to).await?;
+            println!("  Both chains warped past timeout");
 
-    let claim_proof_b = harness.prover.prove_transfer(&claim_b.witness).await?;
-    println!(
-        "  Bob   claim proof generated ({} bytes), nullifier: 0x{}...",
-        claim_proof_b.proof.len(),
-        &hex::encode(claim_b.witness.nullifier.0)[..16]
-    );
+            // Prepare refund witnesses
+            let locked_idx_a = 1u64; // second leaf in tree_a (Alice's locked note)
+            let locked_proof_a = harness
+                .chain_a
+                .tree
+                .generate_proof(locked_idx_a)
+                .expect("proof for locked note a");
+            let locked_root_a = harness.chain_a.tree.current_root().expect("locked root a");
 
-    // Alice claims Bob's note on chain B
-    let claim_tx_a = harness
-        .chain_b
-        .rpc
-        .transfer(&claim_proof_a.proof, &claim_proof_a.public_inputs)
-        .await?;
-    println!("  Alice claim tx (chain B): {} (success: {})", claim_tx_a.tx_hash, claim_tx_a.success);
+            let locked_idx_b = 1u64; // second leaf in tree_b (Bob's locked note)
+            let locked_proof_b = harness
+                .chain_b
+                .tree
+                .generate_proof(locked_idx_b)
+                .expect("proof for locked note b");
+            let locked_root_b = harness.chain_b.tree.current_root().expect("locked root b");
 
-    // Bob claims Alice's note on chain A
-    let claim_tx_b = harness
-        .chain_a
-        .rpc
-        .transfer(&claim_proof_b.proof, &claim_proof_b.public_inputs)
-        .await?;
-    println!("  Bob   claim tx (chain A): {} (success: {})", claim_tx_b.tx_hash, claim_tx_b.success);
+            // Alice refunds her locked note on chain A
+            let refund_a = prepare_refund(
+                &lock_a.locked_note,
+                &harness.alice.meta_key.sk,
+                &locked_proof_a,
+                locked_root_a,
+            );
 
-    println!(
-        "  Alice output: 0x{}...",
-        &hex::encode(claim_a.output_note.commitment().0)[..16]
-    );
-    println!(
-        "  Bob   output: 0x{}...",
-        &hex::encode(claim_b.output_note.commitment().0)[..16]
-    );
+            // Bob refunds his locked note on chain B
+            let refund_b = prepare_refund(
+                &lock_b.locked_note,
+                &harness.bob.meta_key.sk,
+                &locked_proof_b,
+                locked_root_b,
+            );
 
-    harness.server_handle.shutdown();
+            // Generate refund proofs
+            let refund_proof_a = harness.prover.prove_transfer(&refund_a.witness).await?;
+            println!(
+                "  Alice refund proof generated ({} bytes), nullifier: 0x{}...",
+                refund_proof_a.proof.len(),
+                &hex::encode(refund_a.witness.nullifier.0)[..16]
+            );
 
-    println!("\n================== E2E Complete ==================");
-    println!("  All 10 phases succeeded.");
-    println!("  Alice: {VALUE_A} USD (Chain A) → {VALUE_B} BOND (Chain B)");
-    println!("  Bob:   {VALUE_B} BOND (Chain B) → {VALUE_A} USD (Chain A)");
+            let refund_proof_b = harness.prover.prove_transfer(&refund_b.witness).await?;
+            println!(
+                "  Bob   refund proof generated ({} bytes), nullifier: 0x{}...",
+                refund_proof_b.proof.len(),
+                &hex::encode(refund_b.witness.nullifier.0)[..16]
+            );
+
+            // Alice refunds on chain A
+            let refund_tx_a = harness
+                .chain_a
+                .rpc
+                .transfer(&refund_proof_a.proof, &refund_proof_a.public_inputs)
+                .await?;
+            println!(
+                "  Alice refund tx (chain A): {} (success: {})",
+                refund_tx_a.tx_hash, refund_tx_a.success
+            );
+
+            // Bob refunds on chain B
+            let refund_tx_b = harness
+                .chain_b
+                .rpc
+                .transfer(&refund_proof_b.proof, &refund_proof_b.public_inputs)
+                .await?;
+            println!(
+                "  Bob   refund tx (chain B): {} (success: {})",
+                refund_tx_b.tx_hash, refund_tx_b.success
+            );
+
+            println!(
+                "  Alice refund output: 0x{}...",
+                &hex::encode(refund_a.output_note.commitment().0)[..16]
+            );
+            println!(
+                "  Bob   refund output: 0x{}...",
+                &hex::encode(refund_b.output_note.commitment().0)[..16]
+            );
+
+            println!("\n================== E2E Complete (Refund) ==================");
+            println!("  All 10 phases succeeded.");
+            println!("  TEE crashed after Alice's submission; swap aborted.");
+            println!("  Alice: reclaimed {VALUE_A} USD on Chain A");
+            println!("  Bob:   reclaimed {VALUE_B} BOND on Chain B");
+        }
+    }
 
     Ok(())
 }
