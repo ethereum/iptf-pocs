@@ -64,10 +64,16 @@ cd circuits/spend && nargo check && cd ../..
 cargo run --bin demo
 ```
 
-### Full e2e demo with real proof generation + onchain verification + tee swap coordination
+### Full e2e demo with real proof generation + onchain verification + tee swap coordination (happy path)
 
 ```bash
 cargo run --bin e2e
+```
+
+### Full e2e demo with real proof generation + onchain verification + tee swap coordination (tee crashes, refund path)
+
+```bash
+cargo run --bin e2e -- refund
 ```
 
 > **note**: you may use `--release` to make the demos execute faster
