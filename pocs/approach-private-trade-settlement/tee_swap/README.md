@@ -11,7 +11,7 @@ See [SPEC.md](./SPEC.md) for the full protocol specification.
 
 ## Cryptographic Assumptions
 
-- **Primitives used:** Stealth addresses (ECDH + elliptic curve arithmetic), Pedersen commitments, ZK proofs (Noir circuits), time-locked spending conditions
+- **Primitives used:** Stealth addresses (ECDH + elliptic curve arithmetic), hash-based commitments (domain-separated), ZK proofs (Noir circuits), time-locked spending conditions
 - **Security assumptions:** Discrete log hardness (Grumpkin curve), TEE enclave integrity, hash function collision resistance
 - **Trusted setup:** No cryptographic trusted setup; trust is placed in TEE hardware and attestation infrastructure
 
@@ -75,8 +75,9 @@ cargo test --lib
 - TEE enclave is simulated in software; no real hardware attestation
 - Single TEE operator (no M-of-N redundancy)
 - No actual encrypted channel between counterparties and enclave
-- Static KYC whitelist (no identity provider integration)
 - Simplified on-chain attestation verification (ECDSA signature check only)
+- No KYC/whitelist enforcement or selective disclosure for regulators (can be layered at the UTXO contract level)
+- No relayer infrastructure for UTXO contract interactions
 
 ## References
 

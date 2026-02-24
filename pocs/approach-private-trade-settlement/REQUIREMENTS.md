@@ -29,6 +29,7 @@ Secondary market trading of tokenized securities on public blockchains exposes t
 - **Access Control**:
   - Only KYC-verified entities can participate in trades
   - Eligibility checks before settlement execution
+  - KYC verification SHOULD preserve participant privacy (e.g., not reveal identity on-chain)
 
 ## 3. Privacy Requirements (MUST)
 
@@ -43,10 +44,10 @@ Secondary market trading of tokenized securities on public blockchains exposes t
   - Asset type (which token was involved)
   - Compliance attestation (both parties are eligible)
 
-- **Regulatory Oversight**:
+- **Regulatory Oversight** (SHOULD):
   - Selective disclosure mechanism for regulators to inspect specific trade details
   - Audit trail for post-trade reporting (MiFID II, SEC Rule 606 equivalent)
-  - Disclosure does not compromise privacy of uninvolved parties
+  - Disclosure SHOULD NOT compromise privacy of uninvolved parties
 
 ## 4. Security Requirements (MUST)
 
@@ -65,7 +66,6 @@ Secondary market trading of tokenized securities on public blockchains exposes t
 ## 6. Out of Scope (PoC)
 
 - Central limit order book (CLOB) matching
-- Cross-chain settlement
 - Margin trading or derivatives
 - Fiat on/off ramps
 - Netting and batch settlement
