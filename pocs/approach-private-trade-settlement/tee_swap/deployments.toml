@@ -8,3 +8,23 @@ use_mock_verifier = true
 verifier_address = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
 private_utxo_address = "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
 tee_lock_address = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
+
+[11155111]
+
+[11155111.bool]
+use_mock_verifier = false
+
+[11155111.address]
+verifier_address = "0x26290eadfd12e9b3b2d4c30c420466ce45ea7f6d"
+private_utxo_address = "0xa3A98aE6D65a53db2451EacA7f1d151922828056"
+tee_lock_address = "0xabeb70e76694746e6E0bb984E7D2e315a86b1e13"
+
+[534351]
+
+[534351.bool]
+use_mock_verifier = false
+
+[534351.address]
+verifier_address = "0x3df0501245904f2dc2d6edfd2d39563dc21eadb5"
+private_utxo_address = "0xb3b1F6b2fDAAb4dFc4fa4784d7D05e618A6a36f4"
+tee_lock_address = "0x0e727C37AA62fC335DD71314349D15fB958B5CDE"

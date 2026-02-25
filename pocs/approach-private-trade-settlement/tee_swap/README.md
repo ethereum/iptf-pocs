@@ -89,6 +89,75 @@ cargo run --bin e2e -- refund
 
 > **note**: you may use `--release` to make the demos execute faster
 
+### Testnet demo
+
+Runs the full TEE swap protocol on live testnets (Sepolia + a Layer 2).
+
+#### 1. Create a config file
+
+Copy the example and fill in real values:
+
+```bash
+cp config.toml.example config.toml
+```
+
+The config has the following sections:
+
+| Section | Purpose |
+|---------|---------|
+| `[sepolia]` | RPC URL and deployer key for Sepolia |
+| `[layer2]` | RPC URL and deployer key for the L2 (e.g. Scroll Sepolia) |
+| `[alice]` | Alice's private key, home chain (`"sepolia"` or `"layer2"`), and note amount |
+| `[bob]` | Bob's private key, home chain (must differ from Alice's), and note amount |
+| `[tee]` | TEE signer private key (only needed for local coordinator mode) |
+| `[coordinator]` | Optional: external coordinator URL and TEE address |
+| `[swap]` | Swap timeout (e.g. `"24h"`) |
+
+> [!IMPORTANT]
+> All deployer and party accounts must be funded with testnet ETH. Never use keys that hold mainnet funds.
+
+#### 2. Pre-deployed contracts (optional)
+
+If contracts are already deployed, set the addresses and deployment block to skip the forge deployment step:
+
+```toml
+[sepolia]
+rpc_url = "https://rpc.sepolia.org"
+deployer_private_key = "0x..."
+deployment_block = 12345678
+private_utxo_address = "0x..."
+tee_lock_address = "0x..."
+```
+
+The same applies to the `[layer2]` section. When these fields are omitted, the binary deploys fresh contracts via `forge script`.
+
+#### 3. Coordinator modes
+
+**Local coordinator** (default): spawns an RA-TLS server locally. Requires `[tee]` private key:
+
+```toml
+[tee]
+private_key = "0x..."
+```
+
+**External coordinator**: connects to a remote TEE coordinator. Omit the `[tee]` section and set:
+
+```toml
+[coordinator]
+url = "https://tee.example.com"
+tee_address = "0x..."  # required when deploying fresh contracts
+```
+
+#### 4. Run
+
+```bash
+cargo run --bin testnet -- --config config.toml
+```
+
+The binary executes a 12-step flow: deploy contracts, fund notes, lock notes, submit to TEE, and claim. Progress and transaction hashes are printed at each step.
+
+> **note**: you may use `--release` to speed up proof generation
+
 ## Tests
 
 ```bash

@@ -1,0 +1,49 @@
+# TEE Swap Testnet Configuration
+#
+# This config drives the `testnet` binary which runs the full TEE swap protocol
+# on Sepolia + a Layer 2 testnet (preferably a validium).
+#
+# SECURITY: This is a PoC. Never commit real private keys. Use dedicated testnet
+# keys with no mainnet funds.
+
+[sepolia]
+rpc_url = "https://rpc.sepolia.org"
+deployer_private_key = "0xdead000000000000000000000000000000000000000000000000000000000004"
+
+# If contracts are pre-deployed, uncomment these:
+# deployment_block = 12345678
+# private_utxo_address = "0x..."
+# tee_lock_address = "0x..."
+
+[layer2]
+rpc_url = "https://sepolia-rpc.scroll.io"
+deployer_private_key = "0xdead000000000000000000000000000000000000000000000000000000000004"
+
+# If contracts are pre-deployed, uncomment these:
+# deployment_block = 12345678
+# private_utxo_address = "0x..."
+# tee_lock_address = "0x..."
+
+[alice]
+private_key = "0xdead000000000000000000000000000000000000000000000000000000000004"
+chain = "sepolia"
+amount = 1000
+
+[bob]
+private_key = "0xdead000000000000000000000000000000000000000000000000000000000004"
+chain = "layer2"
+amount = 50
+
+# TEE private key — required when running a local coordinator.
+# If coordinator.url is set, this is not needed.
+[tee]
+private_key = "0xdead000000000000000000000000000000000000000000000000000000000004"
+
+# Optional: connect to an external coordinator instead of spawning one locally.
+# When using an external coordinator with fresh contract deployment, tee_address is required.
+# [coordinator]
+# url = "https://tee.example.com"
+# tee_address = "0x..."  # TEE signer address for TeeLock deployment
+
+[swap]
+timeout = "24h"

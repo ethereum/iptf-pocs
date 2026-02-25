@@ -43,6 +43,14 @@ pub enum CoordinatorError {
     #[error("missing lock data for pending submission")]
     MissingLockData,
 
+    #[error(
+        "timeout too short: need at least {minimum_remaining}s remaining, got {actual_remaining}s"
+    )]
+    TimeoutTooShort {
+        minimum_remaining: u64,
+        actual_remaining: u64,
+    },
+
     #[error("unknown chain_id: {0}")]
     UnknownChain(B256),
 
@@ -78,6 +86,9 @@ pub struct SwapCoordinator<C: ChainPort, S: SwapStore> {
     /// Which chain hosts the TeeLock contract (fixed at TEE instantiation)
     announcement_chain_id: B256,
     pending_lock_data: Mutex<HashMap<B256, SwapLockData>>,
+    /// Minimum seconds remaining before timeout for a swap to be accepted.
+    /// Default 0 = no validation (backward compatible).
+    min_timeout_secs: u64,
 }
 
 impl<C: ChainPort, S: SwapStore> SwapCoordinator<C, S> {
@@ -87,7 +98,14 @@ impl<C: ChainPort, S: SwapStore> SwapCoordinator<C, S> {
             chains,
             announcement_chain_id,
             pending_lock_data: Mutex::new(HashMap::new()),
+            min_timeout_secs: 0,
         }
+    }
+
+    /// Set the minimum timeout remaining (in seconds) for swap acceptance.
+    pub fn with_min_timeout(mut self, secs: u64) -> Self {
+        self.min_timeout_secs = secs;
+        self
     }
 
     /// Handle a party submission.
@@ -129,6 +147,25 @@ impl<C: ChainPort, S: SwapStore> SwapCoordinator<C, S> {
                         .remove(&swap_id)
                         .ok_or(CoordinatorError::MissingLockData)?
                 };
+
+                // Validate timeout has enough remaining time.
+                if self.min_timeout_secs > 0 {
+                    let timeout_bytes: [u8; 8] = lock_data.timeout.0[24..32]
+                        .try_into()
+                        .unwrap_or([0u8; 8]);
+                    let timeout_ts = u64::from_be_bytes(timeout_bytes);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let remaining = timeout_ts.saturating_sub(now);
+                    if remaining < self.min_timeout_secs {
+                        return Err(CoordinatorError::TimeoutTooShort {
+                            minimum_remaining: self.min_timeout_secs,
+                            actual_remaining: remaining,
+                        });
+                    }
+                }
 
                 let announcement = verify_swap(
                     &first_submission,
@@ -725,6 +762,44 @@ mod tests {
 
         let result = coordinator.handle_submission(f.sub_a).await;
         assert!(matches!(result, Err(CoordinatorError::Chain(_))));
+    }
+
+    #[tokio::test]
+    async fn test_timeout_too_short_rejected() {
+        let f = TestFixture::new();
+
+        let chain_a = MockChainPort::new();
+        chain_a
+            .insert_lock_data(f.lock_data_a.commitment, f.lock_data_a.clone())
+            .await;
+
+        let chain_b = MockChainPort::new();
+        chain_b
+            .insert_lock_data(f.lock_data_b.commitment, f.lock_data_b.clone())
+            .await;
+
+        let chain_id_a = f.sub_a.note_details.chain_id;
+        let chain_id_b = f.sub_b.note_details.chain_id;
+
+        let mut chains = HashMap::new();
+        chains.insert(chain_id_a, chain_a);
+        chains.insert(chain_id_b, chain_b);
+
+        // Set a high minimum so the fixture's timeout is rejected
+        let coordinator = SwapCoordinator::new(InMemorySwapStore::new(), chains, chain_id_a)
+            .with_min_timeout(999_999_999);
+
+        // First submission succeeds (timeout check is on the second)
+        coordinator
+            .handle_submission(f.sub_a.clone())
+            .await
+            .unwrap();
+
+        let result = coordinator.handle_submission(f.sub_b.clone()).await;
+        assert!(matches!(
+            result,
+            Err(CoordinatorError::TimeoutTooShort { .. })
+        ));
     }
 
     #[tokio::test]

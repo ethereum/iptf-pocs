@@ -1,3 +1,4 @@
+pub mod abi;
 pub mod bb_prover;
 pub mod ethereum;
 pub mod memory_store;

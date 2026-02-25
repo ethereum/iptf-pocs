@@ -1,11 +1,8 @@
 use alloy::{
-    network::EthereumWallet,
-    primitives::{Address, B256, Bytes, U256},
-    providers::{DynProvider, ProviderBuilder},
-    signers::local::PrivateKeySigner,
-    sol,
+    network::EthereumWallet, primitives::{Address, Bytes, B256, U256}, providers::{DynProvider, Provider, ProviderBuilder}, rpc::types::TransactionReceipt, signers::local::PrivateKeySigner,
 };
 
+use super::abi::{IPrivateUTXO, ITeeLock};
 use crate::{
     domain::swap::SwapAnnouncement,
     ports::{
@@ -13,58 +10,6 @@ use crate::{
         SwapLockData, TransferPublicInputs, TxReceipt,
     },
 };
-
-sol! {
-    #[sol(rpc)]
-    interface IPrivateUTXO {
-        function commitmentRoot() external view returns (bytes32);
-        function nullifiers(bytes32 nullifier) external view returns (bool);
-
-        function fund(bytes32 commitment) external;
-
-        function transfer(
-            bytes calldata proof,
-            bytes32 nullifier,
-            bytes32 root,
-            bytes32 newCommitment,
-            uint256 timeout,
-            bytes32 pkStealth,
-            bytes32 hSwap,
-            bytes32 hR,
-            bytes32 hMeta,
-            bytes32 hEnc
-        ) external;
-
-        event SwapNoteLocked(
-            bytes32 indexed commitment,
-            uint256 timeout,
-            bytes32 pkStealth,
-            bytes32 hSwap,
-            bytes32 hR,
-            bytes32 hMeta,
-            bytes32 hEnc
-        );
-    }
-
-    #[sol(rpc)]
-    interface ITeeLock {
-        function announcements(bytes32 swapId) external view returns (
-            bool revealed,
-            bytes32 ephemeralKeyA,
-            bytes32 ephemeralKeyB,
-            bytes32 encryptedSaltA,
-            bytes32 encryptedSaltB
-        );
-
-        function announceSwap(
-            bytes32 swapId,
-            bytes32 ephemeralKeyA,
-            bytes32 ephemeralKeyB,
-            bytes32 encryptedSaltA,
-            bytes32 encryptedSaltB
-        ) external;
-    }
-}
 
 /// Ethereum RPC adapter
 #[derive(Clone)]
@@ -100,11 +45,67 @@ impl EthereumRpc {
         })
     }
 
+    /// Access the underlying provider (e.g. for chain ID queries).
+    pub fn provider(&self) -> &DynProvider {
+        &self.provider
+    }
+
     fn convert_receipt(receipt: &alloy::rpc::types::TransactionReceipt) -> TxReceipt {
         TxReceipt {
             tx_hash: receipt.transaction_hash,
             success: receipt.status(),
         }
+    }
+
+    /// Compute EIP-1559 gas overrides for a transaction attempt.
+    /// Returns `(max_fee_per_gas, max_priority_fee_per_gas)`.
+    fn gas_overrides(attempt: u32, current_gas_price: u128) -> (u128, u128) {
+        // Priority fee: 2 gwei * 1.2^(attempt-1)
+        let priority = 2_000_000_000u128 * 12u128.pow(attempt - 1) / 10u128.pow(attempt - 1);
+        // Max fee: 2x current gas price + priority
+        let max_fee = current_gas_price + priority;
+        (max_fee, priority)
+    }
+
+    async fn send_with_retries<F, Fut>(
+        &self,
+        name: &str,
+        f: F,
+    ) -> Result<TxReceipt, ChainError>
+    where
+        F: Fn(u32, u128) -> Fut,
+        Fut: std::future::Future<Output = Result<TransactionReceipt, ChainError>>,
+    {
+        let max_retries = 5;
+
+        for attempt in 1..=max_retries {
+            if attempt > 1 {
+                tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
+            }
+
+            let gas_price = self.provider.get_gas_price().await.unwrap_or(20_000_000_000);
+
+            tracing::info!(attempt, name, "sending transaction");
+
+            match tokio::time::timeout(std::time::Duration::from_secs(60), f(attempt, gas_price)).await {
+                Ok(Ok(receipt)) if receipt.status() => {
+                    return Ok(Self::convert_receipt(&receipt));
+                }
+                Ok(Ok(receipt)) => {
+                    tracing::warn!(attempt, name, tx = ?receipt.transaction_hash, "transaction reverted");
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(attempt, name, error = %e, "transaction failed");
+                }
+                Err(_) => {
+                    tracing::warn!(attempt, name, "transaction timed out");
+                }
+            }
+        }
+
+        Err(ChainError::TransactionFailed(
+            format!("{name} failed after {max_retries} attempts"),
+        ))
     }
 }
 
@@ -129,22 +130,28 @@ impl ChainPort for EthereumRpc {
         Ok(result)
     }
 
+
     async fn fund(&self, commitment: B256) -> Result<TxReceipt, ChainError> {
         let utxo = IPrivateUTXO::new(self.private_utxo, &self.provider);
-        let receipt = utxo
-            .fund(commitment)
-            .send()
-            .await
-            .map_err(|e| ChainError::TransactionFailed(e.to_string()))?
-            .get_receipt()
-            .await
-            .map_err(|e| ChainError::TransactionFailed(e.to_string()))?;
 
-        if !receipt.status() {
-            return Err(ChainError::TransactionFailed("fund reverted".into()));
-        }
-
-        Ok(Self::convert_receipt(&receipt))
+        self.send_with_retries("fund", |attempt, gas_price| {
+            let utxo = utxo.clone();
+            async move {
+                let (max_fee, priority) = EthereumRpc::gas_overrides(attempt, gas_price);
+                let call = utxo.fund(commitment)
+                    .gas(500_000)
+                    .max_fee_per_gas(max_fee)
+                    .max_priority_fee_per_gas(priority);
+                call.send()
+                    .await
+                    .map_err(|e| ChainError::TransactionFailed(format!("send failed: {e}")))?
+                    .with_timeout(Some(std::time::Duration::from_secs(45)))
+                    .get_receipt()
+                    .await
+                    .map_err(|e| ChainError::TransactionFailed(format!("receipt failed: {e}")))
+            }
+        })
+        .await
     }
 
     async fn transfer(
@@ -155,40 +162,45 @@ impl ChainPort for EthereumRpc {
         let utxo = IPrivateUTXO::new(self.private_utxo, &self.provider);
         let timeout = U256::from_be_bytes(public_inputs.timeout.0);
 
-        let receipt = utxo
-            .transfer(
-                Bytes::copy_from_slice(proof),
-                public_inputs.nullifier,
-                public_inputs.root,
-                public_inputs.new_commitment,
-                timeout,
-                public_inputs.pk_stealth,
-                public_inputs.h_swap,
-                public_inputs.h_r,
-                public_inputs.h_meta,
-                public_inputs.h_enc,
-            )
-            .send()
-            .await
-            .map_err(|e| ChainError::TransactionFailed(e.to_string()))?
-            .get_receipt()
-            .await
-            .map_err(|e| ChainError::TransactionFailed(e.to_string()))?;
-
-        if !receipt.status() {
-            return Err(ChainError::TransactionFailed("transfer reverted".into()));
-        }
-
-        Ok(Self::convert_receipt(&receipt))
+        self.send_with_retries("transfer", |attempt, gas_price| {
+            let utxo = utxo.clone();
+            async move {
+                let (max_fee, priority) = EthereumRpc::gas_overrides(attempt, gas_price);
+                let call = utxo.transfer(
+                    Bytes::copy_from_slice(proof),
+                    public_inputs.nullifier,
+                    public_inputs.root,
+                    public_inputs.new_commitment,
+                    timeout,
+                    public_inputs.pk_stealth,
+                    public_inputs.h_swap,
+                    public_inputs.h_r,
+                    public_inputs.h_meta,
+                    public_inputs.h_enc,
+                ).gas(5_000_000).max_fee_per_gas(max_fee).max_priority_fee_per_gas(priority);
+                call.send()
+                    .await
+                    .map_err(|e| ChainError::TransactionFailed(format!("send failed: {e}")))?
+                    .with_timeout(Some(std::time::Duration::from_secs(45)))
+                    .get_receipt()
+                    .await
+                    .map_err(|e| ChainError::TransactionFailed(format!("receipt failed: {e}")))
+            }
+        })
+        .await
     }
 
     async fn get_swap_lock_data(&self, commitment: B256) -> Result<SwapLockData, ChainError> {
         let utxo = IPrivateUTXO::new(self.private_utxo, &self.provider);
 
+        // assume that the transactions happened in the last 500 blocks
+        let latest = self.provider.get_block_number().await.unwrap_or(0);
+        let from = latest.saturating_sub(500);
+
         let filter = utxo
             .SwapNoteLocked_filter()
             .topic1(commitment)
-            .from_block(0); // in production, this indexer would be running in parallel, and not use ad-hoc queries
+            .from_block(from);
 
         let logs = filter
             .query()
@@ -216,28 +228,27 @@ impl ChainPort for EthereumRpc {
     ) -> Result<TxReceipt, ChainError> {
         let tee_lock = ITeeLock::new(self.tee_lock, &self.provider);
 
-        let receipt = tee_lock
-            .announceSwap(
-                announcement.swap_id,
-                announcement.ephemeral_key_a,
-                announcement.ephemeral_key_b,
-                announcement.encrypted_salt_a,
-                announcement.encrypted_salt_b,
-            )
-            .send()
-            .await
-            .map_err(|e| ChainError::TransactionFailed(e.to_string()))?
-            .get_receipt()
-            .await
-            .map_err(|e| ChainError::TransactionFailed(e.to_string()))?;
-
-        if !receipt.status() {
-            return Err(ChainError::TransactionFailed(
-                "announceSwap reverted".into(),
-            ));
-        }
-
-        Ok(Self::convert_receipt(&receipt))
+        self.send_with_retries("announce_swap", |attempt, gas_price| {
+            let tee_lock = tee_lock.clone();
+            async move {
+                let (max_fee, priority) = EthereumRpc::gas_overrides(attempt, gas_price);
+                let call = tee_lock.announceSwap(
+                    announcement.swap_id,
+                    announcement.ephemeral_key_a,
+                    announcement.ephemeral_key_b,
+                    announcement.encrypted_salt_a,
+                    announcement.encrypted_salt_b,
+                ).gas(500_000).max_fee_per_gas(max_fee).max_priority_fee_per_gas(priority);
+                call.send()
+                    .await
+                    .map_err(|e| ChainError::TransactionFailed(e.to_string()))?
+                    .with_timeout(Some(std::time::Duration::from_secs(45)))
+                    .get_receipt()
+                    .await
+                    .map_err(|e| ChainError::TransactionFailed(e.to_string()))
+            }
+        })
+        .await
     }
 
     async fn get_announcement(&self, swap_id: B256) -> Result<SwapAnnouncement, ChainError> {
