@@ -14,7 +14,11 @@
 use std::env;
 
 use tokio::net::{TcpListener, TcpStream};
+<<<<<<< HEAD
 use tokio_vsock::{VsockAddr, VsockStream};
+=======
+use tokio_vsock::VsockStream;
+>>>>>>> 6df867e (feat: add Nitro enclave deployment)
 
 #[tokio::main]
 async fn main() {
@@ -48,7 +52,11 @@ async fn main() {
 }
 
 async fn forward(mut tcp_stream: TcpStream, cid: u32, vsock_port: u32) -> std::io::Result<()> {
+<<<<<<< HEAD
     let vsock_stream = VsockStream::connect(VsockAddr::new(cid, vsock_port))
+=======
+    let vsock_stream = VsockStream::connect(cid, vsock_port)
+>>>>>>> 6df867e (feat: add Nitro enclave deployment)
         .await
         .map_err(|e| std::io::Error::other(format!("vsock connect failed: {e}")))?;
 
