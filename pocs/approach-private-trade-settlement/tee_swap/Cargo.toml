@@ -24,6 +24,10 @@ name = "host_proxy"
 path = "src/bin/host_proxy.rs"
 required-features = ["nitro"]
 
+[[bin]]
+name = "testnet"
+path = "src/bin/testnet/main.rs"
+
 [dependencies]
 # Poseidon
 light-poseidon = "0.4.0"
@@ -62,10 +66,22 @@ serde_json = "1.0"
 toml = "0.8"
 
 
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Time
+humantime = "2"
+humantime-serde = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
 # Util
 thiserror = "2.0"
 rand = "0.8"
 hex = "0.4"
+tempfile = "3"
 
 # Nitro (optional — only needed when building for enclave)
 aws-nitro-enclaves-nsm-api = { version = "0.4", features = ["nix"], optional = true }

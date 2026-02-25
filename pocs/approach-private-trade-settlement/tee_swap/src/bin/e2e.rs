@@ -144,7 +144,11 @@ impl AnvilHarness {
     }
 
     /// Per-chain config enables concurrent deployment without contention on `deployments.toml`.
-    fn write_chain_config(chain_id: u64, endpoint: &str) -> Result<PathBuf, E2eError> {
+    fn write_chain_config(
+        chain_id: u64,
+        endpoint: &str,
+        tee_address: &Address,
+    ) -> Result<PathBuf, E2eError> {
         let path = project_root()
             .join("target")
             .join(format!("deploy_{chain_id}.toml"));
@@ -155,6 +159,9 @@ impl AnvilHarness {
             "\
 [{chain_id}]
 endpoint_url = \"{endpoint}\"
+
+[{chain_id}.address]
+tee_address = \"{tee_address}\"
 
 [{chain_id}.bool]
 use_mock_verifier = false
@@ -248,9 +255,9 @@ impl E2eHarness {
         println!("  Chain A: {endpoint_a} (chain_id: {CHAIN_ID_A})");
         println!("  Chain B: {endpoint_b} (chain_id: {CHAIN_ID_B})");
 
-        let config_a = AnvilHarness::write_chain_config(CHAIN_ID_A, &endpoint_a)?;
-        let config_b = AnvilHarness::write_chain_config(CHAIN_ID_B, &endpoint_b)?;
         let sender = anvil.anvil_a.addresses()[0];
+        let config_a = AnvilHarness::write_chain_config(CHAIN_ID_A, &endpoint_a, &sender)?;
+        let config_b = AnvilHarness::write_chain_config(CHAIN_ID_B, &endpoint_b, &sender)?;
         println!("[2/10] Deploying contracts...");
         tokio::try_join!(
             AnvilHarness::deploy_contracts(&endpoint_a, &sender, &config_a),

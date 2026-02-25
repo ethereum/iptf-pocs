@@ -166,16 +166,21 @@ impl BBProver {
             )));
         }
 
-        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // Symlink circuit sources into a temp dir so concurrent proof generation don't collide
+        let tmp = tempfile::tempdir()?;
+        let work_dir = tmp.path().join(circuit_name);
+        std::fs::create_dir_all(&work_dir)?;
+        std::os::unix::fs::symlink(circuit_dir.join("src"), work_dir.join("src"))?;
+        std::os::unix::fs::symlink(circuit_dir.join("Nargo.toml"), work_dir.join("Nargo.toml"))?;
 
         // 1. Write Prover.toml with witness values
-        let prover_toml_path = circuit_dir.join("Prover.toml");
+        let prover_toml_path = work_dir.join("Prover.toml");
         std::fs::write(&prover_toml_path, prover_toml)?;
 
         // 2. Run nargo execute to generate witness
         let nargo_status = Command::new("nargo")
             .args(["execute", "witness"])
-            .current_dir(&circuit_dir)
+            .current_dir(&work_dir)
             .output()
             .await?;
 
@@ -187,21 +192,22 @@ impl BBProver {
             )));
         }
 
-        // 3. Run bb prove
+        // 3. Run bb prove (all paths relative to the temp work dir)
+        let target_dir = work_dir.join("target");
         let bb_status = Command::new("bb")
             .args([
                 "prove",
                 "-b",
-                &format!("{}/target/{circuit_name}.json", project_root.display()),
+                &format!("{}/{circuit_name}.json", target_dir.display()),
                 "-w",
-                &format!("{}/target/witness.gz", project_root.display()),
+                &format!("{}/witness.gz", target_dir.display()),
                 "--write_vk",
                 "--oracle_hash",
                 "keccak",
                 "-o",
-                &format!("{}/target/", project_root.display()),
+                &format!("{}/", target_dir.display()),
             ])
-            .current_dir(&circuit_dir)
+            .current_dir(&work_dir)
             .output()
             .await?;
 
@@ -214,8 +220,7 @@ impl BBProver {
         }
 
         // 4. Read proof file
-        let proof_path =
-            circuit_dir.join(&format!("{}/target/proof", project_root.display()));
+        let proof_path = target_dir.join("proof");
         let proof = std::fs::read(&proof_path)?;
 
         Ok(proof)
