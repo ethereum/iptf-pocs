@@ -27,6 +27,7 @@ impl TeeRuntime for MockTeeRuntime {
             tee_type: "mock".to_string(),
             pubkey_hash,
             timestamp: 0, // Mock: no real timestamp
+            raw_document: None,
         })
     }
 
@@ -66,6 +67,7 @@ mod tests {
             tee_type: "mock".to_string(),
             pubkey_hash: B256::repeat_byte(0xAA),
             timestamp: 0,
+            raw_document: None,
         };
 
         assert!(tee.verify_attestation(&mock_report).await.unwrap());
@@ -79,6 +81,7 @@ mod tests {
             tee_type: "tdx".to_string(),
             pubkey_hash: B256::repeat_byte(0xAA),
             timestamp: 0,
+            raw_document: None,
         };
 
         assert!(!tee.verify_attestation(&real_report).await.unwrap());

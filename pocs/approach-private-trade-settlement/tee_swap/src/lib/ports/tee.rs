@@ -7,12 +7,17 @@ use std::future::Future;
 /// report that is embedded in the RA-TLS certificate's custom X.509 extension.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AttestationReport {
-    /// TEE type identifier ("mock", "tdx", "sev-snp")
+    /// TEE type identifier ("mock", "nitro", "tdx", "sev-snp")
     pub tee_type: String,
     /// SHA-256 hash of the TLS public key (binds attestation to TLS session)
     pub pubkey_hash: B256,
     /// Timestamp of report generation
     pub timestamp: u64,
+    /// Raw attestation document bytes (CBOR COSE_Sign1 from NSM for Nitro).
+    /// None for mock mode. When present, embedded as-is in the X.509 extension
+    /// so clients can verify it against the AWS root certificate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_document: Option<Vec<u8>>,
 }
 
 /// Port for TEE runtime operations (attestation lifecycle).

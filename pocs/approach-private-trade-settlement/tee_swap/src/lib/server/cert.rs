@@ -47,11 +47,17 @@ pub async fn generate_ra_tls_cert(
         .await
         .map_err(|e| CertError::Attestation(e.to_string()))?;
 
-    // 4. Serialize report to JSON and embed as custom X.509 extension
-    let report_json = serde_json::to_vec(&report)
-        .map_err(|e| CertError::Serialization(e.to_string()))?;
+    // 4. Embed attestation in the X.509 extension.
+    //    - Nitro: embed the raw CBOR COSE_Sign1 document so clients can verify
+    //      it against the AWS root certificate.
+    //    - Mock: embed JSON-serialized AttestationReport (for testing).
+    let ext_bytes = match &report.raw_document {
+        Some(doc) => doc.clone(),
+        None => serde_json::to_vec(&report)
+            .map_err(|e| CertError::Serialization(e.to_string()))?,
+    };
 
-    let ext = CustomExtension::from_oid_content(ATTESTATION_OID, report_json);
+    let ext = CustomExtension::from_oid_content(ATTESTATION_OID, ext_bytes);
 
     // 5. Build self-signed certificate
     let mut params = CertificateParams::new(vec!["tee-swap.local".to_string()])
