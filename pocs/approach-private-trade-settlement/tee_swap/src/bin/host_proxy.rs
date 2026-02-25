@@ -14,7 +14,7 @@
 use std::env;
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio_vsock::VsockStream;
+use tokio_vsock::{VsockAddr, VsockStream};
 
 #[tokio::main]
 async fn main() {
@@ -48,7 +48,7 @@ async fn main() {
 }
 
 async fn forward(mut tcp_stream: TcpStream, cid: u32, vsock_port: u32) -> std::io::Result<()> {
-    let vsock_stream = VsockStream::connect(cid, vsock_port)
+    let vsock_stream = VsockStream::connect(VsockAddr::new(cid, vsock_port))
         .await
         .map_err(|e| std::io::Error::other(format!("vsock connect failed: {e}")))?;
 

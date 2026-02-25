@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use tokio::net::TcpStream;
-use tokio_vsock::{VsockListener, VMADDR_CID_ANY};
+use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
 
 /// Run the vsock → TCP proxy.
 ///
@@ -19,7 +19,7 @@ use tokio_vsock::{VsockListener, VMADDR_CID_ANY};
 ///
 /// Runs indefinitely; call from `tokio::spawn`.
 pub async fn run_vsock_proxy(vsock_port: u32, tcp_target: Arc<String>) {
-    let mut listener = VsockListener::bind(VMADDR_CID_ANY, vsock_port)
+    let mut listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, vsock_port))
         .expect("failed to bind vsock listener");
 
     eprintln!("[vsock_proxy] listening on vsock port {vsock_port}");
