@@ -35,8 +35,14 @@ contract Deploy is Script, Config {
         PrivateUTXO privateUtxo = new PrivateUTXO(verifierAddress);
         console.log("PrivateUTXO deployed at:", address(privateUtxo));
 
-        // Deploy TeeLock with deployer as TEE address
-        TeeLock teeLock = new TeeLock(msg.sender);
+        // Deploy TeeLock
+        address teeAddress;
+        if (config.exists("tee_address")) {
+            teeAddress = config.get("tee_address").toAddress();
+        } else {
+            teeAddress = msg.sender;
+        }
+        TeeLock teeLock = new TeeLock(teeAddress);
         console.log("TeeLock deployed at:", address(teeLock));
 
         vm.stopBroadcast();
