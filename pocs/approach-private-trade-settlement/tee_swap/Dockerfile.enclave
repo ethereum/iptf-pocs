@@ -1,3 +1,6 @@
-FROM scratch
-COPY target/x86_64-unknown-linux-musl/release/server /app
-CMD ["/app"]
+FROM amazonlinux:2023
+RUN dnf install -y iproute && dnf clean all
+COPY target/release/server /app
+COPY scripts/enclave-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
