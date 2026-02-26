@@ -43,15 +43,10 @@ pub async fn run_vsock_proxy(vsock_port: u32, tcp_target: Arc<String>) {
 }
 
 async fn forward(
-    vsock_stream: tokio_vsock::VsockStream,
+    mut vsock_stream: tokio_vsock::VsockStream,
     tcp_target: &str,
 ) -> std::io::Result<()> {
     let mut tcp_stream = TcpStream::connect(tcp_target).await?;
-    let (mut vs_read, mut vs_write) = tokio::io::split(vsock_stream);
-    let (mut tc_read, mut tc_write) = tcp_stream.split();
-    tokio::select! {
-        _ = tokio::io::copy(&mut vs_read, &mut tc_write) => {},
-        _ = tokio::io::copy(&mut tc_read, &mut vs_write) => {},
-    }
+    tokio::io::copy_bidirectional(&mut vsock_stream, &mut tcp_stream).await?;
     Ok(())
 }

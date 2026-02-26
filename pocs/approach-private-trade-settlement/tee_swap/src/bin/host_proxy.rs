@@ -48,17 +48,11 @@ async fn main() {
 }
 
 async fn forward(mut tcp_stream: TcpStream, cid: u32, vsock_port: u32) -> std::io::Result<()> {
-    let vsock_stream = VsockStream::connect(VsockAddr::new(cid, vsock_port))
+    let mut vsock_stream = VsockStream::connect(VsockAddr::new(cid, vsock_port))
         .await
         .map_err(|e| std::io::Error::other(format!("vsock connect failed: {e}")))?;
 
-    let (mut tc_read, mut tc_write) = tcp_stream.split();
-    let (mut vs_read, mut vs_write) = tokio::io::split(vsock_stream);
-
-    tokio::select! {
-        _ = tokio::io::copy(&mut tc_read, &mut vs_write) => {},
-        _ = tokio::io::copy(&mut vs_read, &mut tc_write) => {},
-    }
+    tokio::io::copy_bidirectional(&mut tcp_stream, &mut vsock_stream).await?;
     Ok(())
 }
 
