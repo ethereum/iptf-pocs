@@ -732,7 +732,7 @@ async fn main() -> Result<(), TestnetError> {
     let body: serde_json::Value = resp.json().await?;
     let status = body["status"]
         .as_str()
-        .ok_or_else(|| TestnetError::Json("missing status field".into()))?;
+        .ok_or_else(|| TestnetError::Json(format!("alice submit: server responded: {body}")))?;
     info!("  Alice submitted  -> status: {status}");
 
     if status != "pending" {
@@ -750,7 +750,7 @@ async fn main() -> Result<(), TestnetError> {
     let body: serde_json::Value = resp.json().await?;
     let status = body["status"]
         .as_str()
-        .ok_or_else(|| TestnetError::Json("missing status field".into()))?;
+        .ok_or_else(|| TestnetError::Json(format!("bob submit: server responded: {body}")))?;
     info!("  Bob submitted    -> status: {status}");
 
     if status != "verified" {
