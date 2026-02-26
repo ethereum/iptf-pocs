@@ -90,6 +90,21 @@ fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Returns a block explorer URL for the given transaction hash.
+fn tx_link(chain: Chain, tx_hash: B256) -> String {
+    let base = match chain {
+        Chain::Sepolia => "https://sepolia.etherscan.io/tx",
+        Chain::Layer2 => "https://sepolia.scrollscan.com/tx",
+    };
+    format!("{base}/{tx_hash:#x}")
+}
+
+/// Print a step header — called at the start of each named phase.
+fn step(n: u8, total: u8, msg: &str) {
+    info!("");
+    info!("┌─[{n}/{total}] {msg}");
+}
+
 /// Deploy contracts for a chain using forge script.
 async fn deploy_contracts(
     chain_config: &ChainConfig,
@@ -210,8 +225,11 @@ const COMMITMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), TestnetError> {
-    // Init tracing
+    // Init tracing — no timestamps or level prefix so output is clean for demos.
     tracing_subscriber::fmt()
+        .without_time()
+        .with_target(false)
+        .with_level(false)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -221,11 +239,11 @@ async fn main() -> Result<(), TestnetError> {
     let args = Args::parse();
 
     // ── Step 1: Parse config ──
-    info!("[1/12] Loading config from {}", args.config.display());
+    step(1, 12, &format!("Loading config from {}", args.config.display()));
     let config = TestnetConfig::load(&args.config)?;
 
     // ── Step 2: Parse private keys ──
-    info!("[2/12] Parsing private keys...");
+    step(2, 12, "Parsing private keys...");
 
     let sepolia_deployer: PrivateKeySigner = config.sepolia.deployer_private_key.parse()
         .map_err(|e| TestnetError::Deploy(format!("invalid sepolia deployer key: {e}")))?;
@@ -253,14 +271,8 @@ async fn main() -> Result<(), TestnetError> {
         None
     };
 
-    info!(
-        "  Sepolia deployer:  {}",
-        sepolia_deployer.address()
-    );
-    info!(
-        "  Layer 2 deployer:  {}",
-        layer2_deployer.address()
-    );
+    info!("  Sepolia deployer:  {}", sepolia_deployer.address());
+    info!("  Layer 2 deployer:  {}", layer2_deployer.address());
     info!("  Alice:             {}", alice_signer.address());
     info!("  Bob:               {}", bob_signer.address());
     if let Some(ref tee) = tee_signer {
@@ -268,7 +280,7 @@ async fn main() -> Result<(), TestnetError> {
     }
 
     // ── Step 3: Query chain IDs ──
-    info!("[3/12] Querying chain IDs...");
+    step(3, 12, "Querying chain IDs...");
 
     let sepolia_provider = alloy::providers::DynProvider::new(
         alloy::providers::ProviderBuilder::new().connect_http(
@@ -299,7 +311,7 @@ async fn main() -> Result<(), TestnetError> {
     info!("  Layer 2: chain_id={layer2_id}");
 
     // ── Step 4: Deploy contracts if needed ──
-    info!("[4/12] Setting up contracts...");
+    step(4, 12, "Setting up contracts...");
 
     // TEE address for TeeLock deployment:
     // - Local coordinator: derived from TEE keystore signer
@@ -317,6 +329,8 @@ async fn main() -> Result<(), TestnetError> {
 
     let sepolia_deploy = if config.sepolia.private_utxo_address.is_some() {
         info!("  Sepolia: using pre-deployed contracts");
+        info!("    PrivateUTXO: {}", config.sepolia.private_utxo_address.unwrap());
+        info!("    TeeLock:     {}", config.sepolia.tee_lock_address.unwrap());
         ChainDeployment {
             private_utxo: config.sepolia.private_utxo_address.unwrap(),
             tee_lock: config.sepolia.tee_lock_address.unwrap(),
@@ -328,8 +342,8 @@ async fn main() -> Result<(), TestnetError> {
         let (utxo, tee_lock, block) =
             deploy_contracts(&config.sepolia, &sepolia_deployer, &tee_address, sep_id).await?;
         info!("    PrivateUTXO: {utxo}");
-        info!("    TeeLock: {tee_lock}");
-        info!("    Deployment block: {block}");
+        info!("    TeeLock:     {tee_lock}");
+        info!("    Block:       {block}");
         ChainDeployment {
             private_utxo: utxo,
             tee_lock,
@@ -340,6 +354,8 @@ async fn main() -> Result<(), TestnetError> {
 
     let layer2_deploy = if config.layer2.private_utxo_address.is_some() {
         info!("  Layer 2: using pre-deployed contracts");
+        info!("    PrivateUTXO: {}", config.layer2.private_utxo_address.unwrap());
+        info!("    TeeLock:     {}", config.layer2.tee_lock_address.unwrap());
         ChainDeployment {
             private_utxo: config.layer2.private_utxo_address.unwrap(),
             tee_lock: config.layer2.tee_lock_address.unwrap(),
@@ -351,8 +367,8 @@ async fn main() -> Result<(), TestnetError> {
         let (utxo, tee_lock, block) =
             deploy_contracts(&config.layer2, &layer2_deployer, &tee_address, layer2_id).await?;
         info!("    PrivateUTXO: {utxo}");
-        info!("    TeeLock: {tee_lock}");
-        info!("    Deployment block: {block}");
+        info!("    TeeLock:     {tee_lock}");
+        info!("    Block:       {block}");
         ChainDeployment {
             private_utxo: utxo,
             tee_lock,
@@ -362,7 +378,7 @@ async fn main() -> Result<(), TestnetError> {
     };
 
     // ── Step 5: Resolve per-party chain context and create RPC instances ──
-    info!("[5/12] Creating RPC adapters...");
+    step(5, 12, "Creating RPC adapters...");
 
     let sepolia_chain_id_b256 = B256::left_padding_from(&sep_id.to_be_bytes());
     let layer2_chain_id_b256 = B256::left_padding_from(&layer2_id.to_be_bytes());
@@ -432,7 +448,7 @@ async fn main() -> Result<(), TestnetError> {
     ).await?;
 
     // ── Step 6: Start chain indexers ──
-    info!("[6/12] Starting chain indexers...");
+    step(6, 12, "Starting chain indexers...");
 
     let sepolia_indexer = Arc::new(
         ChainIndexer::new(
@@ -477,7 +493,7 @@ async fn main() -> Result<(), TestnetError> {
         };
 
     // ── Step 7: Generate identities and fund notes ──
-    info!("[7/12] Generating identities and funding notes...");
+    step(7, 12, "Generating identities and funding notes...");
 
     let mut rng = ark_std::rand::thread_rng();
     let alice_meta = MetaKeyPair::generate(&mut rng);
@@ -518,16 +534,19 @@ async fn main() -> Result<(), TestnetError> {
         B256::ZERO,
     );
 
-    info!("  Funding Alice on {} and Bob on {} concurrently...", config.alice.chain, config.bob.chain);
+    info!(
+        "  Funding Alice on {} and Bob on {} concurrently...",
+        config.alice.chain, config.bob.chain
+    );
     let (fund_tx_alice, fund_tx_bob) = tokio::try_join!(
         alice_deployer_rpc.fund(alice_note.commitment().0),
         bob_deployer_rpc.fund(bob_note.commitment().0),
     )?;
-    info!("  Alice fund tx: {}", fund_tx_alice.tx_hash);
-    info!("  Bob fund tx: {}", fund_tx_bob.tx_hash);
+    info!("  Alice fund tx:  {}", tx_link(config.alice.chain, fund_tx_alice.tx_hash));
+    info!("  Bob fund tx:    {}", tx_link(config.bob.chain, fund_tx_bob.tx_hash));
 
     // ── Step 8: Wait for indexer to see funded commitments ──
-    info!("[8/12] Waiting for funded commitments to be indexed...");
+    step(8, 12, "Waiting for funded commitments to be indexed...");
 
     let alice_leaf = tokio::time::timeout(
         COMMITMENT_TIMEOUT,
@@ -546,7 +565,7 @@ async fn main() -> Result<(), TestnetError> {
     info!("  Bob note indexed at leaf #{bob_leaf}");
 
     // ── Step 9: Create swap terms and start coordinator ──
-    info!("[9/12] Creating swap terms and starting coordinator...");
+    step(9, 12, "Creating swap terms and connecting to coordinator...");
 
     let terms = SwapTerms::new(
         chain_id_alice,
@@ -560,10 +579,7 @@ async fn main() -> Result<(), TestnetError> {
         bob_meta.pk_x(),
         B256::repeat_byte(0xFF), // nonce
     );
-    info!(
-        "  swap_id: 0x{}...",
-        &hex::encode(terms.swap_id.0)[..16]
-    );
+    info!("  swap_id:  0x{}", &hex::encode(terms.swap_id.0)[..16]);
 
     let external_coordinator_url = config
         .coordinator
@@ -573,12 +589,10 @@ async fn main() -> Result<(), TestnetError> {
     // server_handle is kept alive to prevent the local server from shutting down
     let (base_url, client, server_handle): (String, reqwest::Client, Option<axum_server::Handle>) =
         if let Some(ref url) = external_coordinator_url {
-            // External coordinator — just connect to it
-            info!("  Using external coordinator at {url}");
+            info!("  Coordinator:  {url}");
             let client = build_ra_tls_client(true);
             (url.clone(), client, None)
         } else {
-            // Local coordinator — spawn server
             let tee_private_key = &config.tee.as_ref().unwrap().private_key;
             let tee_rpc_sepolia = EthereumRpc::new(
                 &sepolia_deploy.rpc_url,
@@ -607,22 +621,29 @@ async fn main() -> Result<(), TestnetError> {
             let (server_handle, bound_addr) = start_server(coordinator, &tee, addr).await?;
             let base_url = format!("https://127.0.0.1:{}", bound_addr.port());
             let client = build_ra_tls_client(true);
-            info!("  Local RA-TLS server at {base_url}");
+            info!("  Coordinator:  {base_url} (local)");
 
             (base_url, client, Some(server_handle))
         };
 
-    // Verify attestation
+    // Fetch and display attestation report
     let attestation: AttestationReport = client
         .get(format!("{base_url}/attestation"))
         .send()
         .await?
         .json()
         .await?;
-    info!("  tee_type: {}", attestation.tee_type);
+    info!("  ┌─ TEE Attestation ──────────────────────────────────────────────┐");
+    info!("  │  type:        {}", attestation.tee_type);
+    info!("  │  pubkey_hash: {:#x}", attestation.pubkey_hash);
+    info!("  │  timestamp:   {}", attestation.timestamp);
+    if let Some(ref doc) = attestation.raw_document {
+        info!("  │  nsm_doc:     {} bytes (AWS Nitro COSE_Sign1)", doc.len());
+    }
+    info!("  └────────────────────────────────────────────────────────────────┘");
 
     // ── Step 10: Prepare and send lock transactions ──
-    info!("[10/12] Preparing lock transactions...");
+    step(10, 12, "Proving and sending lock transactions...");
 
     let proof_alice = alice_indexer
         .generate_proof(alice_leaf)
@@ -660,22 +681,21 @@ async fn main() -> Result<(), TestnetError> {
         root_bob,
     );
 
-    info!("  Proving and sending lock transactions...");
     let prover = BBProver::new(project_root().join("circuits"));
 
     let (lock_proof_alice, lock_proof_bob) = tokio::try_join!(
         prover.prove_transfer(&lock_alice.witness),
         prover.prove_transfer(&lock_bob.witness),
     )?;
-    info!("  Alice lock proof: {} bytes", lock_proof_alice.proof.len());
-    info!("  Bob lock proof: {} bytes", lock_proof_bob.proof.len());
+    info!("  Alice ZK proof: {} bytes", lock_proof_alice.proof.len());
+    info!("  Bob ZK proof:   {} bytes", lock_proof_bob.proof.len());
 
     let (lock_tx_alice, lock_tx_bob) = tokio::try_join!(
         alice_rpc.transfer(&lock_proof_alice.proof, &lock_proof_alice.public_inputs),
         bob_rpc.transfer(&lock_proof_bob.proof, &lock_proof_bob.public_inputs),
     )?;
-    info!("  Alice lock tx: {} (success: {})", lock_tx_alice.tx_hash, lock_tx_alice.success);
-    info!("  Bob lock tx: {} (success: {})", lock_tx_bob.tx_hash, lock_tx_bob.success);
+    info!("  Alice lock tx:  {}", tx_link(config.alice.chain, lock_tx_alice.tx_hash));
+    info!("  Bob lock tx:    {}", tx_link(config.bob.chain, lock_tx_bob.tx_hash));
 
     if !lock_tx_alice.success {
         return Err(TestnetError::TxReverted(format!("alice lock tx {}", lock_tx_alice.tx_hash)));
@@ -684,7 +704,6 @@ async fn main() -> Result<(), TestnetError> {
         return Err(TestnetError::TxReverted(format!("bob lock tx {}", lock_tx_bob.tx_hash)));
     }
 
-    // Wait for indexers to see locked note commitments
     info!("  Waiting for locked notes to be indexed...");
     let locked_leaf_alice = tokio::time::timeout(
         COMMITMENT_TIMEOUT,
@@ -699,10 +718,10 @@ async fn main() -> Result<(), TestnetError> {
     .await
     .map_err(|_| TestnetError::Timeout("bob locked commitment".into()))?;
     info!("  Alice locked note: leaf #{locked_leaf_alice}");
-    info!("  Bob locked note: leaf #{locked_leaf_bob}");
+    info!("  Bob locked note:   leaf #{locked_leaf_bob}");
 
     // ── Step 11: Submit to TEE ──
-    info!("[11/12] Submitting to TEE via RA-TLS...");
+    step(11, 12, "Submitting to TEE coordinator via RA-TLS...");
 
     // Alice submits first
     let resp = client
@@ -714,7 +733,7 @@ async fn main() -> Result<(), TestnetError> {
     let status = body["status"]
         .as_str()
         .ok_or_else(|| TestnetError::Json("missing status field".into()))?;
-    info!("  Alice submitted -> status: {status}");
+    info!("  Alice submitted  -> status: {status}");
 
     if status != "pending" {
         return Err(TestnetError::Json(format!(
@@ -722,7 +741,7 @@ async fn main() -> Result<(), TestnetError> {
         )));
     }
 
-    // Bob submits second
+    // Bob submits second — coordinator verifies both and announces
     let resp = client
         .post(format!("{base_url}/submit"))
         .json(&lock_bob.submission)
@@ -732,7 +751,7 @@ async fn main() -> Result<(), TestnetError> {
     let status = body["status"]
         .as_str()
         .ok_or_else(|| TestnetError::Json("missing status field".into()))?;
-    info!("  Bob submitted -> status: {status}");
+    info!("  Bob submitted    -> status: {status}");
 
     if status != "verified" {
         return Err(TestnetError::Json(format!(
@@ -748,10 +767,10 @@ async fn main() -> Result<(), TestnetError> {
         .as_str()
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| TestnetError::Json("missing tx_receipt.tx_hash".into()))?;
-    info!("  TEE announce tx: {announce_tx_hash}");
+    info!("  TEE announce tx: {}", tx_link(Chain::Sepolia, announce_tx_hash));
 
     // Wait for on-chain announcement (via indexer)
-    info!("  Waiting for on-chain announcement...");
+    info!("  Waiting for on-chain confirmation...");
     tokio::time::timeout(
         std::time::Duration::from_secs(120),
         sepolia_indexer.wait_for_swap_revealed(terms.swap_id),
@@ -779,7 +798,7 @@ async fn main() -> Result<(), TestnetError> {
     info!("  On-chain announcement verified independently");
 
     // ── Step 12: Claim ──
-    info!("[12/12] Proving and sending claim transactions...");
+    step(12, 12, "Proving and sending claim transactions...");
 
     // Get updated Merkle proofs for locked notes
     let locked_proof_alice = alice_indexer
@@ -826,16 +845,16 @@ async fn main() -> Result<(), TestnetError> {
         prover.prove_transfer(&claim_alice.witness),
         prover.prove_transfer(&claim_bob.witness),
     )?;
-    info!("  Alice claim proof: {} bytes", claim_proof_alice.proof.len());
-    info!("  Bob claim proof: {} bytes", claim_proof_bob.proof.len());
+    info!("  Alice ZK proof: {} bytes", claim_proof_alice.proof.len());
+    info!("  Bob ZK proof:   {} bytes", claim_proof_bob.proof.len());
 
     // Alice claims Bob's note on Bob's chain; Bob claims Alice's note on Alice's chain
     let (claim_tx_alice, claim_tx_bob) = tokio::try_join!(
         alice_claim_rpc.transfer(&claim_proof_alice.proof, &claim_proof_alice.public_inputs),
         bob_claim_rpc.transfer(&claim_proof_bob.proof, &claim_proof_bob.public_inputs),
     )?;
-    info!("  Alice claim tx ({}): {} (success: {})", config.bob.chain, claim_tx_alice.tx_hash, claim_tx_alice.success);
-    info!("  Bob claim tx ({}): {} (success: {})", config.alice.chain, claim_tx_bob.tx_hash, claim_tx_bob.success);
+    info!("  Alice claim tx: {}", tx_link(config.bob.chain, claim_tx_alice.tx_hash));
+    info!("  Bob claim tx:   {}", tx_link(config.alice.chain, claim_tx_bob.tx_hash));
 
     if !claim_tx_alice.success {
         return Err(TestnetError::TxReverted(format!("alice claim tx {}", claim_tx_alice.tx_hash)));
@@ -849,14 +868,18 @@ async fn main() -> Result<(), TestnetError> {
         handle.shutdown();
     }
 
-    info!("=== Testnet Demo Complete ===");
-    info!("  Fund Alice:    {}  ({})", fund_tx_alice.tx_hash, config.alice.chain);
-    info!("  Fund Bob:      {}  ({})", fund_tx_bob.tx_hash, config.bob.chain);
-    info!("  Lock Alice:    {}  ({})", lock_tx_alice.tx_hash, config.alice.chain);
-    info!("  Lock Bob:      {}  ({})", lock_tx_bob.tx_hash, config.bob.chain);
-    info!("  TEE announce:  {}  (sepolia)", announce_tx_hash);
-    info!("  Claim Alice:   {}  ({})", claim_tx_alice.tx_hash, config.bob.chain);
-    info!("  Claim Bob:     {}  ({})", claim_tx_bob.tx_hash, config.alice.chain);
+    info!("");
+    info!("╔══════════════════════════════════════════════════════════════════════════════╗");
+    info!("║                         TESTNET DEMO COMPLETE                               ║");
+    info!("╠══════════════════════════════════════════════════════════════════════════════╣");
+    info!("║  Fund Alice    {}", tx_link(config.alice.chain, fund_tx_alice.tx_hash));
+    info!("║  Fund Bob      {}", tx_link(config.bob.chain,   fund_tx_bob.tx_hash));
+    info!("║  Lock Alice    {}", tx_link(config.alice.chain, lock_tx_alice.tx_hash));
+    info!("║  Lock Bob      {}", tx_link(config.bob.chain,   lock_tx_bob.tx_hash));
+    info!("║  TEE Announce  {}", tx_link(Chain::Sepolia,     announce_tx_hash));
+    info!("║  Claim Alice   {}", tx_link(config.bob.chain,   claim_tx_alice.tx_hash));
+    info!("║  Claim Bob     {}", tx_link(config.alice.chain, claim_tx_bob.tx_hash));
+    info!("╚══════════════════════════════════════════════════════════════════════════════╝");
 
     Ok(())
 }
