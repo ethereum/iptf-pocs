@@ -1,5 +1,5 @@
 FROM amazonlinux:2023
-RUN dnf install -y iproute && dnf clean all
+RUN dnf install -y iproute socat && dnf clean all
 COPY target/release/server /app
 COPY scripts/enclave-entrypoint.sh /entrypoint.sh
 # config.toml is the same file used by the testnet binary —
