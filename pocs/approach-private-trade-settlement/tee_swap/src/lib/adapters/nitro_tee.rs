@@ -16,20 +16,6 @@ use serde_bytes::ByteBuf;
 
 use crate::ports::tee::{AttestationReport, TeeError, TeeRuntime};
 
-<<<<<<< HEAD
-/// Hardcoded TEE signer address for the PoC.
-///
-/// In production this would be derived from a keypair generated at enclave startup
-/// and registered in `TeeLock.sol` before deployment. Hardcoding it here means its
-/// value is part of the enclave binary, which is measured into PCR2.
-<<<<<<< HEAD
-const TEE_SIGNER: &str = "0x0000000000000000000000000000000000000000";
-=======
-const TEE_SIGNER: &str = "0x0000000000000000000000000000000000000TEE";
->>>>>>> 6df867e (feat: add Nitro enclave deployment)
-
-=======
->>>>>>> f7f1b1c (fix: plugg e2e demo to contracts and Nitro)
 pub struct NitroTeeRuntime {
     signer: Address,
 }
