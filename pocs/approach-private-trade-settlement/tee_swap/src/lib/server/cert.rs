@@ -47,15 +47,11 @@ pub async fn generate_ra_tls_cert(
         .await
         .map_err(|e| CertError::Attestation(e.to_string()))?;
 
-    // 4. Embed attestation in the X.509 extension.
-    //    - Nitro: embed the raw CBOR COSE_Sign1 document so clients can verify
-    //      it against the AWS root certificate.
-    //    - Mock: embed JSON-serialized AttestationReport (for testing).
-    let ext_bytes = match &report.raw_document {
-        Some(doc) => doc.clone(),
-        None => serde_json::to_vec(&report)
-            .map_err(|e| CertError::Serialization(e.to_string()))?,
-    };
+    // 4. Embed the JSON-serialized AttestationReport in the X.509 extension.
+    //    The raw NSM document (if present) is included as a field so the client
+    //    can verify it. Production would decode the CBOR COSE_Sign1 here.
+    let ext_bytes = serde_json::to_vec(&report)
+        .map_err(|e| CertError::Serialization(e.to_string()))?;
 
     let ext = CustomExtension::from_oid_content(ATTESTATION_OID, ext_bytes);
 
