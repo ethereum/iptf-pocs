@@ -19,6 +19,7 @@ use alloy::primitives::{Address, B256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
 use serde::Deserialize;
+use tracing::{error, info, warn};
 
 use tee_swap::adapters::ethereum::EthereumRpc;
 use tee_swap::adapters::memory_store::InMemorySwapStore;
@@ -105,22 +106,30 @@ impl ServerConfig {
 
 #[tokio::main]
 async fn main() {
-    eprintln!("[server] TEE Swap server starting...");
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    info!("TEE Swap server starting...");
 
     // ── Load config ───────────────────────────────────────────────────────────
     let config = ServerConfig::load().unwrap_or_else(|e| {
-        eprintln!("[server] FATAL: {e}");
+        error!("cannot load config: {e}");
         std::process::exit(1);
     });
 
     // ── Parse TEE signer ──────────────────────────────────────────────────────
     let tee_signer: PrivateKeySigner =
         config.tee.private_key.parse().unwrap_or_else(|e| {
-            eprintln!("[server] FATAL: invalid tee.private_key: {e}");
+            error!("invalid tee.private_key: {e}");
             std::process::exit(1);
         });
     let tee_address = tee_signer.address();
-    eprintln!("[server] TEE signer: {tee_address}");
+    info!(%tee_address, "TEE signer loaded");
 
     // ── TEE runtime ───────────────────────────────────────────────────────────
     #[cfg(feature = "nitro")]
@@ -128,7 +137,7 @@ async fn main() {
 
     #[cfg(not(feature = "nitro"))]
     let tee = {
-        eprintln!("[server] WARNING: running with mock TEE (no real attestation)");
+        warn!("running with mock TEE (no real attestation)");
         MockTeeRuntime::new(tee_address)
     };
 
@@ -143,7 +152,7 @@ async fn main() {
     )
     .await;
 
-    eprintln!("[server] Sepolia chain_id={sep_chain_id}, Layer2 chain_id={layer2_chain_id}");
+    info!(%sep_chain_id, %layer2_chain_id, "chain adapters ready");
 
     // ── Coordinator ───────────────────────────────────────────────────────────
     // Sepolia is the announcement chain — the coordinator posts announceSwap() there.
@@ -157,23 +166,23 @@ async fn main() {
     let (_handle, bound_addr) = server::start_server(coordinator, &tee, addr)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("[server] FATAL: cannot start server: {e}");
+            error!("cannot start server: {e}");
             std::process::exit(1);
         });
-    eprintln!("[server] HTTPS server listening on {bound_addr}");
+    info!(%bound_addr, "HTTPS server listening");
 
     // ── Start vsock → TCP proxy ───────────────────────────────────────────────
     #[cfg(feature = "nitro")]
     {
         let tcp_target = Arc::new(AXUM_ADDR.to_string());
         tokio::spawn(run_vsock_proxy(VSOCK_PORT, tcp_target));
-        eprintln!("[server] vsock proxy: port {VSOCK_PORT} → {AXUM_ADDR}");
+        info!(vsock_port = VSOCK_PORT, target = AXUM_ADDR, "vsock proxy started");
     }
 
-    eprintln!("[server] ready");
+    info!("ready");
 
     tokio::signal::ctrl_c().await.ok();
-    eprintln!("[server] shutting down");
+    info!("shutting down");
 }
 
 /// Create `EthereumRpc` adapters for Sepolia and Layer 2, insert into `chains`,
@@ -199,7 +208,7 @@ async fn build_chains(
     )
     .await
     .unwrap_or_else(|e| {
-        eprintln!("[server] FATAL: cannot create Sepolia RPC adapter: {e}");
+        error!(chain = "sepolia", "cannot create RPC adapter: {e}");
         std::process::exit(1);
     });
 
@@ -211,19 +220,21 @@ async fn build_chains(
     )
     .await
     .unwrap_or_else(|e| {
-        eprintln!("[server] FATAL: cannot create Layer 2 RPC adapter: {e}");
+        error!(chain = "layer2", "cannot create RPC adapter: {e}");
         std::process::exit(1);
     });
 
-    eprintln!(
-        "[server] sepolia: PrivateUTXO={} TeeLock={}",
-        sep.private_utxo_address.unwrap(),
-        sep.tee_lock_address.unwrap()
+    info!(
+        chain = "sepolia",
+        private_utxo = %sep.private_utxo_address.unwrap(),
+        tee_lock = %sep.tee_lock_address.unwrap(),
+        "contracts loaded",
     );
-    eprintln!(
-        "[server] layer2:  PrivateUTXO={} TeeLock={}",
-        l2.private_utxo_address.unwrap(),
-        l2.tee_lock_address.unwrap()
+    info!(
+        chain = "layer2",
+        private_utxo = %l2.private_utxo_address.unwrap(),
+        tee_lock = %l2.tee_lock_address.unwrap(),
+        "contracts loaded",
     );
 
     chains.insert(sep_id_b256, sep_rpc);
@@ -236,12 +247,12 @@ async fn query_chain_id(rpc_url: &str, label: &str) -> u64 {
     let provider = DynProvider::new(
         ProviderBuilder::new()
             .connect_http(rpc_url.parse().unwrap_or_else(|e| {
-                eprintln!("[server] FATAL: invalid rpc_url for {label}: {e}");
+                error!(chain = label, "invalid rpc_url: {e}");
                 std::process::exit(1);
             })),
     );
     provider.get_chain_id().await.unwrap_or_else(|e| {
-        eprintln!("[server] FATAL: cannot query chain_id for {label}: {e}");
+        error!(chain = label, "cannot query chain_id: {e}");
         std::process::exit(1);
     })
 }
