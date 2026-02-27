@@ -90,13 +90,12 @@ fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Returns a block explorer URL for the given transaction hash.
-fn tx_link(chain: Chain, tx_hash: B256) -> String {
-    let base = match chain {
-        Chain::Sepolia => "https://sepolia.etherscan.io/tx",
-        Chain::Layer2 => "https://sepolia.scrollscan.com/tx",
-    };
-    format!("{base}/{tx_hash:#x}")
+/// Returns a block explorer link for the given transaction hash, or a raw hash if no explorer is configured.
+fn tx_link(explorer_url: Option<&str>, tx_hash: B256) -> String {
+    match explorer_url {
+        Some(base) => format!("{base}/{tx_hash:#x}"),
+        None => format!("{tx_hash:#x}"),
+    }
 }
 
 /// Print a step header — called at the start of each named phase.
@@ -212,6 +211,7 @@ struct ChainDeployment {
     tee_lock: Address,
     deployment_block: u64,
     rpc_url: String,
+    explorer_url: Option<String>,
 }
 
 /// Resolved per-party references into chain deployments and config.
@@ -219,6 +219,7 @@ struct PartyContext<'a> {
     deploy: &'a ChainDeployment,
     deployer_key: &'a str,
     chain_id_b256: B256,
+    explorer_url: Option<&'a str>,
 }
 
 const COMMITMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -336,6 +337,7 @@ async fn main() -> Result<(), TestnetError> {
             tee_lock: config.sepolia.tee_lock_address.unwrap(),
             deployment_block: config.sepolia.deployment_block.unwrap(),
             rpc_url: config.sepolia.rpc_url.clone(),
+            explorer_url: config.sepolia.explorer_url.clone(),
         }
     } else {
         info!("  Sepolia: deploying contracts...");
@@ -349,6 +351,7 @@ async fn main() -> Result<(), TestnetError> {
             tee_lock,
             deployment_block: block,
             rpc_url: config.sepolia.rpc_url.clone(),
+            explorer_url: config.sepolia.explorer_url.clone(),
         }
     };
 
@@ -361,6 +364,7 @@ async fn main() -> Result<(), TestnetError> {
             tee_lock: config.layer2.tee_lock_address.unwrap(),
             deployment_block: config.layer2.deployment_block.unwrap(),
             rpc_url: config.layer2.rpc_url.clone(),
+            explorer_url: config.layer2.explorer_url.clone(),
         }
     } else {
         info!("  Layer 2: deploying contracts...");
@@ -374,6 +378,7 @@ async fn main() -> Result<(), TestnetError> {
             tee_lock,
             deployment_block: block,
             rpc_url: config.layer2.rpc_url.clone(),
+            explorer_url: config.layer2.explorer_url.clone(),
         }
     };
 
@@ -389,11 +394,13 @@ async fn main() -> Result<(), TestnetError> {
                 deploy: &sepolia_deploy,
                 deployer_key: &config.sepolia.deployer_private_key,
                 chain_id_b256: sepolia_chain_id_b256,
+                explorer_url: sepolia_deploy.explorer_url.as_deref(),
             },
             Chain::Layer2 => PartyContext {
                 deploy: &layer2_deploy,
                 deployer_key: &config.layer2.deployer_private_key,
                 chain_id_b256: layer2_chain_id_b256,
+                explorer_url: layer2_deploy.explorer_url.as_deref(),
             },
         }
     };
@@ -542,8 +549,8 @@ async fn main() -> Result<(), TestnetError> {
         alice_deployer_rpc.fund(alice_note.commitment().0),
         bob_deployer_rpc.fund(bob_note.commitment().0),
     )?;
-    info!("  Alice fund tx:  {}", tx_link(config.alice.chain, fund_tx_alice.tx_hash));
-    info!("  Bob fund tx:    {}", tx_link(config.bob.chain, fund_tx_bob.tx_hash));
+    info!("  Alice fund tx:  {}", tx_link(alice_ctx.explorer_url, fund_tx_alice.tx_hash));
+    info!("  Bob fund tx:    {}", tx_link(bob_ctx.explorer_url, fund_tx_bob.tx_hash));
 
     // ── Step 8: Wait for indexer to see funded commitments ──
     step(8, 12, "Waiting for funded commitments to be indexed...");
@@ -694,8 +701,8 @@ async fn main() -> Result<(), TestnetError> {
         alice_rpc.transfer(&lock_proof_alice.proof, &lock_proof_alice.public_inputs),
         bob_rpc.transfer(&lock_proof_bob.proof, &lock_proof_bob.public_inputs),
     )?;
-    info!("  Alice lock tx:  {}", tx_link(config.alice.chain, lock_tx_alice.tx_hash));
-    info!("  Bob lock tx:    {}", tx_link(config.bob.chain, lock_tx_bob.tx_hash));
+    info!("  Alice lock tx:  {}", tx_link(alice_ctx.explorer_url, lock_tx_alice.tx_hash));
+    info!("  Bob lock tx:    {}", tx_link(bob_ctx.explorer_url, lock_tx_bob.tx_hash));
 
     if !lock_tx_alice.success {
         return Err(TestnetError::TxReverted(format!("alice lock tx {}", lock_tx_alice.tx_hash)));
@@ -767,7 +774,7 @@ async fn main() -> Result<(), TestnetError> {
         .as_str()
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| TestnetError::Json("missing tx_receipt.tx_hash".into()))?;
-    info!("  TEE announce tx: {}", tx_link(Chain::Sepolia, announce_tx_hash));
+    info!("  TEE announce tx: {}", tx_link(sepolia_deploy.explorer_url.as_deref(), announce_tx_hash));
 
     // Wait for on-chain announcement (via indexer)
     info!("  Waiting for on-chain confirmation...");
@@ -853,8 +860,8 @@ async fn main() -> Result<(), TestnetError> {
         alice_claim_rpc.transfer(&claim_proof_alice.proof, &claim_proof_alice.public_inputs),
         bob_claim_rpc.transfer(&claim_proof_bob.proof, &claim_proof_bob.public_inputs),
     )?;
-    info!("  Alice claim tx: {}", tx_link(config.bob.chain, claim_tx_alice.tx_hash));
-    info!("  Bob claim tx:   {}", tx_link(config.alice.chain, claim_tx_bob.tx_hash));
+    info!("  Alice claim tx: {}", tx_link(bob_ctx.explorer_url, claim_tx_alice.tx_hash));
+    info!("  Bob claim tx:   {}", tx_link(alice_ctx.explorer_url, claim_tx_bob.tx_hash));
 
     if !claim_tx_alice.success {
         return Err(TestnetError::TxReverted(format!("alice claim tx {}", claim_tx_alice.tx_hash)));
@@ -872,13 +879,13 @@ async fn main() -> Result<(), TestnetError> {
     info!("╔══════════════════════════════════════════════════════════════════════════════╗");
     info!("║                         TESTNET DEMO COMPLETE                               ║");
     info!("╠══════════════════════════════════════════════════════════════════════════════╣");
-    info!("║  Fund Alice    {}", tx_link(config.alice.chain, fund_tx_alice.tx_hash));
-    info!("║  Fund Bob      {}", tx_link(config.bob.chain,   fund_tx_bob.tx_hash));
-    info!("║  Lock Alice    {}", tx_link(config.alice.chain, lock_tx_alice.tx_hash));
-    info!("║  Lock Bob      {}", tx_link(config.bob.chain,   lock_tx_bob.tx_hash));
-    info!("║  TEE Announce  {}", tx_link(Chain::Sepolia,     announce_tx_hash));
-    info!("║  Claim Alice   {}", tx_link(config.bob.chain,   claim_tx_alice.tx_hash));
-    info!("║  Claim Bob     {}", tx_link(config.alice.chain, claim_tx_bob.tx_hash));
+    info!("║  Fund Alice    {}", tx_link(alice_ctx.explorer_url, fund_tx_alice.tx_hash));
+    info!("║  Fund Bob      {}", tx_link(bob_ctx.explorer_url,   fund_tx_bob.tx_hash));
+    info!("║  Lock Alice    {}", tx_link(alice_ctx.explorer_url, lock_tx_alice.tx_hash));
+    info!("║  Lock Bob      {}", tx_link(bob_ctx.explorer_url,   lock_tx_bob.tx_hash));
+    info!("║  TEE Announce  {}", tx_link(sepolia_deploy.explorer_url.as_deref(),     announce_tx_hash));
+    info!("║  Claim Alice   {}", tx_link(bob_ctx.explorer_url,   claim_tx_alice.tx_hash));
+    info!("║  Claim Bob     {}", tx_link(alice_ctx.explorer_url, claim_tx_bob.tx_hash));
     info!("╚══════════════════════════════════════════════════════════════════════════════╝");
 
     Ok(())

@@ -8,6 +8,7 @@
 
 [sepolia]
 rpc_url = "https://rpc.sepolia.org"
+explorer_url = "https://sepolia.etherscan.io/tx"
 deployer_private_key = "0xdead000000000000000000000000000000000000000000000000000000000004"
 
 # If contracts are pre-deployed, uncomment these:
@@ -17,6 +18,7 @@ deployer_private_key = "0xdead00000000000000000000000000000000000000000000000000
 
 [layer2]
 rpc_url = "https://sepolia-rpc.scroll.io"
+explorer_url = "https://sepolia.scrollscan.com/tx"
 deployer_private_key = "0xdead000000000000000000000000000000000000000000000000000000000004"
 
 # If contracts are pre-deployed, uncomment these:
