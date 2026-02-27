@@ -1,0 +1,10 @@
+FROM amazonlinux:2023
+RUN dnf install -y iproute socat && dnf clean all
+COPY target/release/server /app
+COPY scripts/enclave-entrypoint.sh /entrypoint.sh
+# config.toml is the same file used by the testnet binary —
+# fill in sepolia/layer2 addresses and tee.private_key before building the EIF.
+RUN mkdir -p /etc/tee_swap
+COPY config.toml /etc/tee_swap/config.toml
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

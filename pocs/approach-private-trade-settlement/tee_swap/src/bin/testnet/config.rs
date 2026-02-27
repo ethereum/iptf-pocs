@@ -20,6 +20,9 @@ pub struct TestnetConfig {
 pub struct ChainConfig {
     pub rpc_url: String,
     pub deployer_private_key: String,
+    /// Block explorer base URL for transaction links (e.g. "https://sepolia.scrollscan.com/tx").
+    /// When absent, raw tx hashes are printed instead.
+    pub explorer_url: Option<String>,
     /// Block number at which contracts were deployed. Required when contract addresses are provided.
     pub deployment_block: Option<u64>,
     /// Pre-deployed PrivateUTXO address. If absent, the binary deploys a fresh contract.

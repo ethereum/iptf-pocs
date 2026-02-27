@@ -96,7 +96,13 @@ impl ServerCertVerifier for RaTlsVerifier {
             return Ok(ServerCertVerified::assertion());
         }
 
-        // Future: verify real TDX/SEV-SNP quotes here
+        if report.tee_type == "nitro" {
+            // PoC: accept any Nitro attestation that passes pubkey_hash check above.
+            // Production: decode CBOR COSE_Sign1 in raw_document, verify signature
+            // against AWS Nitro root certificate, and check PCR0/PCR2 values.
+            return Ok(ServerCertVerified::assertion());
+        }
+
         Err(Error::InvalidCertificate(
             rustls::CertificateError::Other(rustls::OtherError(Arc::new(
                 VerifierError::UnsupportedTeeType(report.tee_type),

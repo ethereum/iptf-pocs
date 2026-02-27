@@ -16,6 +16,15 @@ name = "e2e"
 path = "src/bin/e2e.rs"
 
 [[bin]]
+name = "server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "host_proxy"
+path = "src/bin/host_proxy.rs"
+required-features = ["nitro"]
+
+[[bin]]
 name = "testnet"
 path = "src/bin/testnet/main.rs"
 
@@ -74,8 +83,14 @@ rand = "0.8"
 hex = "0.4"
 tempfile = "3"
 
+# Nitro (optional — only needed when building for enclave)
+aws-nitro-enclaves-nsm-api = { version = "0.4", features = ["nix"], optional = true }
+tokio-vsock = { version = "0.7", optional = true }
+serde_bytes = "0.11"
+
 [features]
 default = ["mock-tee"]
 mock-tee = []
+nitro = ["dep:aws-nitro-enclaves-nsm-api", "dep:tokio-vsock"]
 tdx = []         # future: virtee/tdx for real attestation
 sev-snp = []     # future: virtee/sev for real attestation
