@@ -33,9 +33,6 @@ use tee_swap::adapters::nitro_tee::NitroTeeRuntime;
 use tee_swap::adapters::mock_tee::MockTeeRuntime;
 
 #[cfg(feature = "nitro")]
-use tee_swap::server::vsock_proxy::run_vsock_proxy;
-
-#[cfg(feature = "nitro")]
 const VSOCK_PORT: u32 = 5000;
 const AXUM_ADDR: &str = "127.0.0.1:8443";
 const CONFIG_PATH: &str = "/etc/tee_swap/config.toml";
@@ -175,7 +172,7 @@ async fn main() {
     #[cfg(feature = "nitro")]
     {
         let tcp_target = Arc::new(AXUM_ADDR.to_string());
-        tokio::spawn(run_vsock_proxy(VSOCK_PORT, tcp_target));
+        tokio::spawn(vsock_proxy(VSOCK_PORT, tcp_target));
         info!(vsock_port = VSOCK_PORT, target = AXUM_ADDR, "vsock proxy started");
     }
 
@@ -255,4 +252,42 @@ async fn query_chain_id(rpc_url: &str, label: &str) -> u64 {
         error!(chain = label, "cannot query chain_id: {e}");
         std::process::exit(1);
     })
+}
+
+// ── vsock → TCP proxy (nitro only) ──────────────────────────────────────────
+
+/// Listen on `vsock_port` and forward each connection to `tcp_target`.
+/// Runs indefinitely; call from `tokio::spawn`.
+#[cfg(feature = "nitro")]
+async fn vsock_proxy(vsock_port: u32, tcp_target: Arc<String>) {
+    use tokio::net::TcpStream;
+    use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
+
+    let mut listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, vsock_port))
+        .expect("failed to bind vsock listener");
+
+    info!(vsock_port, "vsock proxy listening");
+
+    loop {
+        match listener.accept().await {
+            Ok((mut vsock_stream, addr)) => {
+                info!(?addr, "vsock connection accepted");
+                let target = Arc::clone(&tcp_target);
+                tokio::spawn(async move {
+                    match TcpStream::connect(target.as_str()).await {
+                        Ok(mut tcp_stream) => {
+                            if let Err(e) =
+                                tokio::io::copy_bidirectional(&mut vsock_stream, &mut tcp_stream)
+                                    .await
+                            {
+                                error!("vsock forward error: {e}");
+                            }
+                        }
+                        Err(e) => error!("vsock tcp connect error: {e}"),
+                    }
+                });
+            }
+            Err(e) => error!("vsock accept error: {e}"),
+        }
+    }
 }

@@ -1,8 +1,6 @@
 pub mod cert;
 pub mod routes;
 pub mod verifier;
-#[cfg(feature = "nitro")]
-pub mod vsock_proxy;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
