@@ -12,7 +12,7 @@ All benchmarks have been run on an m4 mbp, 14c, 48gig
 
 ### Shielded pool
 
-Generated with (100 runs):
+Generated with:
 
 ```
 cd shielded-pool && forge test --gas-report
