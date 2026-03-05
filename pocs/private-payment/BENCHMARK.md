@@ -122,3 +122,15 @@ cd plasma && cargo test --release -- --nocapture
 > **Note:** Plasma proofs are generated server-side by the `balance_prover` service (plonky2-based), not locally. These timings include HTTP round-trip overhead (but they do not dominate overall timings). The balance sync operations (`sync()`, `sync_withdrawals()`) are notably slower as they involve multiple sequential proof generations (e.g., sender balance proof + receiver balance proof for transfers).
 
 ---
+
+## Interpretation
+
+These two approaches solve the same problem in very different ways, so comparing raw numbers head-to-head can be misleading.
+
+The shielded pool PoC puts everything on-chain. Each user generates their own proof and pays the full verification cost (~2.6M gas per operation). It's self-contained, no operator needed, but every action is expensive for the individual.
+
+The plasma PoC (intmax) splits the work. Users only touch L1 for deposits and withdrawals (~137K gas). Transfers happen entirely off-chain, and an operator batches them into block roots (~255K gas per block), spreading that cost across everyone in the batch. The more users per block, the cheaper it gets per person.
+
+On proof generation, the shielded pool PoC uses Groth16 (sub-second, client-side, but needs a trusted setup), while the plasma PoC (intmax) uses Plonky2 (multi-second, server-side, no trusted setup). The plasma timings also include network round-trips and sequential multi-proof steps (e.g., separate sender and receiver balance proofs for a transfer), so they're not directly comparable to the shielded pool's single local proof.
+
+Put simply: the shielded pool PoC trades higher per-user cost for fewer trust assumptions, while the plasma PoC (intmax) trades operator infrastructure for lower per-user cost at scale.
