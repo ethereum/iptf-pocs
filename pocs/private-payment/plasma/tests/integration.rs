@@ -13,6 +13,7 @@ use anyhow::{
     Context,
     Result,
 };
+use std::collections::BTreeMap;
 use intmax2_client_sdk::{
     client::{
         client::Client,
@@ -46,7 +47,7 @@ use private_payment_plasma::harness::{
     TestEnv,
     relay_pending_deposits,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Derive an intmax2 `KeyPair` from an Ethereum private key.
 fn keypair_from_eth_key(eth_key: B256) -> KeyPair {
@@ -116,6 +117,7 @@ struct DepositInfo {
     pubkey_salt_hash: Bytes32,
     deposit_digest: Bytes32,
     relay_tx_hash: Option<alloy::primitives::B256>,
+    sync_duration: Duration,
 }
 
 /// Metadata collected from a transfer/withdrawal operation.
@@ -123,6 +125,7 @@ struct TxInfo {
     tx_tree_root: Bytes32,
     tx_digest: Bytes32,
     tx_index: u32,
+    send_tx_duration: Duration,
 }
 
 /// Execute a single ERC20 deposit (approve → prepare → on-chain
@@ -189,17 +192,20 @@ async fn do_deposit(
     // 5. Wait for validity prover to sync the deposit
     poll_deposit_synced(client, psh).await?;
 
-    // 6. Sync client balance
+    // 6. Sync client balance (generates receive deposit proof via balance_prover)
+    let sync_start = Instant::now();
     client
         .sync(key_pair.into())
         .await
         .map_err(|e| anyhow::anyhow!("sync: {e:?}"))?;
-    log::info!("Balance synced after deposit");
+    let sync_duration = sync_start.elapsed();
+    log::info!("Balance synced after deposit (proof latency: {:?})", sync_duration);
 
     Ok(DepositInfo {
         pubkey_salt_hash: psh,
         deposit_digest,
         relay_tx_hash,
+        sync_duration,
     })
 }
 
@@ -239,12 +245,14 @@ async fn do_transfer(
         .await
         .map_err(|e| anyhow::anyhow!("await_tx_sendable: {e:?}"))?;
 
-    // 3. Send tx request to block builder
+    // 3. Send tx request to block builder (generates spent proof via balance_prover)
+    let send_start = Instant::now();
     let memo = client
         .send_tx_request(block_builder_url, sender_kp, &[transfer], &[], &fee_quote)
         .await
         .map_err(|e| anyhow::anyhow!("send_tx_request: {e:?}"))?;
-    log::info!("Tx request sent, waiting for proposal...");
+    let send_tx_duration = send_start.elapsed();
+    log::info!("Tx request sent (proof latency: {:?}), waiting for proposal...", send_tx_duration);
 
     // 4. Wait for block builder to build
     tokio::time::sleep(Duration::from_secs(5)).await;
@@ -270,7 +278,188 @@ async fn do_transfer(
         tx_tree_root: result.tx_tree_root,
         tx_digest: result.tx_digest,
         tx_index: result.tx_data.tx_index,
+        send_tx_duration,
     })
+}
+
+fn fmt_duration(d: Duration) -> String {
+    let ms = d.as_millis();
+    if ms >= 1000 {
+        format!("{:.2}s", d.as_secs_f64())
+    } else {
+        format!("{}ms", ms)
+    }
+}
+
+fn print_proof_latency_report(timings: &[(&str, Duration)]) {
+    log::info!("");
+    log::info!("=== Proof Latency Report ===");
+    log::info!("| Operation | Min | Mean | Median | Max |");
+    log::info!("|---|---|---|---|---|");
+    for (name, duration) in timings {
+        let formatted = fmt_duration(*duration);
+        log::info!(
+            "| {} | {} | {} | {} | {} |",
+            name, formatted, formatted, formatted, formatted
+        );
+    }
+}
+
+/// Scan all anvil blocks and report gas usage per (contract, function).
+async fn print_gas_report(env: &TestEnv) -> Result<()> {
+    use alloy::consensus::Transaction as _;
+    use alloy::eips::BlockNumberOrTag;
+    use alloy::network::TransactionResponse as _;
+    use alloy::providers::Provider;
+    use intmax2_client_sdk::external_api::contract::utils::get_provider_with_fallback;
+
+    let rpc_url = env.anvil.endpoint();
+    let provider = get_provider_with_fallback(std::slice::from_ref(&rpc_url))
+        .context("gas report: create provider")?;
+
+    let latest = provider
+        .get_block_number()
+        .await
+        .context("get latest block number")?;
+
+    let contracts = &env.contracts;
+    let addr_name = |addr: alloy::primitives::Address| -> &str {
+        if addr == contracts.rollup {
+            "Rollup"
+        } else if addr == contracts.liquidity {
+            "Liquidity"
+        } else if addr == contracts.block_builder_registry {
+            "BlockBuilderRegistry"
+        } else if addr == contracts.withdrawal {
+            "Withdrawal"
+        } else if addr == contracts.test_messenger {
+            "TestMessenger"
+        } else if addr == contracts.test_erc20 {
+            "ERC20"
+        } else {
+            "Unknown"
+        }
+    };
+
+    // Known function selectors
+    let sel = |sig: &str| -> [u8; 4] {
+        let h = alloy::primitives::keccak256(sig.as_bytes());
+        [h[0], h[1], h[2], h[3]]
+    };
+    let known: &[([u8; 4], &str)] = &[
+        (sel("approve(address,uint256)"), "approve"),
+        (sel("transfer(address,uint256)"), "transfer"),
+        (sel("setResult(address)"), "setResult"),
+        (
+            sel("processDeposits(address,uint256,bytes32[])"),
+            "processDeposits",
+        ),
+        (sel("emitHeartbeat(string)"), "emitHeartbeat"),
+        (
+            sel("depositERC20(bytes32,uint256,bytes32,bytes,bytes)"),
+            "depositERC20",
+        ),
+        (
+            sel("postNonRegistrationBlock(bytes32,uint64,uint32,bytes16,bytes32[2],bytes32[4],bytes32[4],bytes32,bytes)"),
+            "postNonRegistrationBlock",
+        ),
+        (
+            sel("postRegistrationBlock(bytes32,uint64,uint32,bytes16,bytes32[2],bytes32[4],bytes32[4],uint256[])"),
+            "postRegistrationBlock",
+        ),
+        (
+            sel("initialize(address,address,address,address,address,address,uint256[])"),
+            "initialize",
+        ),
+    ];
+    let selector_name = |s: [u8; 4]| -> String {
+        for (k, name) in known {
+            if *k == s {
+                return name.to_string();
+            }
+        }
+        format!("0x{:02x}{:02x}{:02x}{:02x}", s[0], s[1], s[2], s[3])
+    };
+
+    // (contract, function) -> vec of per-call gas values
+    let mut gas_map: BTreeMap<(String, String), Vec<u64>> = BTreeMap::new();
+
+    for n in 0..=latest {
+        let block = provider
+            .get_block_by_number(BlockNumberOrTag::Number(n))
+            .full()
+            .await
+            .context("get block")?;
+
+        let Some(block) = block else { continue };
+        let txs = block.into_transactions_vec();
+
+        for tx in txs {
+            let Some(to_addr) = tx.to() else {
+                continue; // skip deploys
+            };
+
+            let contract = addr_name(to_addr);
+            if contract == "ERC20" || contract == "Unknown" {
+                continue;
+            }
+            let contract = contract.to_string();
+
+            let input = tx.input();
+            let function = if input.len() >= 4 {
+                selector_name([input[0], input[1], input[2], input[3]])
+            } else {
+                "fallback".to_string()
+            };
+
+            let receipt = provider
+                .get_transaction_receipt(tx.tx_hash())
+                .await
+                .context("get receipt")?;
+
+            if let Some(receipt) = receipt {
+                gas_map
+                    .entry((contract, function))
+                    .or_default()
+                    .push(receipt.gas_used);
+            }
+        }
+    }
+
+    log::info!("");
+    log::info!("=== Gas Usage Report ===");
+    log::info!(
+        "| {:<25} | {:<30} | {:>12} | {:>12} | {:>12} | {:>12} |",
+        "Contract", "Function", "Min", "Mean", "Median", "Max"
+    );
+    log::info!(
+        "|{}|{}|{}|{}|{}|{}|",
+        "-".repeat(27),
+        "-".repeat(32),
+        "-".repeat(14),
+        "-".repeat(14),
+        "-".repeat(14),
+        "-".repeat(14),
+    );
+
+    for ((contract, function), values) in &gas_map {
+        let mut sorted = values.clone();
+        sorted.sort();
+        let min = sorted[0];
+        let max = sorted[sorted.len() - 1];
+        let mean = sorted.iter().sum::<u64>() / sorted.len() as u64;
+        let median = if sorted.len() % 2 == 0 {
+            (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2
+        } else {
+            sorted[sorted.len() / 2]
+        };
+        log::info!(
+            "| {:<25} | {:<30} | {:>12} | {:>12} | {:>12} | {:>12} |",
+            contract, function, min, mean, median, max
+        );
+    }
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -371,12 +560,14 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         transfer_info.tx_tree_root
     );
 
-    // Sync Bob's balance
+    // Sync Bob's balance (generates balance proofs for received transfer)
+    let bob_sync_start = Instant::now();
     client
         .sync(bob_kp.into())
         .await
         .map_err(|e| anyhow::anyhow!("bob sync: {e:?}"))?;
-    log::info!("Bob balance synced after transfer");
+    let bob_transfer_sync_duration = bob_sync_start.elapsed();
+    log::info!("Bob balance synced after transfer (proof latency: {:?})", bob_transfer_sync_duration);
 
     // ---- Phase 4: Bob withdraws 1100 tokens ----
     log::info!("=== Phase 4: Bob withdraws 1100 tokens ===");
@@ -417,6 +608,7 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("await_tx_sendable withdrawal: {e:?}"))?;
 
+    let wd_send_start = Instant::now();
     let memo = client
         .send_tx_request(
             &block_builder_url,
@@ -427,6 +619,8 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("send withdrawal tx: {e:?}"))?;
+    let wd_send_tx_duration = wd_send_start.elapsed();
+    log::info!("Withdrawal tx sent (proof latency: {:?})", wd_send_tx_duration);
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
@@ -444,6 +638,7 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         tx_tree_root: wd_result.tx_tree_root,
         tx_digest: wd_result.tx_digest,
         tx_index: wd_result.tx_data.tx_index,
+        send_tx_duration: wd_send_tx_duration,
     };
 
     poll_tx_settled(&client, wd_info.tx_tree_root).await?;
@@ -456,11 +651,26 @@ async fn test_full_plasma_flow() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("get_withdrawal_fee: {e:?}"))?;
 
+    let wd_sync_start = Instant::now();
     client
         .sync_withdrawals(bob_kp.into(), &withdrawal_fee_info, 0)
         .await
         .map_err(|e| anyhow::anyhow!("sync_withdrawals: {e:?}"))?;
-    log::info!("Withdrawals synced to L1");
+    let wd_sync_duration = wd_sync_start.elapsed();
+    log::info!("Withdrawals synced to L1 (proof latency: {:?})", wd_sync_duration);
+
+    // ---- Proof Latency Report ----
+    print_proof_latency_report(&[
+        ("ProofGen(Deposit/Alice)", alice_deposit.sync_duration),
+        ("ProofGen(Deposit/Bob)", bob_deposit.sync_duration),
+        ("ProofGen(Transfer)", transfer_info.send_tx_duration),
+        ("ProofGen(BalanceSync/Transfer)", bob_transfer_sync_duration),
+        ("ProofGen(Withdrawal)", wd_info.send_tx_duration),
+        ("ProofGen(WithdrawalSync)", wd_sync_duration),
+    ]);
+
+    // ---- Gas Report ----
+    print_gas_report(&env).await?;
 
     // ---- Transaction Summary ----
     let relay_hash_str = |h: &Option<alloy::primitives::B256>| match h {
