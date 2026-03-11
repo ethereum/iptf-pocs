@@ -49,7 +49,7 @@ fn main(
     nullifiers: pub [Field; 2],
     commitments_out: pub [Field; 2],
     // Input note
-    input_values: [Field; 2],
+    input_values: [u64; 2],
     input_salts: [Field; 2],
     input_owner: Field,
     input_asset_id: Field,
@@ -58,7 +58,7 @@ fn main(
     path_indices: [[u1; TREE_HEIGHT]; 2],
     path_elements: [[Field; TREE_HEIGHT]; 2],
     // Output note
-    output_values: [Field; 2],
+    output_values: [u64; 2],
     output_salts: [Field; 2],
     output_owners: [Field; 2],
     output_asset_ids: [Field; 2],
@@ -66,12 +66,12 @@ fn main(
     // Private key
     private_key: Field,
 ) -> pub (bool) {
-    let mut total_input_value = 0;
-    let mut total_output_value = 0;
+    let mut total_input_value: u64 = 0;
+    let mut total_output_value: u64 = 0;
 
     for i in 0..2 {
         let commitment = note_commit(
-            input_values[i],
+            input_values[i] as Field,
             input_salts[i],
             input_owner,
             input_asset_id,
@@ -88,7 +88,7 @@ fn main(
 
     for i in 0..2 {
         let output_commitments = note_commit(
-            output_values[i],
+            output_values[i] as Field,
             output_salts[i],
             output_owners[i],
             output_asset_ids[i],
@@ -111,17 +111,17 @@ fn main(
 fn test_main() {
     let private_key = 999;
 
-    let val_in_0 = 100;
+    let val_in_0: u64 = 100;
     let salt_in_0 = 123;
     let owner_in = poseidon::poseidon::bn254::hash_1([private_key]);
     let asset_id = 1;
     // 2030-01-01 00:00:00 UTC
     let input_maturity_date = 1893456000;
-    let comm_in_0 = note_commit(val_in_0, salt_in_0, owner_in, asset_id, input_maturity_date);
+    let comm_in_0 = note_commit(val_in_0 as Field, salt_in_0, owner_in, asset_id, input_maturity_date);
 
-    let val_in_1 = 0;
+    let val_in_1: u64 = 0;
     let salt_in_1 = 0;
-    let comm_in_1 = note_commit(val_in_1, salt_in_1, owner_in, asset_id, input_maturity_date);
+    let comm_in_1 = note_commit(val_in_1 as Field, salt_in_1, owner_in, asset_id, input_maturity_date);
 
     let leaf_0 = comm_in_0;
     let leaf_1 = comm_in_1;
@@ -130,20 +130,20 @@ fn test_main() {
     let root =
         poseidon::poseidon::bn254::hash_2([poseidon::poseidon::bn254::hash_2([node_0_1, 0]), 0]);
 
-    let val_out_0 = 40;
-    let val_out_1 = 60;
+    let val_out_0: u64 = 40;
+    let val_out_1: u64 = 60;
     let salt_out_0 = 456;
     let salt_out_1 = 789;
 
     let comm_out_0 = note_commit(
-        val_out_0,
+        val_out_0 as Field,
         salt_out_0,
         owner_in,
         asset_id,
         input_maturity_date,
     );
     let comm_out_1 = note_commit(
-        val_out_1,
+        val_out_1 as Field,
         salt_out_1,
         owner_in,
         asset_id,
