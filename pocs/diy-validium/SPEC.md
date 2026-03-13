@@ -14,13 +14,14 @@ iptf_approach: "[Validium with ZK proofs](https://github.com/ethereum/iptf-map/t
 
 Institutions want blockchain guarantees — immutability, settlement finality, auditability — without blockchain transparency. This protocol keeps account data in the operator's database and posts only Merkle roots and ZK validity proofs on-chain.
 
-Three operations cover the institutional lifecycle:
+Four operations cover the institutional lifecycle:
 
 | Operation | What It Does | Business Use |
 |-----------|-------------|-------------|
 | **Transfer** | Private payment between accounts | Institutional settlements, private stablecoin transfers |
 | **Bridge** | Deposit ERC20 (gated) + withdrawal (proven exit) | On/off ramp between public and private systems |
 | **Disclosure** | Prove compliance without revealing data | Regulatory attestations, capital adequacy proofs |
+| **Escape Hatch** | Emergency fund recovery when operator disappears | Business continuity, regulatory requirement for fund access |
 
 The disclosure proof demonstrates custom compliance: rules written as readable Rust guest programs, auditable by non-cryptographers.
 
@@ -101,9 +102,12 @@ internal_node = SHA256(left_child || right_child)
 // TransferVerifier
 bytes32 public stateRoot;
 
-// ValidiumBridge (extends with ERC20)
+// ValidiumBridge (extends with ERC20 + escape hatch)
 IERC20 public token;
 bytes32 public allowlistRoot;
+uint256 public lastProofTimestamp;  // tracks operator liveness
+bool public frozen;                 // escape hatch activated
+mapping(uint256 => bool) public claimed;  // escape withdrawal tracking
 ```
 
 > **No nullifiers needed:** In an account model with sequential state updates, the contract's `require(oldRoot == stateRoot)` check prevents replay — each operation changes the root, making stale proofs instantly invalid. Nullifiers are essential in UTXO models (Zcash, Tornado Cash) where independent notes can be spent, but are redundant here. This matches Prividium (ZKSync), which also uses sequential root checks without nullifiers.
@@ -296,6 +300,99 @@ function verifyDisclosure(bytes seal, bytes32 root, uint64 threshold,
 
 ---
 
+## Operation 4: Escape Hatch
+
+If the operator disappears, users can recover their funds directly from the bridge contract — no ZK proof required. This is the standard "escape hatch" pattern used by StarkEx, ZKSync, and other validiums: sacrifice privacy for fund recovery in an emergency.
+
+### Problem
+
+The centralized operator is a single point of failure. If the operator goes offline permanently, no new proofs can be submitted, and normal withdrawals require a valid proof. Without an escape mechanism, funds are locked in the bridge contract forever.
+
+### Design: Freeze-Then-Claim
+
+The escape hatch uses a two-phase approach:
+
+1. **Freeze**: After `ESCAPE_TIMEOUT` (7 days) of operator inactivity, anyone can freeze the bridge. Freezing is irreversible — it permanently disables deposits, withdrawals, and transfers.
+2. **Claim**: Once frozen, users prove their balance against the last committed state root using an on-chain Merkle proof (no ZK proof needed — the operator is gone, so there's no one to hide from). The user reveals their `pubkey`, `balance`, `salt`, and Merkle proof on-chain.
+
+### Root Synchronization: `postTransferBatch`
+
+The bridge contract maintains its own `stateRoot`. Normal withdrawals update this root, but off-chain transfers (via `TransferVerifier`) do not. The `postTransferBatch` function mirrors a transfer proof on the bridge to keep its root current:
+
+```solidity
+function postTransferBatch(bytes calldata seal, bytes32 oldRoot, bytes32 newRoot) external {
+    require(oldRoot == stateRoot);
+    verifier.verify(seal, TRANSFER_IMAGE_ID, sha256(abi.encodePacked(oldRoot, newRoot)));
+    stateRoot = newRoot;
+    lastProofTimestamp = block.timestamp;
+}
+```
+
+Each successful `postTransferBatch` or `withdraw` resets the liveness timer, preventing premature freezing while the operator is active.
+
+> **Note:** In production, TransferVerifier and ValidiumBridge would share a single state root to avoid this synchronization requirement. The PoC keeps them separate for modularity.
+
+### Flow
+
+```
+Anyone              Contract                    User
+  │                    │                          │
+  │ (7 days pass)      │                          │
+  │ freeze() ─────────▶│ frozen = true            │
+  │                    │                          │
+  │                    │◀── escapeWithdraw() ─────│
+  │                    │    (pubkey, balance,      │
+  │                    │     salt, merkleProof)    │
+  │                    │                          │
+  │                    │ verify Merkle proof       │
+  │                    │ transfer tokens ─────────▶│
+```
+
+### What Users Must Save
+
+To use the escape hatch, users must retain:
+
+| Data | Size | Notes |
+|------|------|-------|
+| `pubkey` | 32 bytes | Account public key |
+| `balance` | 8 bytes (uint64) | Current balance |
+| `salt` | 32 bytes | Current salt |
+| `leafIndex` | uint256 | Position in Merkle tree |
+| Merkle proof | depth × 32 bytes | Sibling path to root |
+
+**The salt changes on every state transition** (transfer, withdrawal). Users must save updated account data after each transaction. If they lose their current salt, they cannot construct a valid commitment and cannot escape.
+
+### Contract Interface
+
+```solidity
+function freeze() external;
+// Requires: !frozen, block.timestamp > lastProofTimestamp + ESCAPE_TIMEOUT
+
+function escapeWithdraw(
+    uint256 leafIndex,
+    bytes32 pubkey,
+    uint64 balance,
+    bytes32 salt,
+    bytes32[] calldata merkleProof
+) external;
+// Requires: frozen, !claimed[leafIndex], balance > 0
+// Verifies: SHA256(pubkey || balance_le || salt) is in the Merkle tree at leafIndex
+// Sends: balance tokens to msg.sender
+```
+
+### Privacy Trade-off
+
+During escape withdrawal, the user reveals their `pubkey`, `balance`, and `salt` on-chain. This is an acceptable trade-off: the operator is gone, the system is permanently frozen, and the alternative is losing funds entirely. This matches the privacy model of StarkEx and ZKSync escape hatches.
+
+### Layered DA Extensions (Future Work)
+
+The current escape hatch is "Layer 0" — pure on-chain Merkle verification. Users must independently save their account data. Future layers would progressively reduce this burden:
+
+- **Layer 1 (Blob Checkpoints)**: Operator periodically posts full Merkle tree snapshots to EIP-4844 blobs. Users can reconstruct their proof from blob data even if the operator disappears. Blobs are public, so this trades some privacy for easier recovery.
+- **Layer 1+ (Encrypted Blobs)**: Blob data is encrypted to a DA committee or threshold key. Only authorized parties can reconstruct the tree, preserving privacy until escape is actually needed.
+
+---
+
 ## Why Rust Guest Programs Matter
 
 The guest programs above are standard Rust — no DSL, no manual constraint wiring, no bit decomposition. An institutional auditor reviewing the 5-line disclosure check (`assert!(balance >= threshold)`) is reviewing the actual verification logic, not a circuit abstraction layer.
@@ -312,11 +409,12 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 | **Transfer** | Merkle roots | Amount, sender, recipient, balances | Only operator sees details |
 | **Disclosure** | Threshold, disclosure_key_hash | Actual balance, pubkey, tree position | Auditor learns: balance >= threshold. Nothing more. |
 | **Withdrawal** | Amount, recipient address | Prior balance, account history | Public observers see withdrawal |
+| **Escape** | Leaf index, pubkey, balance, salt | Other accounts, history | Balance revealed on-chain (privacy sacrifice for fund recovery) |
 
 **Critical caveats:**
 - Deposits and withdrawals are public — privacy exists only between them
 - Operator sees everything — primary privacy concern in production
-- No DA fallback — if operator disappears, funds are locked
+- Escape hatch (Layer 0) — if operator disappears, users can recover funds after 7-day timeout by revealing balance on-chain (Operation 4)
 - Timing analysis can link deposits to withdrawals with few participants
 
 ## Operator Trust Model
@@ -327,7 +425,7 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - Maps pubkeys to real identities
 - Controls data availability
 
-**Liveness risk:** If the operator goes offline, no new proofs can be submitted and no withdrawals can be processed. Funds remain locked in the bridge contract indefinitely. This is the primary operational risk of the centralized operator model. Production mitigations: DA committee, on-chain calldata fallback, or an escape hatch that allows users to withdraw after a timeout by proving their last known balance against the last committed root.
+**Liveness risk:** If the operator goes offline, no new proofs can be submitted and no withdrawals can be processed. The escape hatch (Operation 4) mitigates this: after 7 days of inactivity, anyone can freeze the bridge, and users can recover funds by revealing their balance on-chain via Merkle proof. Users must save their current account data (pubkey, balance, salt, leaf index, Merkle proof) after every transaction to use the escape hatch. Production would add DA layers (blob checkpoints, encrypted blobs) to reduce this burden.
 
 **Enforced by ZK + on-chain verification:**
 - Cannot forge a transfer or withdrawal without the sender's secret key
@@ -351,7 +449,7 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 ## Future Work
 
 - **Viewing keys with real crypto** — Replace hash-based disclosure keys with threshold decryption (Penumbra) or verifiable encryption (Aztec)
-- **Data availability** — DA committee or on-chain calldata fallback (escape hatch)
+- **Data availability layers** — Layer 1: EIP-4844 blob checkpoints (operator posts periodic Merkle snapshots). Layer 1+: encrypted blobs (DA committee or threshold key preserves privacy until escape)
 - **Multi-asset** — Add `asset_id` to commitment: `SHA256(pubkey || asset_id || balance_le || salt)`
 - **Transaction batching** — N transfers per proof
 - **Range proofs** — Prove "amount in [min, max]" for AML compliance
@@ -367,6 +465,8 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - **Seal** — The proof bytes that can be verified on-chain
 - **Validium** — L2 where data is off-chain but validity is proven
 - **Disclosure Key** — Hash binding an account to a specific auditor
+- **Escape Hatch** — Emergency withdrawal mechanism when operator is unresponsive; users reveal balance on-chain to recover funds
+- **Freeze** — Irreversible state transition that disables normal operations and enables escape withdrawals
 - **Prividium Pattern** — Privacy by default, transparency by choice
 
 ## References

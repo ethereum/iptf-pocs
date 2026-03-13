@@ -447,6 +447,7 @@ async fn e2e_full_lifecycle() {
         allowlist_root,
         membership_image_id,
         withdrawal_image_id,
+        transfer_image_id,
     )
         .abi_encode_params();
     let bridge_addr = deploy(&provider, &bridge_bc, &bridge_args).await;

@@ -68,6 +68,25 @@ contract ValidiumBridgeTest is Test {
     uint64 internal constant DEPOSIT_AMOUNT = 1000;
     uint64 internal constant WITHDRAW_AMOUNT = 500;
 
+    // Escape hatch test data (depth-2 tree, 4 leaves)
+    bytes32 internal constant ESCAPE_PUBKEY_0 = bytes32(uint256(0xAA));
+    bytes32 internal constant ESCAPE_PUBKEY_1 = bytes32(uint256(0xBB));
+    bytes32 internal constant ESCAPE_PUBKEY_2 = bytes32(uint256(0xCC));
+    bytes32 internal constant ESCAPE_PUBKEY_3 = bytes32(uint256(0xDD));
+    uint64 internal constant ESCAPE_BALANCE_0 = 1000;
+    uint64 internal constant ESCAPE_BALANCE_1 = 2000;
+    uint64 internal constant ESCAPE_BALANCE_2 = 3000;
+    uint64 internal constant ESCAPE_BALANCE_3 = 4000;
+    bytes32 internal constant ESCAPE_SALT_0 = bytes32(uint256(0x11));
+    bytes32 internal constant ESCAPE_SALT_1 = bytes32(uint256(0x22));
+    bytes32 internal constant ESCAPE_SALT_2 = bytes32(uint256(0x33));
+    bytes32 internal constant ESCAPE_SALT_3 = bytes32(uint256(0x44));
+
+    // Computed in _buildEscapeTree()
+    bytes32 internal escapeStateRoot;
+    bytes32[4] internal leaves;
+    bytes32[2] internal internalNodes; // [left_internal, right_internal]
+
     function setUp() public {
         mockVerifier = new MockRiscZeroVerifier();
         token = new MockERC20();
@@ -77,8 +96,10 @@ contract ValidiumBridgeTest is Test {
             STATE_ROOT,
             ALLOWLIST_ROOT,
             bytes32(0),
+            bytes32(0),
             bytes32(0)
         );
+        _buildEscapeTree();
     }
 
     // ---------------------------------------------------------------
@@ -94,6 +115,75 @@ contract ValidiumBridgeTest is Test {
         vm.stopPrank();
     }
 
+    /// @dev Convert uint64 to little-endian bytes (matches Rust u64::to_le_bytes()).
+    function _uint64ToLE(uint64 value) internal pure returns (bytes8) {
+        uint64 reversed = (uint64(uint8(value)) << 56) | (uint64(uint8(value >> 8)) << 48)
+            | (uint64(uint8(value >> 16)) << 40) | (uint64(uint8(value >> 24)) << 32)
+            | (uint64(uint8(value >> 32)) << 24) | (uint64(uint8(value >> 40)) << 16)
+            | (uint64(uint8(value >> 48)) << 8) | uint64(uint8(value >> 56));
+        return bytes8(reversed);
+    }
+
+    /// @dev Compute account commitment: SHA256(pubkey || balance_le || salt)
+    function _accountCommitment(bytes32 pubkey, uint64 balance, bytes32 salt) internal pure returns (bytes32) {
+        return sha256(abi.encodePacked(pubkey, _uint64ToLE(balance), salt));
+    }
+
+    /// @dev Build a depth-2 SHA-256 Merkle tree with 4 leaves.
+    function _buildEscapeTree() internal {
+        leaves[0] = _accountCommitment(ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0);
+        leaves[1] = _accountCommitment(ESCAPE_PUBKEY_1, ESCAPE_BALANCE_1, ESCAPE_SALT_1);
+        leaves[2] = _accountCommitment(ESCAPE_PUBKEY_2, ESCAPE_BALANCE_2, ESCAPE_SALT_2);
+        leaves[3] = _accountCommitment(ESCAPE_PUBKEY_3, ESCAPE_BALANCE_3, ESCAPE_SALT_3);
+
+        internalNodes[0] = sha256(abi.encodePacked(leaves[0], leaves[1]));
+        internalNodes[1] = sha256(abi.encodePacked(leaves[2], leaves[3]));
+
+        escapeStateRoot = sha256(abi.encodePacked(internalNodes[0], internalNodes[1]));
+    }
+
+    /// @dev Get Merkle proof (2 siblings) for a leaf index in the depth-2 tree.
+    function _getMerkleProof(uint256 leafIdx) internal view returns (bytes32[] memory) {
+        bytes32[] memory proof = new bytes32[](2);
+        if (leafIdx == 0) {
+            proof[0] = leaves[1];
+            proof[1] = internalNodes[1];
+        } else if (leafIdx == 1) {
+            proof[0] = leaves[0];
+            proof[1] = internalNodes[1];
+        } else if (leafIdx == 2) {
+            proof[0] = leaves[3];
+            proof[1] = internalNodes[0];
+        } else {
+            proof[0] = leaves[2];
+            proof[1] = internalNodes[0];
+        }
+        return proof;
+    }
+
+    /// @dev Deploy a bridge with escape tree root and fund it with enough tokens.
+    function _deployEscapeBridge() internal returns (ValidiumBridge) {
+        ValidiumBridge escapeBridge = new ValidiumBridge(
+            IERC20(address(token)),
+            IRiscZeroVerifier(address(mockVerifier)),
+            escapeStateRoot,
+            ALLOWLIST_ROOT,
+            bytes32(0),
+            bytes32(0),
+            bytes32(0)
+        );
+        uint256 totalBalance =
+            uint256(ESCAPE_BALANCE_0) + ESCAPE_BALANCE_1 + ESCAPE_BALANCE_2 + ESCAPE_BALANCE_3;
+        token.mint(address(escapeBridge), totalBalance);
+        return escapeBridge;
+    }
+
+    /// @dev Warp past timeout and freeze a bridge.
+    function _freezeBridge(ValidiumBridge b) internal {
+        vm.warp(block.timestamp + b.ESCAPE_TIMEOUT() + 1);
+        b.freeze();
+    }
+
     // ---------------------------------------------------------------
     // 1. Constructor sets state correctly
     // ---------------------------------------------------------------
@@ -103,6 +193,14 @@ contract ValidiumBridgeTest is Test {
         assertEq(bridge.stateRoot(), STATE_ROOT);
         assertEq(bridge.allowlistRoot(), ALLOWLIST_ROOT);
         assertEq(bridge.operator(), address(this));
+    }
+
+    function test_constructor_setsTransferImageId() public view {
+        assertEq(bridge.TRANSFER_IMAGE_ID(), bytes32(0));
+    }
+
+    function test_constructor_setsLastProofTimestamp() public view {
+        assertEq(bridge.lastProofTimestamp(), block.timestamp);
     }
 
     // ---------------------------------------------------------------
@@ -225,5 +323,217 @@ contract ValidiumBridgeTest is Test {
         // ERC20 transfer underflow in MockERC20.transfer
         vm.expectRevert();
         bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+    }
+
+    // ---------------------------------------------------------------
+    // 11. Withdraw updates lastProofTimestamp
+    // ---------------------------------------------------------------
+    function test_withdraw_updatesLastProofTimestamp() public {
+        _depositAs(alice, WITHDRAW_AMOUNT, PUBKEY);
+        vm.warp(block.timestamp + 100);
+
+        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+        assertEq(bridge.lastProofTimestamp(), block.timestamp);
+    }
+
+    // ---------------------------------------------------------------
+    // postTransferBatch
+    // ---------------------------------------------------------------
+    function test_postTransferBatch_updatesRootAndTimestamp() public {
+        vm.warp(block.timestamp + 100);
+        bridge.postTransferBatch(hex"", STATE_ROOT, NEW_ROOT);
+        assertEq(bridge.stateRoot(), NEW_ROOT);
+        assertEq(bridge.lastProofTimestamp(), block.timestamp);
+    }
+
+    function test_postTransferBatch_emitsEvent() public {
+        vm.expectEmit(true, true, true, true);
+        emit ValidiumBridge.TransferBatchPosted(STATE_ROOT, NEW_ROOT);
+        bridge.postTransferBatch(hex"", STATE_ROOT, NEW_ROOT);
+    }
+
+    function test_postTransferBatch_revertsStaleState() public {
+        bytes32 wrongRoot = keccak256("wrong-root");
+        vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.StaleState.selector, STATE_ROOT, wrongRoot));
+        bridge.postTransferBatch(hex"", wrongRoot, NEW_ROOT);
+    }
+
+    function test_postTransferBatch_revertsWhenFrozen() public {
+        _freezeBridge(bridge);
+        vm.expectRevert(ValidiumBridge.AlreadyFrozen.selector);
+        bridge.postTransferBatch(hex"", STATE_ROOT, NEW_ROOT);
+    }
+
+    // ---------------------------------------------------------------
+    // Freeze
+    // ---------------------------------------------------------------
+    function test_freeze_succeedsAfterTimeout() public {
+        vm.warp(block.timestamp + bridge.ESCAPE_TIMEOUT() + 1);
+        vm.expectEmit(true, true, true, true);
+        emit ValidiumBridge.Frozen(block.timestamp);
+        bridge.freeze();
+        assertTrue(bridge.frozen());
+    }
+
+    function test_freeze_revertsBeforeTimeout() public {
+        vm.warp(block.timestamp + bridge.ESCAPE_TIMEOUT());
+        vm.expectRevert(ValidiumBridge.TimeoutNotReached.selector);
+        bridge.freeze();
+    }
+
+    function test_freeze_revertsAlreadyFrozen() public {
+        _freezeBridge(bridge);
+        vm.expectRevert(ValidiumBridge.AlreadyFrozen.selector);
+        bridge.freeze();
+    }
+
+    // ---------------------------------------------------------------
+    // Escape withdraw
+    // ---------------------------------------------------------------
+    function test_escapeWithdraw_fullFlow() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        _freezeBridge(escapeBridge);
+
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.prank(alice);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0, proof);
+
+        assertEq(token.balanceOf(alice), ESCAPE_BALANCE_0);
+        assertTrue(escapeBridge.claimed(0));
+    }
+
+    function test_escapeWithdraw_emitsEvent() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        _freezeBridge(escapeBridge);
+
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.prank(alice);
+        vm.expectEmit(true, true, true, true);
+        emit ValidiumBridge.EscapeWithdrawal(0, alice, ESCAPE_BALANCE_0);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0, proof);
+    }
+
+    function test_escapeWithdraw_revertsNotFrozen() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.expectRevert(ValidiumBridge.NotFrozen.selector);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0, proof);
+    }
+
+    function test_escapeWithdraw_revertsDoubleClaim() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        _freezeBridge(escapeBridge);
+
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.prank(alice);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0, proof);
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.AlreadyClaimed.selector, 0));
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0, proof);
+    }
+
+    function test_escapeWithdraw_revertsInvalidProof() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        _freezeBridge(escapeBridge);
+
+        // Use proof for leaf 0 but claim leaf 1's data
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.expectRevert(ValidiumBridge.InvalidMerkleProof.selector);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_1, ESCAPE_BALANCE_1, ESCAPE_SALT_1, proof);
+    }
+
+    function test_escapeWithdraw_revertsWrongBalance() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        _freezeBridge(escapeBridge);
+
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.expectRevert(ValidiumBridge.InvalidMerkleProof.selector);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0 + 1, ESCAPE_SALT_0, proof);
+    }
+
+    function test_escapeWithdraw_revertsZeroBalance() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        _freezeBridge(escapeBridge);
+
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.expectRevert(ValidiumBridge.InvalidAmount.selector);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, 0, ESCAPE_SALT_0, proof);
+    }
+
+    function test_escapeWithdraw_multipleUsers() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        _freezeBridge(escapeBridge);
+
+        // Alice escapes from leaf 0
+        bytes32[] memory proof0 = _getMerkleProof(0);
+        vm.prank(alice);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0, proof0);
+
+        // Bob escapes from leaf 2
+        bytes32[] memory proof2 = _getMerkleProof(2);
+        vm.prank(bob);
+        escapeBridge.escapeWithdraw(2, ESCAPE_PUBKEY_2, ESCAPE_BALANCE_2, ESCAPE_SALT_2, proof2);
+
+        assertEq(token.balanceOf(alice), ESCAPE_BALANCE_0);
+        assertEq(token.balanceOf(bob), ESCAPE_BALANCE_2);
+        assertTrue(escapeBridge.claimed(0));
+        assertTrue(escapeBridge.claimed(2));
+        assertFalse(escapeBridge.claimed(1));
+        assertFalse(escapeBridge.claimed(3));
+    }
+
+    // ---------------------------------------------------------------
+    // Frozen guards
+    // ---------------------------------------------------------------
+    function test_deposit_revertsWhenFrozen() public {
+        _freezeBridge(bridge);
+        token.mint(alice, DEPOSIT_AMOUNT);
+        vm.startPrank(alice);
+        token.approve(address(bridge), DEPOSIT_AMOUNT);
+        vm.expectRevert(ValidiumBridge.AlreadyFrozen.selector);
+        bridge.deposit(DEPOSIT_AMOUNT, PUBKEY, hex"");
+        vm.stopPrank();
+    }
+
+    function test_withdraw_revertsWhenFrozen() public {
+        _depositAs(alice, WITHDRAW_AMOUNT, PUBKEY);
+        _freezeBridge(bridge);
+        vm.expectRevert(ValidiumBridge.AlreadyFrozen.selector);
+        bridge.withdraw(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+    }
+
+    // ---------------------------------------------------------------
+    // Cross-language compatibility
+    // ---------------------------------------------------------------
+    function test_uint64ToLE_encoding() public pure {
+        // 1000 = 0x03E8
+        // LE bytes: [0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        bytes8 result = _uint64ToLE(1000);
+        assertEq(result, bytes8(hex"e803000000000000"));
+
+        // 256 = 0x0100
+        // LE bytes: [0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        bytes8 result2 = _uint64ToLE(256);
+        assertEq(result2, bytes8(hex"0001000000000000"));
+
+        // max uint64
+        bytes8 result3 = _uint64ToLE(type(uint64).max);
+        assertEq(result3, bytes8(hex"ffffffffffffffff"));
+    }
+
+    function test_accountCommitment_matchesExpected() public pure {
+        // Known test vector: pubkey = 0xAA (padded to 32 bytes), balance = 1000, salt = 0x11 (padded)
+        // This commitment is computed identically by Solidity and should match Rust's:
+        //   SHA256(pubkey || 1000u64.to_le_bytes() || salt)
+        bytes32 pubkey = bytes32(uint256(0xAA));
+        bytes32 salt = bytes32(uint256(0x11));
+        uint64 balance = 1000;
+
+        bytes32 commitment = _accountCommitment(pubkey, balance, salt);
+
+        // Verify the commitment is deterministic and uses LE encoding
+        bytes32 expected = sha256(abi.encodePacked(pubkey, bytes8(hex"e803000000000000"), salt));
+        assertEq(commitment, expected);
     }
 }
