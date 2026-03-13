@@ -65,7 +65,13 @@ contract Deploy is Script {
         // ValidiumBridge (ERC20 bridge with membership-gated deposit)
         if (tokenAddr != address(0)) {
             ValidiumBridge bridge = new ValidiumBridge(
-                IERC20(tokenAddr), IRiscZeroVerifier(verifierAddr), accountsRoot, allowlistRoot, bytes32(0), bytes32(0)
+                IERC20(tokenAddr),
+                IRiscZeroVerifier(verifierAddr),
+                accountsRoot,
+                allowlistRoot,
+                bytes32(0),
+                bytes32(0),
+                bytes32(0)
             );
             console.log("Deployed ValidiumBridge at:", address(bridge));
         } else {
