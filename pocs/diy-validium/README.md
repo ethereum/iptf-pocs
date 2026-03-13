@@ -6,13 +6,14 @@ A proof of concept for private institutional payments on Ethereum using a validi
 
 Institutions need blockchain guarantees -- immutability, settlement finality, auditability -- without exposing balances, transfer amounts, or counterparties. This PoC demonstrates a validium pattern: account state lives off-chain, while only Merkle roots and ZK validity proofs are posted on-chain.
 
-Three operations cover the institutional lifecycle:
+Four operations cover the institutional lifecycle:
 
 | Operation | What It Does | Business Use |
 |-----------|-------------|-------------|
 | **Transfer** | Private payment between accounts | Institutional settlements, stablecoin transfers |
 | **Bridge** | ERC20 deposit (gated) + withdrawal (proven exit) | On/off ramp between public and private systems |
 | **Disclosure** | Prove compliance without revealing data | Regulatory attestations, capital adequacy proofs |
+| **Escape Hatch** | Emergency fund recovery when operator disappears | Business continuity, regulatory fund access |
 
 ### Relationship to Prividium
 
@@ -114,7 +115,7 @@ RISC0_DEV_MODE=1 cargo run
 cargo run
 ```
 
-The demo creates sample accounts, builds a Merkle tree, then runs all three operations end-to-end: transfer, withdrawal, and disclosure.
+The demo creates sample accounts, builds a Merkle tree, then runs three operations end-to-end: transfer, withdrawal, and disclosure. The escape hatch (Operation 4) is tested via Solidity tests only.
 
 ### Deploy Contracts
 
@@ -180,10 +181,11 @@ diy-validium/
 - Malicious operator -- trusted to maintain correct off-chain state and data availability
 - Traffic analysis and timing correlation
 - Deposits and withdrawals are public -- privacy exists only between them
+- Escape withdrawals reveal full account details on-chain (privacy sacrificed for fund recovery)
 
 ## Known Limitations
 
-- **Centralized operator**: Single operator holds all account data. Production would use a DA committee or post calldata on-chain.
+- **Centralized operator**: Single operator holds all account data. Escape hatch (Operation 4) allows fund recovery after 7-day timeout, but users must save their account data after every transaction. Production would add DA layers (blob checkpoints) to reduce this burden.
 - **Hash-based disclosure keys**: Uses `SHA256(pubkey || auditor_pubkey || "disclosure_v1")`, not encryption-based viewing keys. Production would use threshold decryption or verifiable encryption.
 - **Simple key derivation**: `pubkey = SHA256(secret_key)`. Production would use proper elliptic curve key derivation.
 - **In-memory storage**: Account state is held in memory. Production would use a persistent database.
@@ -191,6 +193,7 @@ diy-validium/
 - **No transaction batching**: Each operation requires a separate proof.
 - **Single ERC20**: Bridge supports one token.
 - **Dev mode for tests**: Rust integration tests use `RISC0_DEV_MODE` (fake proofs) for speed.
+- **Escape hatch privacy trade-off**: Emergency withdrawal reveals `pubkey`, `balance`, and `salt` on-chain. Acceptable when the operator is gone and the alternative is losing funds.
 
 ## Security Disclaimer
 
