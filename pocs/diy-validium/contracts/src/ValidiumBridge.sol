@@ -52,6 +52,23 @@ contract ValidiumBridge {
     /// @notice Duration of operator inactivity before the bridge can be frozen.
     uint256 public constant ESCAPE_TIMEOUT = 7 days;
 
+    /// @notice Duration before an unprocessed forced withdrawal request triggers a freeze.
+    uint256 public constant FORCED_WITHDRAWAL_DEADLINE = 1 days;
+
+    /// @notice Counter for forced withdrawal request IDs.
+    uint256 public forcedRequestCount;
+
+    struct ForcedRequest {
+        bytes32 oldRoot;
+        bytes32 newRoot;
+        uint64 amount;
+        address recipient;
+        uint256 deadline;
+    }
+
+    /// @notice Pending forced withdrawal requests.
+    mapping(uint256 => ForcedRequest) public forcedRequests;
+
     error StaleState(bytes32 expected, bytes32 provided);
     error InvalidAmount();
     error NotFrozen();
@@ -59,12 +76,16 @@ contract ValidiumBridge {
     error TimeoutNotReached();
     error AlreadyClaimed(uint256 leafIndex);
     error InvalidMerkleProof();
+    error ForcedRequestNotFound(uint256 requestId);
+    error ForcedRequestNotExpired(uint256 requestId);
 
     event Deposit(address indexed depositor, bytes32 pubkey, uint256 amount);
     event Withdrawal(address indexed recipient, uint256 amount);
     event TransferBatchPosted(bytes32 indexed oldRoot, bytes32 indexed newRoot);
     event Frozen(uint256 timestamp);
     event EscapeWithdrawal(uint256 indexed leafIndex, address indexed recipient, uint64 amount);
+    event ForcedWithdrawalRequested(uint256 indexed requestId, address indexed recipient, uint64 amount, uint256 deadline);
+    event ForcedWithdrawalProcessed(uint256 indexed requestId);
 
     constructor(
         IERC20 _token,
@@ -150,6 +171,67 @@ contract ValidiumBridge {
     function freeze() external {
         if (frozen) revert AlreadyFrozen();
         if (block.timestamp <= lastProofTimestamp + ESCAPE_TIMEOUT) revert TimeoutNotReached();
+
+        frozen = true;
+        emit Frozen(block.timestamp);
+    }
+
+    /// @notice Request a forced withdrawal. User submits a valid ZK withdrawal proof;
+    ///         the operator must process it before the deadline or the bridge can be frozen.
+    function requestForcedWithdrawal(
+        bytes calldata seal,
+        bytes32 oldRoot,
+        bytes32 newRoot,
+        uint64 amount,
+        address recipient
+    ) external {
+        if (frozen) revert AlreadyFrozen();
+        if (oldRoot != stateRoot) revert StaleState(stateRoot, oldRoot);
+        if (amount == 0) revert InvalidAmount();
+
+        bytes memory journal = abi.encodePacked(oldRoot, newRoot, amount, recipient);
+        verifier.verify(seal, WITHDRAWAL_IMAGE_ID, sha256(journal));
+
+        uint256 requestId = forcedRequestCount++;
+        uint256 deadline = block.timestamp + FORCED_WITHDRAWAL_DEADLINE;
+        forcedRequests[requestId] = ForcedRequest({
+            oldRoot: oldRoot,
+            newRoot: newRoot,
+            amount: amount,
+            recipient: recipient,
+            deadline: deadline
+        });
+
+        emit ForcedWithdrawalRequested(requestId, recipient, amount, deadline);
+    }
+
+    /// @notice Process a pending forced withdrawal request. Callable by anyone (typically the operator).
+    ///         Requires that stateRoot still matches the request's oldRoot.
+    function processForcedWithdrawal(uint256 requestId) external {
+        if (frozen) revert AlreadyFrozen();
+        ForcedRequest memory req = forcedRequests[requestId];
+        if (req.deadline == 0) revert ForcedRequestNotFound(requestId);
+
+        if (stateRoot != req.oldRoot) revert StaleState(req.oldRoot, stateRoot);
+
+        // Apply the state transition
+        stateRoot = req.newRoot;
+        lastProofTimestamp = block.timestamp;
+
+        delete forcedRequests[requestId];
+
+        require(token.transfer(req.recipient, req.amount), "Forced withdrawal transfer failed");
+
+        emit ForcedWithdrawalProcessed(requestId);
+        emit Withdrawal(req.recipient, req.amount);
+    }
+
+    /// @notice Freeze the bridge because a forced withdrawal request expired without being processed.
+    function freezeOnExpiredRequest(uint256 requestId) external {
+        if (frozen) revert AlreadyFrozen();
+        ForcedRequest memory req = forcedRequests[requestId];
+        if (req.deadline == 0) revert ForcedRequestNotFound(requestId);
+        if (block.timestamp <= req.deadline) revert ForcedRequestNotExpired(requestId);
 
         frozen = true;
         emit Frozen(block.timestamp);

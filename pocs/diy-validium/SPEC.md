@@ -21,7 +21,7 @@ Four operations cover the institutional lifecycle:
 | **Transfer** | Private payment between accounts | Institutional settlements, private stablecoin transfers |
 | **Bridge** | Deposit ERC20 (gated) + withdrawal (proven exit) | On/off ramp between public and private systems |
 | **Disclosure** | Prove compliance without revealing data | Regulatory attestations, capital adequacy proofs |
-| **Escape Hatch** | Emergency fund recovery when operator disappears | Business continuity, regulatory requirement for fund access |
+| **Escape Hatch** | Emergency fund recovery when operator disappears or censors | Business continuity, regulatory requirement for fund access |
 
 The disclosure proof demonstrates custom compliance: rules written as readable Rust guest programs, auditable by non-cryptographers.
 
@@ -102,12 +102,14 @@ internal_node = SHA256(left_child || right_child)
 // TransferVerifier
 bytes32 public stateRoot;
 
-// ValidiumBridge (extends with ERC20 + escape hatch)
+// ValidiumBridge (extends with ERC20 + escape hatch + forced withdrawals)
 IERC20 public token;
 bytes32 public allowlistRoot;
 uint256 public lastProofTimestamp;  // tracks operator liveness
 bool public frozen;                 // escape hatch activated
 mapping(uint256 => bool) public claimed;  // escape withdrawal tracking
+uint256 public forcedRequestCount;  // forced withdrawal request counter
+mapping(uint256 => ForcedRequest) public forcedRequests;  // pending forced withdrawals
 ```
 
 > **No nullifiers needed:** In an account model with sequential state updates, the contract's `require(oldRoot == stateRoot)` check prevents replay — each operation changes the root, making stale proofs instantly invalid. Nullifiers are essential in UTXO models (Zcash, Tornado Cash) where independent notes can be spent, but are redundant here. This matches Prividium (ZKSync), which also uses sequential root checks without nullifiers.
@@ -380,6 +382,57 @@ function escapeWithdraw(
 // Sends: balance tokens to msg.sender
 ```
 
+### Forced Withdrawal (Anti-Censorship)
+
+The escape hatch above handles operator **disappearance** — but not operator **censorship**, where the operator is alive but refuses to process a specific user's withdrawal. A censoring operator can keep resetting the escape timeout by posting any valid proof.
+
+Forced withdrawals solve this with a request queue pattern (similar to StarkEx):
+
+```
+Censorship resistance spectrum:
+
+Normal withdraw     →  Forced withdrawal    →  Escape hatch
+(operator submits)     (user submits proof,    (no proof needed,
+                        operator must process   system frozen,
+                        or system freezes)      Merkle proof only)
+```
+
+#### How It Works
+
+1. **User submits** `requestForcedWithdrawal(seal, oldRoot, newRoot, amount, recipient)` — same arguments as `withdraw()`, with a valid ZK withdrawal proof. The contract verifies the proof but does **not** update `stateRoot` or transfer tokens. It stores the request with a deadline (`block.timestamp + FORCED_WITHDRAWAL_DEADLINE`, default 1 day).
+
+2. **Operator must act** within the deadline:
+   - **Process it**: call `processForcedWithdrawal(requestId)` — applies the state transition (`stateRoot = newRoot`), transfers tokens, deletes the request.
+   - **Ignore it**: after the deadline expires, anyone can call `freezeOnExpiredRequest(requestId)` to freeze the bridge. Once frozen, the escape hatch enables fund recovery.
+
+3. **Key requirement**: The user must have a valid ZK withdrawal proof (Merkle path + secret key + prover access). If they don't, the escape hatch (no ZK needed) remains the ultimate fallback.
+
+#### Contract Interface
+
+```solidity
+function requestForcedWithdrawal(
+    bytes calldata seal, bytes32 oldRoot, bytes32 newRoot,
+    uint64 amount, address recipient
+) external;
+// Requires: !frozen, oldRoot == stateRoot, amount > 0
+// Verifies: ZK withdrawal proof
+// Stores: request with deadline = block.timestamp + FORCED_WITHDRAWAL_DEADLINE
+
+function processForcedWithdrawal(uint256 requestId) external;
+// Requires: !frozen, request exists, stateRoot == request.oldRoot
+// Applies: stateRoot = newRoot, transfers tokens, deletes request
+
+function freezeOnExpiredRequest(uint256 requestId) external;
+// Requires: !frozen, request exists, block.timestamp > request.deadline
+// Freezes the bridge (same effect as freeze())
+```
+
+#### Stale Request Handling
+
+A forced request is verified against `stateRoot` at submission time. If the operator posts other proofs (transfers, withdrawals) that change `stateRoot` before processing, the forced request's `oldRoot` no longer matches — `processForcedWithdrawal` will revert with `StaleState`. However, the deadline still ticks. The operator cannot dodge a forced request by churning state: either they process the user's withdrawal (in the current or a re-derived state), or the deadline expires and the bridge freezes.
+
+> **PoC limitation:** In production, the operator should re-derive the forced withdrawal against the new state root and process it. The PoC demonstrates the anti-censorship mechanism without handling concurrent state changes — if state moves, the request becomes unprocessable but still triggers a freeze on expiry, and the user recovers via the escape hatch.
+
 ### Privacy Trade-off
 
 During escape withdrawal, the user reveals their `pubkey`, `balance`, and `salt` on-chain. This is an acceptable trade-off: the operator is gone, the system is permanently frozen, and the alternative is losing funds entirely. This matches the privacy model of StarkEx and ZKSync escape hatches.
@@ -444,6 +497,7 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - **No batching** — One proof per operation; production would batch
 - **Single ERC20** — Production: add `asset_id` to commitment scheme
 - **No access control on contract functions** — Any address can submit a valid proof. Production: restrict `executeTransfer` / `withdraw` to an operator address or multisig to prevent front-running and ordering manipulation.
+- **Forced withdrawal stale state** — If the operator changes `stateRoot` after a forced request is submitted, `processForcedWithdrawal` reverts. The deadline still ticks toward a freeze. In production, the operator would re-derive the withdrawal proof against the new state root.
 - **Dev mode for tests** — Rust tests use `RISC0_DEV_MODE` (fake proofs)
 
 ## Future Work
@@ -465,8 +519,9 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - **Seal** — The proof bytes that can be verified on-chain
 - **Validium** — L2 where data is off-chain but validity is proven
 - **Disclosure Key** — Hash binding an account to a specific auditor
-- **Escape Hatch** — Emergency withdrawal mechanism when operator is unresponsive; users reveal balance on-chain to recover funds
-- **Freeze** — Irreversible state transition that disables normal operations and enables escape withdrawals
+- **Escape Hatch** — Emergency withdrawal mechanism when operator is unresponsive or censoring; users reveal balance on-chain to recover funds
+- **Forced Withdrawal** — User-initiated on-chain withdrawal request with a deadline; operator must process it or the system freezes (anti-censorship)
+- **Freeze** — Irreversible state transition that disables normal operations and enables escape withdrawals; triggered by operator inactivity timeout or an expired forced withdrawal request
 - **Prividium Pattern** — Privacy by default, transparency by choice
 
 ## References

@@ -504,6 +504,94 @@ contract ValidiumBridgeTest is Test {
     }
 
     // ---------------------------------------------------------------
+    // Forced withdrawal
+    // ---------------------------------------------------------------
+    function test_requestForcedWithdrawal_storesRequest() public {
+        _depositAs(alice, WITHDRAW_AMOUNT, PUBKEY);
+
+        vm.expectEmit(true, true, true, true);
+        emit ValidiumBridge.ForcedWithdrawalRequested(0, bob, WITHDRAW_AMOUNT, block.timestamp + bridge.FORCED_WITHDRAWAL_DEADLINE());
+
+        bridge.requestForcedWithdrawal(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+
+        (bytes32 oldRoot, bytes32 newRoot, uint64 amount, address recipient, uint256 deadline) = bridge.forcedRequests(0);
+        assertEq(oldRoot, STATE_ROOT);
+        assertEq(newRoot, NEW_ROOT);
+        assertEq(amount, WITHDRAW_AMOUNT);
+        assertEq(recipient, bob);
+        assertEq(deadline, block.timestamp + bridge.FORCED_WITHDRAWAL_DEADLINE());
+        // stateRoot unchanged — request is queued, not applied
+        assertEq(bridge.stateRoot(), STATE_ROOT);
+    }
+
+    function test_requestForcedWithdrawal_revertsWhenFrozen() public {
+        _freezeBridge(bridge);
+        vm.expectRevert(ValidiumBridge.AlreadyFrozen.selector);
+        bridge.requestForcedWithdrawal(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+    }
+
+    function test_requestForcedWithdrawal_revertsStaleState() public {
+        bytes32 wrongRoot = keccak256("wrong-root");
+        vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.StaleState.selector, STATE_ROOT, wrongRoot));
+        bridge.requestForcedWithdrawal(hex"", wrongRoot, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+    }
+
+    function test_processForcedWithdrawal_executesAndDeletes() public {
+        _depositAs(alice, WITHDRAW_AMOUNT, PUBKEY);
+        bridge.requestForcedWithdrawal(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+
+        vm.expectEmit(true, true, true, true);
+        emit ValidiumBridge.ForcedWithdrawalProcessed(0);
+
+        bridge.processForcedWithdrawal(0);
+
+        assertEq(bridge.stateRoot(), NEW_ROOT);
+        assertEq(token.balanceOf(bob), WITHDRAW_AMOUNT);
+        // Request deleted (deadline == 0)
+        (, , , , uint256 deadline) = bridge.forcedRequests(0);
+        assertEq(deadline, 0);
+    }
+
+    function test_processForcedWithdrawal_revertsIfStateChanged() public {
+        _depositAs(alice, WITHDRAW_AMOUNT * 2, PUBKEY);
+        bridge.requestForcedWithdrawal(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+
+        // Operator posts a different withdrawal that changes stateRoot
+        bridge.withdraw(hex"", STATE_ROOT, THIRD_ROOT, WITHDRAW_AMOUNT, alice);
+
+        // Now the forced request's oldRoot doesn't match current stateRoot
+        vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.StaleState.selector, STATE_ROOT, THIRD_ROOT));
+        bridge.processForcedWithdrawal(0);
+    }
+
+    function test_processForcedWithdrawal_revertsNotFound() public {
+        vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.ForcedRequestNotFound.selector, 999));
+        bridge.processForcedWithdrawal(999);
+    }
+
+    function test_freezeOnExpiredRequest_freezesAfterDeadline() public {
+        _depositAs(alice, WITHDRAW_AMOUNT, PUBKEY);
+        bridge.requestForcedWithdrawal(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+
+        vm.warp(block.timestamp + bridge.FORCED_WITHDRAWAL_DEADLINE() + 1);
+
+        vm.expectEmit(true, true, true, true);
+        emit ValidiumBridge.Frozen(block.timestamp);
+
+        bridge.freezeOnExpiredRequest(0);
+        assertTrue(bridge.frozen());
+    }
+
+    function test_freezeOnExpiredRequest_revertsBeforeDeadline() public {
+        _depositAs(alice, WITHDRAW_AMOUNT, PUBKEY);
+        bridge.requestForcedWithdrawal(hex"", STATE_ROOT, NEW_ROOT, WITHDRAW_AMOUNT, bob);
+
+        vm.warp(block.timestamp + bridge.FORCED_WITHDRAWAL_DEADLINE());
+        vm.expectRevert(abi.encodeWithSelector(ValidiumBridge.ForcedRequestNotExpired.selector, 0));
+        bridge.freezeOnExpiredRequest(0);
+    }
+
+    // ---------------------------------------------------------------
     // Cross-language compatibility
     // ---------------------------------------------------------------
     function test_uint64ToLE_encoding() public pure {

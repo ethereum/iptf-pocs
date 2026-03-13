@@ -13,7 +13,7 @@ Four operations cover the institutional lifecycle:
 | **Transfer** | Private payment between accounts | Institutional settlements, stablecoin transfers |
 | **Bridge** | ERC20 deposit (gated) + withdrawal (proven exit) | On/off ramp between public and private systems |
 | **Disclosure** | Prove compliance without revealing data | Regulatory attestations, capital adequacy proofs |
-| **Escape Hatch** | Emergency fund recovery when operator disappears | Business continuity, regulatory fund access |
+| **Escape Hatch** | Emergency fund recovery when operator disappears or censors | Business continuity, regulatory fund access |
 
 ### Relationship to Prividium
 
@@ -185,7 +185,7 @@ diy-validium/
 
 ## Known Limitations
 
-- **Centralized operator**: Single operator holds all account data. Escape hatch (Operation 4) allows fund recovery after 7-day timeout, but users must save their account data after every transaction. Production would add DA layers (blob checkpoints) to reduce this burden.
+- **Centralized operator**: Single operator holds all account data. Escape hatch (Operation 4) allows fund recovery after 7-day timeout, and forced withdrawals provide anti-censorship protection (operator must process or system freezes within 1 day). Users must save their account data after every transaction. Production would add DA layers (blob checkpoints) to reduce this burden.
 - **Hash-based disclosure keys**: Uses `SHA256(pubkey || auditor_pubkey || "disclosure_v1")`, not encryption-based viewing keys. Production would use threshold decryption or verifiable encryption.
 - **Simple key derivation**: `pubkey = SHA256(secret_key)`. Production would use proper elliptic curve key derivation.
 - **In-memory storage**: Account state is held in memory. Production would use a persistent database.
