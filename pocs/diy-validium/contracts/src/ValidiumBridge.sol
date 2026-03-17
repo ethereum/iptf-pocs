@@ -49,6 +49,9 @@ contract ValidiumBridge {
     /// @notice Tracks which leaf indices have been claimed via escape withdrawal.
     mapping(uint256 => bool) public claimed;
 
+    /// @notice Maps pubkey → depositor address for front-running protection on escape withdrawal.
+    mapping(bytes32 => address) public escapeAddress;
+
     /// @notice Duration of operator inactivity before the bridge can be frozen.
     uint256 public constant ESCAPE_TIMEOUT = 7 days;
 
@@ -78,6 +81,8 @@ contract ValidiumBridge {
     error InvalidMerkleProof();
     error ForcedRequestNotFound(uint256 requestId);
     error ForcedRequestNotExpired(uint256 requestId);
+    error NotEscapeAddress();
+    error PubkeyAlreadyClaimed();
 
     event Deposit(address indexed depositor, bytes32 pubkey, uint256 amount);
     event Withdrawal(address indexed recipient, uint256 amount);
@@ -118,6 +123,11 @@ contract ValidiumBridge {
         // Verify membership proof: journal = abi.encodePacked(allowlistRoot)
         bytes memory membershipJournal = abi.encodePacked(allowlistRoot);
         verifier.verify(membershipSeal, MEMBERSHIP_IMAGE_ID, sha256(membershipJournal));
+
+        // CEI: effects before interaction
+        address existing = escapeAddress[pubkey];
+        if (existing != address(0) && existing != msg.sender) revert PubkeyAlreadyClaimed();
+        escapeAddress[pubkey] = msg.sender;
 
         require(token.transferFrom(msg.sender, address(this), amount), "Deposit transfer failed");
 
@@ -256,6 +266,7 @@ contract ValidiumBridge {
 
         bytes32 leaf = _accountCommitment(pubkey, balance, salt);
         if (!_verifyMerkleProof(leaf, leafIndex, merkleProof, stateRoot)) revert InvalidMerkleProof();
+        if (msg.sender != escapeAddress[pubkey]) revert NotEscapeAddress();
 
         // CEI: effects before interaction
         claimed[leafIndex] = true;
