@@ -26,10 +26,12 @@ Each PoC is independent—own language and tooling. No shared dependencies betwe
 
 ## PoCs
 
-| Name | Privacy Primitive | Status |
-|------|-------------------|--------|
-| [private-bond](./pocs/private-bond/) | Confidential bond transfers | In Progress |
-| [approach-private-trade-settlement](./pocs/approach-private-trade-settlement/) | Confidential atomic DvP settlement | Draft |
+| Name | Privacy Primitive | Approaches | Status |
+|------|-------------------|------------|--------|
+| [private-payment](./pocs/private-payment/) | Confidential stablecoin transfers | Shielded Pool (Noir), Plasma (Intmax2) | Complete |
+| [private-bond](./pocs/private-bond/) | Confidential bond transfers | Custom UTXO (Noir), Privacy L2 (Aztec), FHE (Zama) | Complete |
+| [private-trade-settlement](./pocs/private-trade-settlement/) | Confidential atomic DvP | TEE Swap | Complete |
+| [diy-validium](./pocs/diy-validium/) | Confidential institutional payments | Validium (RISC Zero) | Active |
 
 ## Contributing
 
@@ -37,4 +39,5 @@ See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for PR guidelines. Use [pocs/_t
 
 ## See Also
 
+- [iptf.ethereum.org](https://iptf.ethereum.org/) — Writeups and documentation
 - [iptf-map](https://github.com/ethereum/iptf-map) — Mapping of privacy primitives
