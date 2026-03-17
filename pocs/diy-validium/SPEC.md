@@ -108,6 +108,7 @@ bytes32 public allowlistRoot;
 uint256 public lastProofTimestamp;  // tracks operator liveness
 bool public frozen;                 // escape hatch activated
 mapping(uint256 => bool) public claimed;  // escape withdrawal tracking
+mapping(bytes32 => address) public escapeAddress;  // pubkey → depositor for front-running protection
 uint256 public forcedRequestCount;  // forced withdrawal request counter
 mapping(uint256 => ForcedRequest) public forcedRequests;  // pending forced withdrawals
 ```
@@ -336,18 +337,19 @@ Each successful `postTransferBatch` or `withdraw` resets the liveness timer, pre
 
 ### Flow
 
-```
-Anyone              Contract                    User
-  │                    │                          │
-  │ (7 days pass)      │                          │
-  │ freeze() ─────────▶│ frozen = true            │
-  │                    │                          │
-  │                    │◀── escapeWithdraw() ─────│
-  │                    │    (pubkey, balance,      │
-  │                    │     salt, merkleProof)    │
-  │                    │                          │
-  │                    │ verify Merkle proof       │
-  │                    │ transfer tokens ─────────▶│
+```mermaid
+sequenceDiagram
+    participant Anyone
+    participant Contract
+    participant User
+
+    Note over Anyone,Contract: 7 days pass with no operator activity
+    Anyone->>Contract: freeze()
+    Contract->>Contract: frozen = true
+
+    User->>Contract: escapeWithdraw(pubkey, balance, salt, merkleProof)
+    Contract->>Contract: verify Merkle proof
+    Contract->>User: transfer tokens
 ```
 
 ### What Users Must Save
@@ -360,9 +362,11 @@ To use the escape hatch, users must retain:
 | `balance` | 8 bytes (uint64) | Current balance |
 | `salt` | 32 bytes | Current salt |
 | `leafIndex` | uint256 | Position in Merkle tree |
-| Merkle proof | depth × 32 bytes | Sibling path to root |
+| Merkle proof | depth × 32 bytes | Sibling path to root; operator provides updated proof after each batch |
 
 **The salt changes on every state transition** (transfer, withdrawal). Users must save updated account data after each transaction. If they lose their current salt, they cannot construct a valid commitment and cannot escape.
+
+**The Merkle proof also changes whenever the tree is updated** — even from other users' transactions — because sibling hashes shift. After each batch, the operator distributes each user's updated sibling path (~640 bytes for a depth-20 tree, not the full tree). If the operator disappears and the user's proof is stale, they cannot construct a valid path to the committed root. This is the core problem that DA layers solve — see [Layered DA Extensions](#layered-da-extensions-future-work) for how blob checkpoints and encrypted blobs progressively reduce this dependency.
 
 ### Contract Interface
 
@@ -379,7 +383,29 @@ function escapeWithdraw(
 ) external;
 // Requires: frozen, !claimed[leafIndex], balance > 0
 // Verifies: SHA256(pubkey || balance_le || salt) is in the Merkle tree at leafIndex
+// Requires: msg.sender == escapeAddress[pubkey]
 // Sends: balance tokens to msg.sender
+```
+
+### Front-Running Protection
+
+Without address binding, `escapeWithdraw` sends tokens to `msg.sender`. An attacker monitoring the mempool could copy a legitimate escape transaction's calldata and front-run it, stealing the user's funds.
+
+**Fix: deposit-time address binding.** The contract stores `escapeAddress[pubkey] = msg.sender` during `deposit()`. During `escapeWithdraw()`, it verifies `msg.sender == escapeAddress[pubkey]`. This matches StarkEx's escape hatch pattern.
+
+This works because:
+1. **Every account enters via deposit** — the mapping is always populated before escape is needed.
+2. **Pubkeys are immutable during transfers** — only balance and salt change, so the mapping remains valid across all state transitions.
+3. **Pubkey claiming is exclusive** — once an address deposits to a pubkey, no other address can deposit to the same pubkey (`PubkeyAlreadyClaimed` revert). The same address can deposit again (e.g., topping up).
+
+```solidity
+// In deposit():
+if (escapeAddress[pubkey] != address(0) && escapeAddress[pubkey] != msg.sender)
+    revert PubkeyAlreadyClaimed();
+escapeAddress[pubkey] = msg.sender;
+
+// In escapeWithdraw():
+if (msg.sender != escapeAddress[pubkey]) revert NotEscapeAddress();
 ```
 
 ### Forced Withdrawal (Anti-Censorship)

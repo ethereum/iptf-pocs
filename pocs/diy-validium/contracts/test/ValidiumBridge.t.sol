@@ -161,6 +161,13 @@ contract ValidiumBridgeTest is Test {
         return proof;
     }
 
+    /// @dev Write escapeAddress[pubkey] = owner directly to storage.
+    ///      escapeAddress mapping is at storage slot 6.
+    function _setEscapeAddress(ValidiumBridge b, bytes32 pubkey, address owner) internal {
+        bytes32 slot = keccak256(abi.encodePacked(pubkey, uint256(6)));
+        vm.store(address(b), slot, bytes32(uint256(uint160(owner))));
+    }
+
     /// @dev Deploy a bridge with escape tree root and fund it with enough tokens.
     function _deployEscapeBridge() internal returns (ValidiumBridge) {
         ValidiumBridge escapeBridge = new ValidiumBridge(
@@ -175,6 +182,13 @@ contract ValidiumBridgeTest is Test {
         uint256 totalBalance =
             uint256(ESCAPE_BALANCE_0) + ESCAPE_BALANCE_1 + ESCAPE_BALANCE_2 + ESCAPE_BALANCE_3;
         token.mint(address(escapeBridge), totalBalance);
+
+        // Register escape addresses for front-running protection
+        _setEscapeAddress(escapeBridge, ESCAPE_PUBKEY_0, alice);
+        _setEscapeAddress(escapeBridge, ESCAPE_PUBKEY_1, bob);
+        _setEscapeAddress(escapeBridge, ESCAPE_PUBKEY_2, bob);
+        _setEscapeAddress(escapeBridge, ESCAPE_PUBKEY_3, alice);
+
         return escapeBridge;
     }
 
@@ -224,6 +238,28 @@ contract ValidiumBridgeTest is Test {
         assertEq(token.balanceOf(address(bridge)), amount);
         // Alice should have zero tokens left
         assertEq(token.balanceOf(alice), 0);
+    }
+
+    function test_deposit_setsEscapeAddress() public {
+        _depositAs(alice, DEPOSIT_AMOUNT, PUBKEY);
+        assertEq(bridge.escapeAddress(PUBKEY), alice);
+    }
+
+    function test_deposit_allowsSameDepositorTwice() public {
+        _depositAs(alice, DEPOSIT_AMOUNT, PUBKEY);
+        _depositAs(alice, DEPOSIT_AMOUNT, PUBKEY);
+        assertEq(bridge.escapeAddress(PUBKEY), alice);
+    }
+
+    function test_deposit_revertsPubkeyAlreadyClaimed() public {
+        _depositAs(alice, DEPOSIT_AMOUNT, PUBKEY);
+
+        token.mint(bob, DEPOSIT_AMOUNT);
+        vm.startPrank(bob);
+        token.approve(address(bridge), DEPOSIT_AMOUNT);
+        vm.expectRevert(ValidiumBridge.PubkeyAlreadyClaimed.selector);
+        bridge.deposit(DEPOSIT_AMOUNT, PUBKEY, hex"");
+        vm.stopPrank();
     }
 
     // ---------------------------------------------------------------
@@ -459,6 +495,40 @@ contract ValidiumBridgeTest is Test {
         bytes32[] memory proof = _getMerkleProof(0);
         vm.expectRevert(ValidiumBridge.InvalidAmount.selector);
         escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, 0, ESCAPE_SALT_0, proof);
+    }
+
+    function test_escapeWithdraw_revertsUnregisteredPubkey() public {
+        // Deploy bridge WITHOUT setting escape addresses
+        ValidiumBridge rawBridge = new ValidiumBridge(
+            IERC20(address(token)),
+            IRiscZeroVerifier(address(mockVerifier)),
+            escapeStateRoot,
+            ALLOWLIST_ROOT,
+            bytes32(0),
+            bytes32(0),
+            bytes32(0)
+        );
+        uint256 totalBalance =
+            uint256(ESCAPE_BALANCE_0) + ESCAPE_BALANCE_1 + ESCAPE_BALANCE_2 + ESCAPE_BALANCE_3;
+        token.mint(address(rawBridge), totalBalance);
+        _freezeBridge(rawBridge);
+
+        // escapeAddress[ESCAPE_PUBKEY_0] == address(0), so any non-zero sender reverts
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.prank(alice);
+        vm.expectRevert(ValidiumBridge.NotEscapeAddress.selector);
+        rawBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0, proof);
+    }
+
+    function test_escapeWithdraw_revertsNotEscapeAddress() public {
+        ValidiumBridge escapeBridge = _deployEscapeBridge();
+        _freezeBridge(escapeBridge);
+
+        // Bob tries to escape-withdraw alice's leaf (ESCAPE_PUBKEY_0 → alice)
+        bytes32[] memory proof = _getMerkleProof(0);
+        vm.prank(bob);
+        vm.expectRevert(ValidiumBridge.NotEscapeAddress.selector);
+        escapeBridge.escapeWithdraw(0, ESCAPE_PUBKEY_0, ESCAPE_BALANCE_0, ESCAPE_SALT_0, proof);
     }
 
     function test_escapeWithdraw_multipleUsers() public {

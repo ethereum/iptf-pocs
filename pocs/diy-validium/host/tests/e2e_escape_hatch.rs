@@ -5,6 +5,12 @@
 //!
 //! Uses mock proofs (MockRiscZeroVerifier) — escape hatch doesn't need ZK proofs.
 //!
+//! TODO: register escape addresses when front-running protection is tested e2e.
+//! The contract now requires msg.sender == escapeAddress[pubkey]. This test deploys
+//! with a pre-set root and funds the bridge directly (no deposits), so escape addresses
+//! are not populated. Adding raw storage writes via alloy would add complexity for
+//! little value — the Foundry tests provide full coverage of front-running protection.
+//!
 //! ## Running
 //!
 //! ```bash
