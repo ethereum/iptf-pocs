@@ -312,6 +312,7 @@ fn prove_membership(
     path: &[[u8; 32]],
     indices: &[bool],
     expected_root: &[u8; 32],
+    pubkey: &[u8; 32],
 ) -> Bytes {
     let env = risc0_zkvm::ExecutorEnv::builder()
         .write(leaf)
@@ -321,6 +322,8 @@ fn prove_membership(
         .write(&indices.to_vec())
         .unwrap()
         .write(expected_root)
+        .unwrap()
+        .write(pubkey)
         .unwrap()
         .build()
         .unwrap();
@@ -515,7 +518,7 @@ async fn e2e_full_lifecycle() {
     // Generate membership seal (real or empty)
     let membership_seal = if real_proofs {
         println!("  Generating real membership proof for allowlist...");
-        let seal = prove_membership(&alice_pubkey, &[], &[], &alice_pubkey);
+        let seal = prove_membership(&alice_pubkey, &[], &[], &alice_pubkey, &alice_pubkey);
         println!("  Membership proof verified locally: OK");
         seal
     } else {
