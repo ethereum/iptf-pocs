@@ -183,7 +183,7 @@ function executeTransfer(bytes seal, bytes32 oldRoot, bytes32 newRoot) {
 
 Deposits are gated by an allowlist membership proof: only pubkeys in the allowlist Merkle tree can deposit ERC20 tokens into the private system.
 
-The allowlist is a separate Merkle tree (same SHA-256 binary structure) whose leaves are SHA-256 hashes of authorized public keys. The operator maintains this tree off-chain and sets the `allowlistRoot` on the bridge contract. To authorize a new depositor, the operator adds their pubkey hash as a leaf, rebuilds the tree, and updates the on-chain root. The membership proof proves "my pubkey hash is a leaf in this tree" without revealing which leaf.
+The allowlist is a separate Merkle tree (same SHA-256 binary structure) whose leaves are authorized public keys. The operator maintains this tree off-chain and sets the `allowlistRoot` on the bridge contract. To authorize a new depositor, the operator adds their pubkey as a leaf, rebuilds the tree, and updates the on-chain root. The membership proof proves "my pubkey is a leaf in this tree" without revealing which leaf, and binds the proof to the specific pubkey being deposited.
 
 ```
 User                    Contract                 Operator
@@ -222,7 +222,10 @@ commit(old_root, new_root, amount, recipient);
 ```solidity
 function deposit(uint256 amount, bytes32 pubkey, bytes calldata membershipSeal) external {
     require(amount > 0);
-    verifier.verify(membershipSeal, MEMBERSHIP_IMAGE_ID, sha256(abi.encodePacked(allowlistRoot)));
+    // Journal binds both the allowlist root and the depositor's pubkey,
+    // preventing proof reuse with arbitrary keys
+    verifier.verify(membershipSeal, MEMBERSHIP_IMAGE_ID,
+        sha256(abi.encodePacked(allowlistRoot, pubkey)));
     token.transferFrom(msg.sender, address(this), amount);
     emit Deposit(msg.sender, pubkey, amount);
 }
@@ -423,6 +426,28 @@ Normal withdraw     →  Forced withdrawal    →  Escape hatch
                         or system freezes)      Merkle proof only)
 ```
 
+#### Two-Step Flow
+
+**Important:** `requestForcedWithdrawal()` does **not** update `stateRoot` or transfer tokens. It only queues the request. The actual state transition and token transfer happen in `processForcedWithdrawal()`, which is a separate transaction (typically called by the operator).
+
+```
+User                          Contract                     Operator
+  │                              │                            │
+  │ requestForcedWithdrawal() ──▶│                            │
+  │   (proof verified,           │ store request + deadline   │
+  │    NO state change,          │                            │
+  │    NO token transfer)        │                            │
+  │                              │                            │
+  │                              │◀── processForcedWithdrawal()
+  │                              │   stateRoot = newRoot      │
+  │                              │   transfer tokens ────────▶│
+  │                              │   delete request           │
+  │                              │                            │
+  ├── OR: deadline expires ─────▶│                            │
+  │   freezeOnExpiredRequest() ──▶│ frozen = true             │
+  │                              │ (escape hatch enabled)     │
+```
+
 #### How It Works
 
 1. **User submits** `requestForcedWithdrawal(seal, oldRoot, newRoot, amount, recipient)` — same arguments as `withdraw()`, with a valid ZK withdrawal proof. The contract verifies the proof but does **not** update `stateRoot` or transfer tokens. It stores the request with a deadline (`block.timestamp + FORCED_WITHDRAWAL_DEADLINE`, default 1 day).
@@ -504,14 +529,17 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - Maps pubkeys to real identities
 - Controls data availability
 
+**Deposit trust gap:** When a user deposits, the contract locks their ERC20 tokens and emits a `Deposit` event. The operator is expected to credit the corresponding private balance off-chain, but this is **not enforced on-chain**. If the operator fails to credit the deposit — whether through malice, bugs, or downtime — the user's tokens are locked in the bridge with no on-chain recourse. The escape hatch requires the user to be in the state tree (i.e., the operator must have credited them). This is an inherent limitation of the validium pattern where state lives off-chain. Production mitigations include: operator bonding/slashing, supply audit proofs (see Future Work), or a deposit queue with timeout-based refunds.
+
 **Liveness risk:** If the operator goes offline, no new proofs can be submitted and no withdrawals can be processed. The escape hatch (Operation 4) mitigates this: after 7 days of inactivity, anyone can freeze the bridge, and users can recover funds by revealing their balance on-chain via Merkle proof. Users must save their current account data (pubkey, balance, salt, leaf index, Merkle proof) after every transaction to use the escape hatch. Production would add DA layers (blob checkpoints, encrypted blobs) to reduce this burden.
 
 **Enforced by ZK + on-chain verification:**
 - Cannot forge a transfer or withdrawal without the sender's secret key
 - Cannot double-spend (sequential root check prevents replay)
-- Cannot steal funds via withdrawal (proofs verified on-chain)
+- Cannot steal funds via invalid withdrawal proofs (proofs verified on-chain)
 - Cannot update state root without a valid proof
 - Cannot fake a disclosure proof (bound to real account state + specific auditor)
+- Cannot reuse a membership proof for a different pubkey (proof binds allowlist root + pubkey)
 
 ## Limitations & Shortcuts (PoC Scope)
 

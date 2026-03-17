@@ -120,8 +120,9 @@ contract ValidiumBridge {
         if (frozen) revert AlreadyFrozen();
         if (amount == 0) revert InvalidAmount();
 
-        // Verify membership proof: journal = abi.encodePacked(allowlistRoot)
-        bytes memory membershipJournal = abi.encodePacked(allowlistRoot);
+        // Verify membership proof: journal = abi.encodePacked(allowlistRoot, pubkey)
+        // Binding pubkey in the journal prevents proof reuse with arbitrary keys
+        bytes memory membershipJournal = abi.encodePacked(allowlistRoot, pubkey);
         verifier.verify(membershipSeal, MEMBERSHIP_IMAGE_ID, sha256(membershipJournal));
 
         // CEI: effects before interaction
