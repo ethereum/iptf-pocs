@@ -46,7 +46,7 @@ Build a Validium-style system where:
 - Full account state lives off-chain (operator database)
 - Merkle roots of state are committed on-chain
 - Zero-knowledge proofs validate state transitions
-- RISC Zero provides the proving system (Rust guest programs, no trusted setup)
+- RISC Zero provides the proving system: a STARK-based zkVM (no trusted setup at the proving layer). For on-chain verification, STARK proofs are compressed to Groth16 (~200K-300K gas), which relies on RISC Zero's universal trusted setup (shared across all programs, not per-circuit). The PoC uses `MockRiscZeroVerifier` for testing; production would use `RiscZeroGroth16Verifier`
 
 | Alternative | Why Not |
 |-------------|---------|
@@ -547,7 +547,7 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - **Hash-based disclosure keys** — Production: threshold decryption or verifiable encryption (Penumbra, Aztec)
 - **Simple key derivation** (`pubkey = SHA256(sk)`) — Production: EC key derivation (ed25519)
 - **In-memory storage** — Production: persistent database
-- **IMAGE_IDs as constructor params** — Contracts accept IMAGE_IDs as immutable constructor parameters. The E2E test passes real IMAGE_IDs (from compiled guest ELFs) and real encoded seals via `risc0-ethereum-contracts`. The deploy script defaults to `bytes32(0)` for local/testnet use. Full on-chain verification requires swapping `MockRiscZeroVerifier` for `RiscZeroGroth16Verifier`, which needs Groth16 proof compression (Bonsai or x86 only — ARM Macs cannot produce Groth16 proofs natively).
+- **IMAGE_IDs and proof pipeline** — Contracts accept IMAGE_IDs as immutable constructor parameters. The E2E test passes real IMAGE_IDs (from compiled guest ELFs) and real encoded seals via `risc0-ethereum-contracts`. The deploy script defaults to `bytes32(0)` for local/testnet use. The full proof pipeline is: RISC Zero zkVM generates a STARK proof off-chain → the STARK is compressed to a Groth16 proof (via Bonsai or local x86 prover — ARM Macs cannot produce Groth16 proofs natively) → the Groth16 proof is what the on-chain verifier checks (~200K-300K gas). Full on-chain verification requires swapping `MockRiscZeroVerifier` for `RiscZeroGroth16Verifier`.
 - **No batching** — One proof per operation; production would batch
 - **Single ERC20** — Production: add `asset_id` to commitment scheme
 - **No access control on contract functions** — Any address can submit a valid proof. Production: restrict `executeTransfer` / `withdraw` to an operator address or multisig to prevent front-running and ordering manipulation.
@@ -576,6 +576,8 @@ Compare: Circom requires ~80 lines of manual signal routing and SHA-256 constrai
 - **Escape Hatch** — Emergency withdrawal mechanism when operator is unresponsive or censoring; users reveal balance on-chain to recover funds
 - **Forced Withdrawal** — User-initiated on-chain withdrawal request with a deadline; operator must process it or the system freezes (anti-censorship)
 - **Freeze** — Irreversible state transition that disables normal operations and enables escape withdrawals; triggered by operator inactivity timeout or an expired forced withdrawal request
+- **STARK** — Scalable Transparent Argument of Knowledge. The proof system used by RISC Zero's zkVM. STARKs require no trusted setup but produce large proofs (~hundreds of KB), making direct on-chain verification prohibitively expensive
+- **Groth16** — A succinct non-interactive proof system that produces compact proofs (~200 bytes) verifiable on-chain in ~200K-300K gas. RISC Zero compresses STARK proofs to Groth16 for L1 verification. Groth16 requires a trusted setup — RISC Zero uses a universal setup (shared across all programs, not per-circuit)
 - **Prividium Pattern** — Privacy by default, transparency by choice
 
 ## References

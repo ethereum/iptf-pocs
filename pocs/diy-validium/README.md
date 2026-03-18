@@ -44,7 +44,7 @@ Aztec is the most prominent privacy-native L2, using Noir as its ZK language. Di
 | **ZK Language** | Rust via RISC Zero zkVM (general-purpose, large ecosystem) | Noir (ZK-specific DSL, growing ecosystem) |
 | **Compliance Logic** | Custom Rust functions -- institutions write their own rules | Platform-level privacy; custom compliance requires Noir expertise |
 | **Deployment Target** | Ethereum L1 directly (Solidity verifier contracts) | Aztec L2 (separate network, bridges to Ethereum) |
-| **Gas Cost** | High per-proof (~200K--400K gas for STARK verification on L1) | Amortized across L2 block; users pay L2 fees |
+| **Gas Cost** | High per-proof (~200K--300K gas for Groth16 verification on L1; STARKs are compressed to Groth16 before posting) | Amortized across L2 block; users pay L2 fees |
 | **Bridging** | Native -- ERC20 deposits/withdrawals directly on L1 | Requires L1-L2 bridge with messaging delay |
 | **Privacy Model** | Selective: operator sees everything, users prove to auditors | Default encrypted notes; viewing keys for selective disclosure |
 | **Data Availability** | Operator-held (trust assumption) | L2 DA layer with encrypted note storage |
@@ -111,7 +111,7 @@ cd contracts && forge test --offline
 # Dev mode: uses fake proofs for fast iteration (~seconds)
 RISC0_DEV_MODE=1 cargo run
 
-# Real proving: generates actual STARK proofs (~minutes)
+# Real proving: generates STARK proofs locally (~minutes, not compressed to Groth16)
 cargo run
 ```
 
@@ -169,7 +169,7 @@ diy-validium/
 
 **Primitives:**
 - SHA-256 for commitments and Merkle tree hashing (hardware-accelerated in RISC Zero)
-- RISC Zero STARK-based proof system (no trusted setup)
+- RISC Zero STARK-based proof system (STARKs require no trusted setup; on-chain L1 verification uses Groth16 compression, which relies on RISC Zero's universal trusted setup)
 - Binary Merkle trees (depth 20 in spec, depth 4 in demo for speed)
 
 **What is protected:**
