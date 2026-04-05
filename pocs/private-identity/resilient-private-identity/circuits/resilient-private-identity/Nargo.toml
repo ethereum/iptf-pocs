@@ -1,0 +1,7 @@
+[package]
+name = "resilient_private_identity"
+type = "bin"
+authors = ["rymnc <43716372+rymnc@users.noreply.github.com>"]
+compiler_version = ">=0.36.0"
+
+[dependencies]

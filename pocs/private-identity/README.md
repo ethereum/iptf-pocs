@@ -1,4 +1,4 @@
-# Private Auth
+# Private Identity
 
 > **Status:** Draft
 > **Privacy Primitive:** Usage of Anonymized credentials verifiable on ethereum
@@ -26,5 +26,5 @@ TBD
 
 ## References
 
-- [Private Auth Use Case (iptf-map)](https://github.com/ethereum/iptf-map/blob/master/use-cases/private-auth.md)
-- [Private Auth Approach (iptf-map)](https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-auth.md)
+- [Private Identity Use Case (iptf-map)](https://github.com/ethereum/iptf-map/blob/master/use-cases/private-identity.md)
+- [Private Identity Approach (iptf-map)](https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-identity.md)

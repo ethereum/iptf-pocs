@@ -1,16 +1,16 @@
 ---
-title: "Private Auth Requirements"
-use_case: "https://github.com/ethereum/iptf-map/blob/master/use-cases/private-auth.md"
-approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-auth.md"
+title: "Private Identity Requirements"
+use_case: "https://github.com/ethereum/iptf-map/blob/master/use-cases/private-identity.md"
+approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-identity.md"
 ---
 
-# Private Auth Requirements
+# Private Identity Requirements
 
 ## 1. Core Problem
 
 On-chain access control currently requires revealing identity. Addresses are linked to real-world entities, and every authorization check produces a public, correlatable record. Institutions need to gate access to on-chain resources based on verified properties of the caller without exposing who the caller is or what credentials they hold.
 
-> From [Private Authentication](https://github.com/ethereum/iptf-map/blob/master/use-cases/private-auth.md): "Current methods expose addresses and create linkability. The framework requires hiding prover identities and inter-verifier links while allowing auditor access and enabling replay attack resilience."
+> From [Private Identity](https://github.com/ethereum/iptf-map/blob/master/use-cases/private-identity.md): "Current methods expose addresses and create linkability. The framework requires hiding prover identities and inter-verifier links while allowing auditor access and enabling replay attack resilience."
 
 ## 2. Functional Requirements (MUST)
 
