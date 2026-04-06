@@ -55,7 +55,7 @@ The vOPRF approach provides sybil resistance without biometric hardware, works w
 | **BN254 (alt_bn128)** | Elliptic curve. Ethereum precompiles EIP-196/EIP-197. ~100-110 bits classical security. |
 | **@zk-kit/imt v2.1.0** | Incremental Merkle tree (Solidity). Depth 20, capacity 2^20. |
 | **vOPRF (RFC 9497 extended)** | Threshold OPRF for sybil-resistant enrollment nullifier derivation. |
-| **hashToCurve (RFC 9380)** | Simplified SWU mapping for BN254 G1. DST: `"RIC-V1-BN254G1_XMD:SHA-256_SSWU_RO_"`. |
+| **hashToCurve (RFC 9380)** | Fouque-Tibouchi SVDW (Shallue-van de Woerter) mapping for BN254 G1. Field element derived via `Poseidon(DOMAIN_H2C, user_id_hash)`. |
 
 ## Protocol Design
 
@@ -79,7 +79,7 @@ Precondition: MPC network is available. Enrollee has a Web2 identity with crypto
 Note: ZK Email requires the identity provider's DKIM public keys to have been published in DNS at some prior point. TLSNotary requires the provider's web service to have been accessible when the session was recorded. These sources work when the issuer became adversarial after the enrollee obtained their credential, but not when the issuer retroactively deletes all cryptographic evidence.
 
 1. Enrollee proves Web2 identity ownership via a supported source. Derives canonical `user_id` per the Identity Source Canonicalization table. Computes `user_id_hash = SHA-256(canonical_user_id) mod r`. Generates random `salt` from F_r. Computes `identity_commitment = H(DOMAIN_LINK, user_id_hash, salt)`.
-2. Enrollee computes `G_id = hashToCurve(canonical_user_id)` (off-chain, not in-circuit). Picks random `r` from F_r \ {0}. Computes `blinded_request = r * G_id`.
+2. Enrollee computes `G_id` via SVDW hash-to-curve from `user_id_hash` (see `G_id` in Symbols table). Picks random `r` from F_r \ {0}. Computes `blinded_request = r * G_id`.
 3. Enrollee generates `pi_link` proving `blinded_request` and `identity_commitment` derive from the same `user_id` (see Circuit: Identity-Blinding Link Proof).
 4. Enrollee sends `BlindEvaluateRequest { blinded_request, identity_commitment, pi_link, session_nonce }` to the vOPRF MPC network. Enrollment transactions SHOULD be submitted via a private mempool (e.g., Flashbots Protect) to prevent front-running.
 5. Each MPC node `i` verifies `pi_link`, checks `blinded_request` is not the point at infinity, then responds with `partial_evaluation_i = s_i * blinded_request` and a per-node DLEQ proof.
@@ -129,18 +129,18 @@ This section defines acceptance criteria for the issuer-independence property, n
 | `enrollment_nullifier` | `H(DOMAIN_ENROLLMENT_NULL, raw_nullifier.x, raw_nullifier.y)`, where `raw_nullifier` is the unblinded vOPRF output |
 | `identity_commitment` | `H(DOMAIN_LINK, user_id_hash, salt)` |
 | `user_id_hash` | `SHA-256(canonical_user_id) mod r`, where `r` is the BN254 scalar field order |
-| `G_id` | `hashToCurve(canonical_user_id)` per RFC 9380 |
+| `G_id` | SVDW hash-to-curve from `user_id_hash`: `t = H(DOMAIN_H2C, user_id_hash)`, then Fouque-Tibouchi SVDW map over BN254 Fq with y-canonicalization to even parity |
 | `application_scope` | `bytes32`: `keccak256(abi.encodePacked(application_name))`. MUST be stable across sessions for the same application. |
 | `verifier_address` | Ethereum address of the entity requesting verification, zero-extended to 256 bits and interpreted as a BN254 scalar |
 | `chain_id` | EIP-155 chain identifier, interpreted as a BN254 scalar |
 
 #### Domain Separation Tags
 
-All Poseidon invocations MUST include a domain separation tag as the first argument. Implementations MUST NOT omit the tag even when its value is 0.
+All Poseidon invocations except Merkle node hashing MUST include a domain separation tag as the first argument. Merkle node hashing omits the tag to match the on-chain LeanIMT implementation (`PoseidonT3.hash([left, right])`).
 
 | Tag | Value | Usage | Poseidon t |
 |-----|-------|-------|------------|
-| `DOMAIN_MERKLE_NODE` | 0 | Merkle tree internal nodes | 3 (tag + 2 children) |
+| *(none)* | — | Merkle tree internal nodes | 3 (2 children, no tag) |
 | `DOMAIN_LEAF` | 1 | Leaf commitment | 4 (tag + secret + attr_hash) |
 | `DOMAIN_NULLIFIER` | 2 | Presentation nullifier | 4 (tag + secret + ext_null) |
 | `DOMAIN_ENROLLMENT_NULL` | 3 | vOPRF enrollment nullifier | 4 (tag + x + y) |
@@ -148,8 +148,9 @@ All Poseidon invocations MUST include a domain separation tag as the first argum
 | `DOMAIN_EXTERNAL_NULLIFIER` | 5 | External nullifier derivation | 5 (tag + chain_id + addr + scope) |
 | `DOMAIN_NAME` | 6 | Name hash derivation | 3 (tag + name_digest) |
 | `DOMAIN_LINK` | 7 | Identity-blinding link proof | 4 (tag + user_id_hash + salt) |
+| `DOMAIN_H2C` | 8 | SVDW hash-to-curve field derivation | 3 (tag + user_id_hash) |
 
-The Poseidon `t` column specifies the state width for each invocation: `t = input_count + 1` (capacity element). The domain tag is counted as an input. Each `t` value requires its own Poseidon parameterization (round constants, MDS matrix).
+The Poseidon `t` column specifies the state width for each invocation: `t = input_count + 1` (capacity element). The domain tag is counted as an input where present. Each `t` value requires its own Poseidon parameterization (round constants, MDS matrix).
 
 #### Attribute Encoding (version = 1)
 
@@ -261,7 +262,7 @@ All contracts inherit a `Pausable` modifier controlled by the governance multisi
 
 #### IdentityTree.sol
 
-Incremental Merkle tree (depth 20, Poseidon t=3 with DOMAIN_MERKLE_NODE) with a universal vOPRF sybil gate.
+Incremental Merkle tree (depth 20, Poseidon t=3 without domain tag) with a universal vOPRF sybil gate.
 
 **State:**
 - `leaves: bytes32[]` (appended on insertion)
@@ -332,12 +333,12 @@ This function MUST revert on ANY failure condition. It does not return a value. 
 | Primitive | Specification | Parameters |
 |-----------|---------------|------------|
 | Hash | Poseidon | Noir v1.0.0-beta.3 stdlib `std::hash::poseidon`. BN254 scalar field. t-values per Domain Separation Tags table. Round constants from Noir's deterministic generation for each t. Implementations MUST use the exact Noir version specified. |
-| Merkle tree | Incremental Merkle tree, depth 20 | Poseidon with `DOMAIN_MERKLE_NODE` tag for internal nodes: `H(0, left, right)` with t=3. Solidity: `@zk-kit/imt@2.1.0`. Zero value: `bytes32(0)`. Capacity: 2^20 = 1,048,576 leaves. |
+| Merkle tree | Incremental Merkle tree, depth 20 | Poseidon without domain tag for internal nodes: `Poseidon(left, right)` with t=3, matching LeanIMT on-chain. Solidity: `@zk-kit/imt@2.1.0`. Zero value: `bytes32(0)`. Capacity: 2^20 = 1,048,576 leaves. |
 | Proving system | Noir v1.0.0-beta.3, UltraHonk backend | Barretenberg v0.82.0. Universal SRS (Aztec Ignition ceremony, 2^20 points). No per-circuit trusted setup. SRS integrity depends on at least one honest ceremony participant. Verifier contracts generated via `bb write_vk && bb write_solidity_verifier`. WARNING: UltraHonk has no known third-party audit as of this writing. |
 | Curve | BN254 (alt_bn128) | Ethereum precompiles EIP-196 (addition, scalar multiplication), EIP-197 (optimal ate pairing check). ~100-110 bits of classical security post Kim-Barbulescu tower NFS improvements. |
 | Nullifier | `H(DOMAIN_TAG, secret, scope)` | Deterministic, collision-resistant under Poseidon's security assumptions. |
 | vOPRF | Based on RFC 9497 modeVOPRF (0x01) | Extended with threshold secret sharing per Jarecki et al. The threshold extension is non-standard; RFC 9497 defines only single-server modes. MPC key via Shamir t-of-n secret sharing with verifiable key generation. |
-| hashToCurve | RFC 9380, simplified SWU for BN254 G1 | DST: `"RIC-V1-BN254G1_XMD:SHA-256_SSWU_RO_"`. Hash: SHA-256. Z: -1 (the SSWU constant for BN254 `y^2 = x^3 + 3`). No isogeny map (direct mapping to BN254 G1). Cofactor: 1. Input: canonical `user_id` UTF-8 bytes. Implementations MUST follow RFC 9380 Section 5 (hash_to_field) and Section 6.6.2 (simplified SWU). |
+| hashToCurve | RFC 9380, Fouque-Tibouchi SVDW for BN254 G1 | Field element derived via `t = H(DOMAIN_H2C, user_id_hash)` (Poseidon). Three candidate x-coordinates computed via SVDW algebraic map with hardcoded constants `sqrt(-3)` and `C1 = (sqrt(-3) - 1) / 2` over BN254 Fq. First candidate where `x^3 + 3` is a quadratic residue is selected. Y-coordinate canonicalized to even parity (LSB = 0). Cofactor: 1. No isogeny map (direct mapping to BN254 G1). Implementations MUST use the exact SVDW constants specified. |
 
 #### Chaum-Pedersen DLEQ Verification
 
@@ -413,7 +414,9 @@ lambda_i = product_{j in S, j != i} (j / (j - i))    // arithmetic in F_r
 
 **Public inputs:** `root`, `nullifier`, `external_nullifier`, `version`, `predicate_type`, `predicate_attr_index`, `predicate_value`, `predicate_result`
 
-**Private inputs:** `identity_secret`, `attr[0..3]`, `leaf_index`, `merkle_path[0..19]`
+**Private inputs:** `identity_secret`, `attr[0..3]`, `proof_length` (u32), `leaf_index_bits` ([u1; 20], bit decomposition LSB-first), `merkle_path` ([Field; 20])
+
+The `proof_length` parameter specifies the actual depth of the LeanIMT Merkle proof (which may be less than the maximum depth of 20). Siblings beyond `proof_length` are zero-padded. The `leaf_index_bits` array encodes the leaf position as a bit decomposition where bit `i` indicates whether the leaf is the right child at level `i`.
 
 Note: `attr_hash`, `leaf`, and `version`-dependent computations are derived intermediate values inside the circuit, not independent private inputs.
 
@@ -455,17 +458,27 @@ Note: `attr_hash` is a derived intermediate value computed inside the circuit fr
 | Constraint | |
 |------------|--|
 | `identity_commitment == H(DOMAIN_LINK, user_id_hash, salt)` | commitment well-formedness |
-| `G_id == hashToCurve(user_id)` | deterministic curve point (see note) |
+| `t = H(DOMAIN_H2C, user_id_hash)` | SVDW field element derivation |
+| `t != 0` | non-degenerate SVDW input |
+| `w * (4 + t²) == sqrt(-3) * t` | SVDW division witness verification |
+| `inv_w2 * w² == 1` | SVDW inverse witness verification |
+| `x1 = C1 - t * w`, `x2 = -1 - x1`, `x3 = 1 + inv_w2` | SVDW candidate x-coordinates |
+| `G_id.x == x_{svdw_index}` | selected candidate matches `G_id` |
+| For `svdw_index > 0`: `w0² == -(x1³ + 3)` | non-QR proof for candidate 0 |
+| For `svdw_index > 1`: `w1² == -(x2³ + 3)` | non-QR proof for candidate 1 |
+| `G_id.y` has even parity (LSB = 0) | y-canonicalization |
+| `G_id` is on BN254 (`y² == x³ + 3`) | curve membership |
 | `blinded_request == r * G_id` | blinding correctness |
+| `blinded_request` is on BN254 | curve membership |
 | `r != 0` | non-trivial blinding |
 
-**Public inputs:** `identity_commitment`, `blinded_request`, `G_id_x`, `G_id_y`
+**Public inputs:** `identity_commitment`, `blinded_request_x`, `blinded_request_y`, `G_id_x`, `G_id_y`
 
-**Private inputs:** `user_id_hash`, `salt`, `r`
+**Private inputs:** `user_id_hash`, `salt`, `r`, `svdw_index` (u8, which SVDW candidate: 0, 1, or 2), `svdw_w` (division witness), `svdw_inv_w2` (inverse witness for w²), `non_qr_witness_0`, `non_qr_witness_1` (non-QR proofs for earlier candidates)
 
 This proof is verified by the vOPRF MPC network before responding to blinded requests. It ensures the enrollee cannot submit arbitrary blinded points unrelated to their proven identity.
 
-**hashToCurve feasibility note:** The constraint `G_id == hashToCurve(user_id)` requires hash-to-curve inside the circuit, which is expensive (~200K+ constraints for SSWU + SHA-256). For PoC feasibility, `G_id` is a public input to this circuit, and the MPC nodes independently compute `hashToCurve(user_id)` from the identity proof and verify `G_id` matches before accepting the proof. This shifts the hashToCurve binding from a circuit constraint to a trust assumption on the MPC network (which already holds the OPRF key). Production path: in-circuit hashToCurve using a ZK-friendly hash function (e.g., Poseidon-based map-to-curve).
+**In-circuit hash-to-curve:** The SVDW (Fouque-Tibouchi) map-to-curve is computed entirely inside the circuit using witness-based verification. Instead of computing square roots in-circuit (which is expensive), the prover supplies precomputed witnesses (`svdw_w`, `svdw_inv_w2`, `non_qr_witness_*`) and the circuit verifies algebraic relations. The `sqrt(-3)` and `C1` constants are hardcoded to prevent root-choice attacks. Y-canonicalization to even parity prevents y-negation attacks where `(x, -y)` would produce a different OPRF output. The non-QR witnesses enforce canonical candidate selection: if `svdw_index = k`, the prover must prove that candidates 0 through k-1 have non-residue right-hand sides, exploiting the BN254 Fq property that `-1` is a non-quadratic residue (since `q ≡ 3 mod 4`).
 
 ## Security Model
 
@@ -482,7 +495,7 @@ The adversary is a single issuer who cooperated during initial credential issuan
 | Membership soundness | Only holders who completed vOPRF enrollment can produce valid membership proofs. |
 | Nullifier uniqueness | A holder cannot present twice in the same application context without detection. |
 | Sybil resistance | The vOPRF enrollment nullifier is deterministic per canonical `user_id`. Duplicate enrollment is rejected on-chain via the `usedEnrollmentNullifiers` mapping. Each real-world identity maps to exactly one leaf, modulo the MPC honest-threshold assumption and `user_id` canonicalization correctness. |
-| Domain separation | All Poseidon invocations use unique domain tags (values 0-7) with specified arities, preventing cross-context collisions. Merkle tree nodes use DOMAIN_MERKLE_NODE=0 with t=3, distinct from all other invocations. |
+| Domain separation | All Poseidon invocations use unique domain tags (values 1-8) with specified arities, preventing cross-context collisions. Merkle tree nodes use untagged Poseidon t=3, distinct from all tagged invocations. |
 | Root freshness | Proofs are valid against any of the last 1000 stored roots. |
 | Selective disclosure | Verifiers learn the predicate result and the public predicate parameters (type, index, value). Attribute indices 2 and 3 are non-queryable. The attribute vector itself remains hidden behind `identity_secret`. Note: predicate parameters are public inputs (see "Predicate parameter leakage" in Limitations). |
 | Issuer independence | No protocol operation after enrollment requires issuer participation. |
@@ -517,7 +530,7 @@ The adversary is a single issuer who cooperated during initial credential issuan
 
 ### Contract Deployment Order
 
-1. Deploy `IdentityTree(address governance)`. The constructor initializes all 1000 `recentRoots` slots to the empty-tree root (Poseidon hash of `DOMAIN_MERKLE_NODE` applied recursively with zero leaves for depth 20). Sets `governance` to the multisig address.
+1. Deploy `IdentityTree(address governance)`. The constructor initializes all 1000 `recentRoots` slots to the empty-tree root (untagged Poseidon applied recursively with zero leaves for depth 20). Sets `governance` to the multisig address.
 2. Deploy `Enrollment(address identityTree, uint256 mpcPubKeyX, uint256 mpcPubKeyY, address multisig, address guardian)`. The constructor validates the MPC public key is on BN254 G1.
 3. Deploy `IdentityVerifier(address identityTree)`.
 4. Call `IdentityTree.addAuthorized(address(Enrollment))` from the governance multisig.
@@ -538,7 +551,7 @@ Verification keys are embedded in the generated Solidity contracts and are immut
 | Tree depth | 20 | Cryptographic Primitives |
 | Tree capacity | 2^20 = 1,048,576 | Cryptographic Primitives |
 | Root buffer K | 1000 | IdentityTree.sol |
-| Domain tags | 0-7 | Domain Separation Tags |
+| Domain tags | 1-8 (merkle nodes untagged) | Domain Separation Tags |
 | Attribute count (v1) | 4 | Attribute Encoding |
 | Queryable attributes (v1) | Indices 0-1 | Attribute Encoding |
 | MPC threshold | t=4 of n=7 | vOPRF MPC Protocol |
@@ -546,7 +559,7 @@ Verification keys are embedded in the generated Solidity contracts and are immut
 | Timelock | 14400 blocks (~48h) | Enrollment.sol |
 | Grace period | 14400 blocks (~48h) | Enrollment.sol |
 | Identity proof max age | 90 days | Enrollment flow |
-| hashToCurve DST | `"RIC-V1-BN254G1_XMD:SHA-256_SSWU_RO_"` | Cryptographic Primitives |
+| hashToCurve | Fouque-Tibouchi SVDW, Poseidon field derivation | Cryptographic Primitives |
 | Noir version | v1.0.0-beta.3 | Cryptographic Primitives |
 | Barretenberg version | v0.82.0 | Cryptographic Primitives |
 | @zk-kit/imt version | v2.1.0 | Cryptographic Primitives |
@@ -563,7 +576,7 @@ Verification keys are embedded in the generated Solidity contracts and are immut
 | **Leaf** | A Poseidon commitment to `identity_secret` and `attr_hash`. The holder's entry in the Merkle tree. |
 | **pi_link** | The identity-blinding link proof. Binds a blinded OPRF request to an identity commitment without revealing the underlying `user_id`. |
 | **MPC** | Multi-Party Computation. In this protocol, the threshold vOPRF network where `t` of `n` nodes must cooperate to produce an OPRF evaluation. |
-| **hashToCurve** | RFC 9380 mapping from arbitrary bytes to a BN254 G1 point. Used to derive `G_id` from `user_id`. |
+| **hashToCurve** | Fouque-Tibouchi SVDW mapping from a field element to a BN254 G1 point, based on RFC 9380 principles. Field element derived via Poseidon. Used to derive `G_id` from `user_id_hash`. Computed in-circuit in the link proof with witness-based verification. |
 
 ## References
 

@@ -1,3 +1,7 @@
 [workspace]
-members = ["circuits/resilient-private-identity"]
-default-member = "circuits/resilient-private-identity"
+members = [
+    "circuits/lib",
+    "circuits/membership",
+    "circuits/enrollment",
+    "circuits/link_proof",
+]
