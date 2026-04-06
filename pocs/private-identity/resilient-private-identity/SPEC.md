@@ -178,7 +178,7 @@ The `user_id` is derived from a Web2 identity proof source. Each source type def
 
 All `user_id` values MUST be encoded as UTF-8, normalized to NFC form (Unicode Normalization Form C), and prefixed with the source type. Implementations MUST reject `user_id` values that are not in canonical form.
 
-Cross-source sybil resistance: The PoC restricts enrollment to a single identity source type per deployment (configured at deployment time). Cross-source identity binding is deferred to production.
+Cross-source sybil resistance: The PoC restricts enrollment to a single identity source type per deployment (configured at deployment time). See Future Work: Multi-Source Identity Integration for the production path via tiered canonical identity derivation and recursive per-source `pi_link` circuits.
 
 #### Verifiable Credential Format
 
@@ -508,7 +508,7 @@ The adversary is a single issuer who cooperated during initial credential issuan
 | Limitation | Scope | Mitigation |
 |------------|-------|------------|
 | Key loss is permanent | PoC | No revocation mechanism. If a holder loses `identity_secret`, the leaf remains in the tree and the enrollment nullifier remains consumed. Shamir secret sharing of `identity_secret` across trusted devices is recommended. Production: revocation bitmap checked in-circuit alongside Merkle membership, with governance-gated enrollment nullifier clearing. |
-| Self-declared attributes | Design | Enrollees self-declare their attribute vector. The protocol does not validate attribute truthfulness on-chain. Identity proof sources (Anon Aadhaar, ZKPassport) can provide verifiable attributes, but the binding between the identity proof and the committed attributes is not enforced on-chain. Production: in-circuit verification of identity proof claims against committed attributes. |
+| Self-declared attributes | Design | Enrollees self-declare their attribute vector. The protocol does not validate attribute truthfulness on-chain. Identity proof sources (Anon Aadhaar, ZKPassport) can provide verifiable attributes, but the binding between the identity proof and the committed attributes is not enforced on-chain. See Future Work: Multi-Source Identity Integration for the production path via recursive per-source `pi_link` circuits with in-circuit attribute extraction. |
 | Predicate parameter leakage | Design | `predicate_type`, `predicate_attr_index`, `predicate_value`, and `predicate_result` are public inputs visible on-chain. Every verification transaction permanently records the exact attribute query and result. With 2 queryable dimensions (`age_over_18`: 2 values, `nationality`: ~249 values), the anonymity set ceiling is ~498 buckets. Per de Montjoye et al. (2013), approximately 4 independent observations uniquely identify 95% of individuals. Production: universal predicate circuits where all predicate parameters are private inputs. |
 | Transaction graph linkability | Design | Without a relayer, the Ethereum transaction graph links enrollment to verification via address reuse or funding-source correlation. Holders SHOULD use separate, unlinkable addresses for enrollment and presentation, or use relayer services and account abstraction. For any deployment claiming privacy, relayer infrastructure MUST be provided. Production: mandatory EIP-4337 paymaster or purpose-built relay protocol. |
 | No forward secrecy | Design | `identity_secret` is static and never rotates. Compromise at time T reveals all historical nullifiers, linking every past interaction to the holder (attacker enumerates `external_nullifier` values from public chain data). Production: epoch-based key derivation (`secret_epoch = H(master_secret, epoch)`) with old-epoch key deletion, hardware-backed secret storage (TEE/SE), and a key rotation protocol that re-enrolls under a new leaf. |
@@ -563,6 +563,110 @@ Verification keys are embedded in the generated Solidity contracts and are immut
 | Noir version | v1.0.0-beta.3 | Cryptographic Primitives |
 | Barretenberg version | v0.82.0 | Cryptographic Primitives |
 | @zk-kit/imt version | v2.1.0 | Cryptographic Primitives |
+
+## Future Work: Multi-Source Identity Integration
+
+This section describes a production extension for integrating existing identity proof systems (Anon Aadhaar, ZKPassport, OpenAC, ZK Email) as enrollment sources. The PoC restricts enrollment to a single identity source type per deployment. The extension described here generalizes the protocol to support multiple sources while preserving cross-source sybil resistance and the vOPRF's enumeration-resistance property.
+
+### Motivation
+
+The PoC treats `user_id` canonicalization as an external process: the enrollee derives a canonical identifier from their identity proof, and the MPC network accepts it on trust. This design has two limitations. First, the binding between the identity proof and the vOPRF input is not cryptographically enforced. An enrollee could fabricate a `user_id_hash` unrelated to any real credential. Second, different identity sources produce different canonical identifiers for the same person, so a person holding both an Aadhaar card and a passport could enroll twice.
+
+### Design Overview
+
+The extension replaces the current single-source `pi_link` circuit with a family of per-source circuit variants. Each variant recursively verifies a source-specific identity proof inside the circuit, extracts verified biographic fields from the proof's public outputs, and derives `user_id_hash` from those fields. The enrollment circuit, membership circuit, on-chain contracts, and vOPRF protocol are unchanged.
+
+The vOPRF remains essential to this construction. Without the keyed PRF layer, enrollment nullifiers would be deterministic hashes of biographic fields (names, dates of birth) that are publicly available through data breaches, social media, and public records. Any observer with a target list could compute candidate nullifiers and query `usedEnrollmentNullifiers` on-chain to determine whether specific individuals have enrolled. The vOPRF ensures that the mapping from identity to enrollment nullifier requires the MPC threshold key, providing enumeration resistance that a plain hash cannot.
+
+### Tiered Canonical Identity
+
+Identity sources are classified into two tiers based on the biographic fields they provide.
+
+**Tier 1 (Government ID):** Sources that attest to a full legal name and date of birth. This includes Anon Aadhaar, ZKPassport, and government-issued national identity documents. For Tier 1 sources, the canonical person identifier is derived from shared biographic fields:
+
+```
+canonical_person_id = "person_v1:" || NFC(uppercase(full_legal_name)) || ":" || DOB_YYYYMMDD
+user_id_hash = SHA-256(canonical_person_id) mod r
+```
+
+Because all Tier 1 sources attest to the same underlying biographic fields, the same person produces the same `user_id_hash` regardless of which source they use. This provides cross-source sybil resistance within the tier: a person who enrolls via Anon Aadhaar cannot enroll again via ZKPassport.
+
+Where a source provides a stable national identifier (e.g., Aadhaar number), deployments MAY use the national identifier directly in place of name and date of birth to avoid name normalization issues:
+
+```
+canonical_person_id = "person_v1:" || country_code || ":" || national_id_number
+```
+
+**Tier 2 (Web2):** Sources that attest to a digital account (email address, TLS session) but do not reliably provide biographic fields. For Tier 2 sources, the canonical identifier remains source-specific:
+
+```
+canonical_person_id = source_prefix || ":" || source_identifier
+```
+
+Tier 2 sources provide sybil resistance only within their own source type. A person enrolling via ZK Email cannot enroll again with the same email address, but cross-tier sybil resistance (e.g., preventing enrollment via both email and government ID) is not enforced. Deployments requiring cross-tier sybil resistance SHOULD require Tier 1 enrollment as a prerequisite.
+
+### Per-Source Link Proof Circuits
+
+Each identity source defines a `pi_link` circuit variant that recursively verifies the source proof, extracts biographic fields, and derives `G_id`. All variants share the same public input interface, ensuring the MPC network and enrollment circuit require no per-source modifications.
+
+A Tier 1 circuit variant for Anon Aadhaar would enforce the following constraints:
+
+| Constraint | |
+|------------|--|
+| `verify(aadhaar_proof, AADHAAR_VK) == true` | recursive verification of Anon Aadhaar proof |
+| `(name_hash, dob) = public_outputs(aadhaar_proof)` | extraction of verified biographic fields |
+| `user_id_hash = H(name_hash, dob)` | canonical person identifier derivation |
+| `identity_commitment == H(DOMAIN_LINK, user_id_hash, salt)` | commitment well-formedness |
+| `G_id == hashToCurve(user_id_hash)` | SVDW hash-to-curve (existing constraints) |
+| `blinded_request == r * G_id` | blinding correctness |
+| `r != 0` | non-trivial blinding |
+
+**Public inputs:** `identity_commitment`, `blinded_request_x`, `blinded_request_y`, `G_id_x`, `G_id_y` (unchanged from PoC)
+
+**Private inputs:** source proof, source-specific witnesses, `salt`, `r`, SVDW witnesses (as in PoC)
+
+The source proof's verification key (`AADHAAR_VK`, `PASSPORT_VK`, etc.) is embedded as a circuit constant, not a public input. This ensures that each circuit variant is bound to a specific source at compilation time. MPC nodes identify the source type from the circuit's verification key and MAY apply source-specific policy (e.g., rejecting expired source proofs).
+
+An analogous circuit variant for ZKPassport would verify a passport ICAO signature proof and extract the same biographic fields, producing the same `user_id_hash` for the same person.
+
+### Verified Attributes
+
+The per-source `pi_link` extension also resolves the self-declared attribute limitation identified in the PoC. When the source proof attests to specific attributes (e.g., Anon Aadhaar attests to age and state), the circuit variant can extract those attributes and constrain them to match the values committed in the enrollment leaf. The enrollment circuit would then enforce:
+
+```
+attr[0] == verified_age_over_18    (from source proof)
+attr[1] == verified_nationality    (from source proof)
+```
+
+This binding ensures that the attribute vector committed in the Merkle leaf reflects verified source data, not self-declared values. Source proofs that do not attest to a particular attribute (e.g., ZK Email does not attest to nationality) would leave that attribute unconstrained, and verifiers SHOULD check the source type before relying on specific attribute predicates.
+
+### MPC Network Implications
+
+Under this extension, MPC nodes verify a single `pi_link` proof per enrollment request, regardless of source type. The recursive proof composition moves all source-specific verification logic into the circuit. MPC nodes do not need per-source verification logic, do not see the underlying identity proof, and do not learn which source type was used (beyond what is inferable from the circuit verification key). This preserves the vOPRF's obliviousness property.
+
+The `BlindEvaluateRequest` message format is unchanged. The MPC node verification procedure remains: verify `pi_link`, check `blinded_request` is not the point at infinity, evaluate the OPRF on the blinded point.
+
+### Name Normalization
+
+Cross-source sybil resistance for Tier 1 sources depends on consistent canonical person identifier derivation across sources. Name normalization is the primary challenge. Implementations MUST apply the following normalization pipeline before computing `canonical_person_id`:
+
+1. Unicode NFC normalization (Unicode Normalization Form C)
+2. Case folding to uppercase
+3. Collapse sequences of whitespace to a single space character
+4. Strip leading and trailing whitespace
+5. Remove honorifics, titles, and suffixes (Mr., Dr., Jr., etc.)
+
+Government identity documents within a single jurisdiction typically use consistent name formatting. Cross-jurisdiction normalization (transliteration, name ordering conventions) is a known hard problem. Deployments that span jurisdictions SHOULD prefer national identifier-based canonical identifiers where available.
+
+Date of birth normalization: all dates MUST be encoded as `YYYYMMDD` in UTC. Sources that provide only year and month (rare for government IDs) MUST be rejected.
+
+### Recursive Proof Feasibility
+
+Recursive verification of existing identity proof systems requires verifying their proof format inside a Noir circuit. Anon Aadhaar and ZKPassport currently produce Groth16 proofs (BN254). Verifying Groth16 inside Noir requires a BN254 pairing check, which is expensive but feasible using non-native field arithmetic libraries. Alternatively, these projects could provide Noir-native circuit implementations, enabling native recursive verification with lower constraint overhead.
+
+OpenAC credentials use a different proof system and would require an analogous recursive verifier or a Noir re-implementation of their verification logic.
+
+The constraint cost of recursive verification is substantial (estimated 1M-5M constraints per source verifier). This cost is borne by the prover at enrollment time and does not affect membership proof generation or on-chain verification gas costs.
 
 ## Terminology
 
