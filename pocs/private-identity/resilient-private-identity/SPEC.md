@@ -13,7 +13,7 @@ iptf_approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/appr
 
 ## Problem Statement
 
-On-chain identity systems today depend on a live, cooperative issuer. If the issuer becomes adversarial, goes offline, or is destroyed, holders lose the ability to prove identity attributes even when the underlying credentials were legitimately issued. Institutions need an identity layer where enrolled holders can continue generating and verifying proofs without issuer participation.
+Credential systems today depend on a live, cooperative issuer. If the issuer becomes adversarial, goes offline, or is destroyed, holders lose the ability to prove identity attributes even when the underlying credentials were legitimately issued. Holders need an identity layer that lets them continue generating and verifying proofs without issuer participation, so that a failing or uncooperative issuer cannot revoke their ability to use legitimately obtained credentials.
 
 This protocol anchors enrollment to a verifiable oblivious pseudorandom function (vOPRF) that binds one real-world identity to one on-chain leaf, providing cryptographic sybil resistance. An on-chain Merkle root serves as the sole trust anchor.
 
@@ -162,8 +162,14 @@ Holders enroll by proving real-world identity ownership (ZK Email, TLSNotary, An
 | World ID (biometric OPRF) | Strong sybil resistance via iris scan | Requires specialized hardware; not institution-compatible |
 | PLUME (ECDSA nullifiers) | Reuses existing keys | No attribute predicates; limited to key-holder proofs |
 | OpenAC | Attribute credentials with ZK | Assumes cooperative issuer for credential issuance |
+| zk-creds (Rosenberg et al., 2023) | General-purpose zkSNARK credentials; issuer-less issuance via bulletin board/blockchain; supports existing identity documents without modification | Merkle-tree issuance list is structurally similar to our approach; does not address sybil resistance (duplicate enrollment prevention requires external mechanism) |
+| zk-promises (Shih et al., 2025) | Stateful anonymous credentials with Turing-complete callbacks; supports asynchronous reputation, moderation, and blocking of anonymous users | Designed for interactive platform moderation (downvotes, bans, reputation decay), not institutional identity attestation; requires clients to periodically scan for callbacks, adding liveness assumptions; proving cost higher than simple membership proofs due to stateful transition circuits |
 
 The vOPRF approach provides sybil resistance without biometric hardware, works with existing Web2 identity proofs, and survives issuer destruction because the on-chain Merkle root is the sole trust anchor.
+
+**Relationship to zk-creds.** zk-creds shares the Merkle-tree-as-issuance-list paradigm and the goal of removing trusted credential issuers. Our protocol can be understood as a zk-creds-style construction augmented with a vOPRF sybil gate: where zk-creds assumes the issuance list manager prevents duplicate enrollment (or tolerates it), our protocol enforces one-person-one-leaf cryptographically via the threshold vOPRF enrollment nullifier. zk-creds additionally introduces blind Groth16 for proof rerandomization and reuse, enabling unlinkable multi-show credentials without re-proving. Our protocol achieves multi-show unlinkability instead via scope-bound nullifiers with fresh proofs per verifier. The trade-off is proving cost: zk-creds ShowCred runs in ~150ms (Groth16) vs. our UltraHonk membership proof, which avoids per-circuit trusted setup but has higher verification cost on-chain.
+
+**Relationship to zk-promises.** zk-promises extends the anonymous credential model to support stateful, Turing-complete callbacks, enabling reputation systems, moderation, and account suspension for anonymous users. This addresses a gap our protocol does not: post-enrollment state mutation by third parties (e.g., a regulator docking reputation or suspending an identity). Our protocol's on-chain nullifier tracking is append-only and holder-driven; integrating asynchronous issuer/regulator actions (revocation, attribute updates) without breaking unlinkability is an open problem. zk-promises' callback scanning model (~4ms server verification, <1s client auth) is a potential direction for institutional compliance hooks that require post-issuance state updates while preserving holder privacy.
 
 ### Tools & Primitives
 
@@ -197,6 +203,8 @@ The vOPRF approach provides sybil resistance without biometric hardware, works w
 Precondition: MPC network is available. Enrollee has a Web2 identity with cryptographic evidence created within the last 90 days.
 
 Note: ZK Email requires the identity provider's DKIM public keys to have been published in DNS at some prior point. TLSNotary requires the provider's web service to have been accessible when the session was recorded. These sources work when the issuer became adversarial after the enrollee obtained their credential, but not when the issuer retroactively deletes all cryptographic evidence.
+
+"Proving identity ownership" in step 1 means generating a source-specific cryptographic proof (e.g., a ZK proof over a DKIM-signed email for ZK Email, an NFC signature proof for ZKPassport, or a TLS session transcript proof for TLSNotary). See the Identity Source Canonicalization table for supported sources and the per-source proof format.
 
 1. Enrollee proves Web2 identity ownership via a supported source. Derives canonical `user_id` per the Identity Source Canonicalization table. Computes `user_id_hash = SHA-256(canonical_user_id) mod r`. Generates random `salt` from F_r. Computes `identity_commitment = H(DOMAIN_LINK, user_id_hash, salt)`.
 2. Enrollee computes `G_id` via SVDW hash-to-curve from `user_id_hash` (see `G_id` in Symbols table). Picks random `r` from F_r \ {0}. Computes `blinded_request = r * G_id`.
@@ -832,6 +840,8 @@ The constraint cost of recursive verification is substantial (estimated 1M-5M co
 - [TLSNotary (PSE)](https://tlsnotary.org/)
 - [vOPRF Web2 Nullifiers (PSE)](https://pse.dev/blog/web2-nullifiers-using-voprf)
 - [OpenAC (Ying Tong Lai, Liam Eagen, Vikas Rushi et al., 2026)](https://eprint.iacr.org/2026/251)
+- [zk-creds: Flexible Anonymous Credentials from zkSNARKs and Existing Identity Infrastructure (Rosenberg et al., 2023)](https://eprint.iacr.org/2022/878)
+- [zk-promises: Anonymous Moderation, Reputation, and Blocking from Anonymous Credentials with Callbacks (Shih et al., 2025)](https://eprint.iacr.org/2024/1260)
 - [World ID](https://worldcoin.org/world-id)
 - [PLUME: ECDSA Nullifiers (Aayush Gupta, ERC-7524)](https://aayushg.com/thesis.pdf)
 - [EF IPTF Map](https://github.com/ethereum/iptf-map)
