@@ -17,6 +17,126 @@ On-chain identity systems today depend on a live, cooperative issuer. If the iss
 
 This protocol anchors enrollment to a verifiable oblivious pseudorandom function (vOPRF) that binds one real-world identity to one on-chain leaf, providing cryptographic sybil resistance. An on-chain Merkle root serves as the sole trust anchor.
 
+## Use Case Overview
+
+Institutions need to verify counterparty attributes (age, nationality) without learning identity. Current systems depend on a live issuer, creating a single point of failure. This protocol anchors enrollment to an on-chain Merkle tree. After enrollment, holders generate ZK proofs against the tree root with no issuer involvement.
+
+### Components
+
+| Component | Role | Operator |
+|-----------|------|----------|
+| **Identity Source** | Cryptographic proof of real-world identity (ZK Email, ZKPassport, Anon Aadhaar, TLSNotary) | Holder, using evidence from Web2 providers |
+| **vOPRF MPC Network** | Deterministic per-identity tag for sybil resistance | Threshold network of independent operators (4-of-7) |
+| **IdentityTree** | Stores one leaf per enrolled identity; the sole trust anchor | Ethereum smart contract |
+| **Enrollment Contract** | Gates tree insertion behind a ZK proof of valid OPRF enrollment | Ethereum smart contract |
+| **IdentityVerifier** | Checks ZK membership proofs, enforces nullifier uniqueness | Ethereum smart contract |
+| **Holder** | Enrolls once, then proves attributes at will | End user |
+| **Verifier** | Requests and validates attribute proofs | Any dApp or institution |
+
+### Holder Actions
+
+1. **Prove identity**: obtain cryptographic evidence from an identity source (DKIM signature, passport NFC, etc.)
+2. **Enroll**: interact with the MPC network for a sybil-resistant tag, submit one on-chain transaction to insert a leaf
+3. **Prove attributes**: generate a ZK proof ("I am in the tree and `age_over_18 = 1`"), submit to a verifier
+4. **Rotate verifiers freely**: each verifier gets a scope-bound nullifier preventing replay, but verifiers cannot link proofs across scopes
+
+### System Architecture
+
+```mermaid
+graph TD
+    IS["Identity Source<br/>(ZK Email, ZKPassport,<br/>Anon Aadhaar, TLSNotary)"]
+    H["Holder"]
+    MPC["vOPRF MPC Network<br/>(4-of-7 threshold)"]
+    EC["Enrollment Contract"]
+    IT["IdentityTree<br/>(Merkle root = trust anchor)"]
+    IV["IdentityVerifier"]
+    V["Verifier (dApp)"]
+
+    IS -- "identity proof material" --> H
+    H -- "blind OPRF request + pi_link" --> MPC
+    MPC -- "partial evaluations + DLEQ proofs" --> H
+    H -- "enroll(leaf, nullifier, proof)" --> EC
+    EC -- "insertLeaf" --> IT
+    H -- "ZK membership proof" --> V
+    V -- "verifyProof" --> IV
+    IV -- "isRecentRoot?" --> IT
+```
+
+### Enrollment Flow
+
+```mermaid
+sequenceDiagram
+    participant ID as Identity Source
+    participant H as Holder
+    participant MPC as vOPRF MPC Network
+    participant EC as Enrollment Contract
+    participant IT as IdentityTree
+
+    H->>ID: Obtain cryptographic evidence
+    ID-->>H: Identity proof material
+
+    H->>H: Canonicalize user_id, hash-to-curve to G_id, blind B = r * G_id
+    H->>H: Generate pi_link proof (B and identity_commitment share same user_id)
+    H->>MPC: BlindEvaluateRequest(B, identity_commitment, pi_link)
+    MPC->>MPC: Verify pi_link, check B != point at infinity
+    MPC-->>H: partial_evaluation_i + DLEQ proof per node
+
+    H->>H: Verify DLEQ proofs, reconstruct, unblind to raw_nullifier
+    H->>H: enrollment_nullifier = H(raw_nullifier)
+    H->>H: Generate enrollment ZK proof (leaf, nullifier, DLEQ all valid)
+
+    H->>EC: enroll(leaf, enrollmentNullifier, G_id, proof)
+    EC->>EC: Verify ZK proof against stored MPC public key
+    EC->>IT: insertLeaf(leaf, enrollmentNullifier)
+    IT-->>H: LeafInserted event (index, new root)
+
+    Note over H: Store identity_secret + attributes locally. Issuer no longer needed.
+```
+
+### Verification Flow
+
+```mermaid
+sequenceDiagram
+    participant H as Holder
+    participant V as Verifier
+    participant IV as IdentityVerifier
+    participant IT as IdentityTree
+
+    V->>V: external_nullifier = H(chain_id, verifier_address, scope)
+    V->>H: Request: prove age_over_18 = 1
+
+    H->>H: Fetch current Merkle root and path
+    H->>H: Generate membership proof (tree membership + predicate + scope-bound nullifier)
+    H->>V: proof, root, nullifier, external_nullifier, predicate params
+
+    V->>IV: verifyProof(...)
+    IV->>IT: isRecentRoot(root)
+    IT-->>IV: true
+    IV->>IV: Check nullifier unused, verify ZK proof, check attr index < 2
+    IV-->>V: Transaction succeeds (proof valid)
+
+    Note over V: Learns only: holder is enrolled, age_over_18 = 1, nullifier (prevents replay)
+```
+
+### Issuer Independence
+
+```mermaid
+graph LR
+    subgraph "Traditional System"
+        TI["Issuer"] -- "revocation check" --> TV["Verifier"]
+        TI -- "issue credential" --> TH["Holder"]
+        TV -. "fails if issuer offline" .-> TI
+    end
+
+    subgraph "Resilient Private Identity"
+        MR["On-chain Merkle Root<br/>(immutable trust anchor)"]
+        RH["Holder"] -- "ZK proof against root" --> RV["Verifier"]
+        RV -- "verify on-chain" --> MR
+    end
+```
+
+After enrollment, the on-chain Merkle root is the sole trust anchor. The issuer can go offline, revoke all credentials, or become adversarial. Existing holders continue generating and verifying proofs. New enrollees can still enroll via the vOPRF network.
+
 ### Constraints
 
 | Category | Requirement |
