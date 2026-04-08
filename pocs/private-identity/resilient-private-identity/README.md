@@ -73,7 +73,7 @@ cargo test --lib
 ## Known Limitations
 
 - **Key loss is permanent.** No revocation mechanism. If a holder loses `identity_secret`, the leaf remains and the enrollment nullifier stays consumed.
-- **Self-declared attributes.** Enrollees self-declare their attribute vector. The protocol does not validate attribute truthfulness on-chain.
+- **Self-declared attributes.** Enrollees self-declare their attribute vector. The protocol does not validate attribute truthfulness on-chain, future work describes a design for verifying canonical identity sources during enrolment.
 - **Predicate parameter leakage.** `predicate_type`, `predicate_attr_index`, `predicate_value`, and `predicate_result` are public inputs visible on-chain. With 2 queryable dimensions, the anonymity set ceiling is ~498 buckets.
 - **Transaction graph linkability.** Without a relayer, the Ethereum transaction graph links enrollment to verification via address reuse or funding-source correlation.
 - **No forward secrecy.** `identity_secret` is static and never rotates. Compromise reveals all historical nullifiers.
