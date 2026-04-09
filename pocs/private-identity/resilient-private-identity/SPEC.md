@@ -199,7 +199,7 @@ The vOPRF approach provides sybil resistance without biometric hardware, works w
 
 #### Enrollment
 
-Precondition: MPC network is available. Enrollee has a Web2 identity with cryptographic evidence created within the last 90 days.
+Precondition: MPC network is available. Enrollee has a Web2 identity with cryptographic evidence.
 
 Note: ZK Email requires the identity provider's DKIM public keys to have been published in DNS at some prior point. TLSNotary requires the provider's web service to have been accessible when the session was recorded. These sources work when the issuer became adversarial after the enrollee obtained their credential, but not when the issuer retroactively deletes all cryptographic evidence.
 
@@ -648,9 +648,9 @@ The adversary is a single issuer who cooperated during initial credential issuan
 | BN254 security margin | Design | BN254 provides approximately 100-110 bits of classical security (Kim and Barbulescu, 2016), below the 128-bit target. Driven by Ethereum precompile availability. Migration to a stronger curve (e.g., BLS12-381 via EIP-2537) SHOULD be planned for production. |
 | UltraHonk unaudited | Tooling | Audit before mainnet deployment. The protocol's soundness depends on UltraHonk's constraint system correctness. |
 | Attribute version migration | Design | Old leaves keep their version. `version` is a public input, allowing verifiers to dispatch to version-specific semantics. Attribute indices maintain stable semantics across versions (append-only). Holders with old versions cannot update attributes without a new enrollment (which requires a new enrollment nullifier, currently blocked by the sybil gate). Production: versioned enrollment nullifiers. |
-| ZK Email/TLSNotary threat model | Design | Requires identity provider infrastructure to have existed at some prior point. Identity proof evidence MUST be no older than 90 days to limit theft of stale credentials. Does not protect against issuer retroactive deletion of all cryptographic evidence. |
+| ZK Email/TLSNotary threat model | Design | Requires identity provider infrastructure to have existed at some prior point. Does not protect against issuer retroactive deletion of all cryptographic evidence. |
 | Merkle path leakage | Design | Holders who query a full node for their Merkle path leak their leaf index to the node operator. Holders SHOULD reconstruct the tree locally from `LeafInserted` events for privacy. |
-| Identity proof freshness | Design | First-to-enroll wins: if an attacker obtains a victim's identity proof material within the 90-day window and enrolls before the victim, the victim is permanently locked out. Production: challenge-response binding between the identity proof and the enrollment transaction. |
+| Identity proof freshness | Design | First-to-enroll wins: if an attacker obtains a victim's identity proof material and enrolls before the victim, the victim is permanently locked out. Production: challenge-response binding between the identity proof and the enrollment transaction. |
 
 ## Deployment
 
@@ -684,7 +684,6 @@ Verification keys are embedded in the generated Solidity contracts and are immut
 | Multisig threshold | 4-of-7 | Enrollment.sol |
 | Timelock | 14400 blocks (~48h) | Enrollment.sol |
 | Grace period | 14400 blocks (~48h) | Enrollment.sol |
-| Identity proof max age | 90 days | Enrollment flow |
 | hashToCurve | Fouque-Tibouchi SVDW, Poseidon field derivation | Cryptographic Primitives |
 | Noir version | v1.0.0-beta.3 | Cryptographic Primitives |
 | Barretenberg version | v0.82.0 | Cryptographic Primitives |
