@@ -167,21 +167,20 @@ Holders enroll by proving real-world identity ownership (ZK Email, TLSNotary, An
 
 The vOPRF approach provides sybil resistance without biometric hardware, works with existing Web2 identity proofs, and survives issuer destruction because the on-chain Merkle root is the sole trust anchor.
 
-**Relationship to zk-creds.** zk-creds shares the Merkle-tree-as-issuance-list paradigm and the goal of removing trusted credential issuers. Our protocol can be understood as a zk-creds-style construction augmented with a vOPRF sybil gate: where zk-creds assumes the issuance list manager prevents duplicate enrollment (or tolerates it), our protocol enforces one-person-one-leaf cryptographically via the threshold vOPRF enrollment nullifier. zk-creds additionally introduces blind Groth16 for proof rerandomization and reuse, enabling unlinkable multi-show credentials without re-proving. Our protocol achieves multi-show unlinkability instead via scope-bound nullifiers with fresh proofs per verifier. The trade-off is proving cost: zk-creds ShowCred runs in ~150ms (Groth16) vs. our UltraHonk membership proof, which avoids per-circuit trusted setup but has higher verification cost on-chain.
+**Relationship to prior work.** zk-creds (Rosenberg et al., 2023) shares the Merkle-tree-as-issuance-list paradigm; our protocol augments it with a vOPRF sybil gate for cryptographic one-person-one-leaf enforcement, whereas zk-creds delegates duplicate prevention to the issuance list manager. zk-promises (Shih et al., 2025) extends anonymous credentials with stateful callbacks for post-enrollment state mutation (reputation, moderation, suspension), a gap our append-only model does not address and a potential direction for compliance hooks.
 
-**Relationship to zk-promises.** zk-promises extends the anonymous credential model to support stateful, Turing-complete callbacks, enabling reputation systems, moderation, and account suspension for anonymous users. This addresses a gap our protocol does not: post-enrollment state mutation by third parties (e.g., a regulator docking reputation or suspending an identity). Our protocol's on-chain nullifier tracking is append-only and holder-driven; integrating asynchronous issuer/regulator actions (revocation, attribute updates) without breaking unlinkability is an open problem. zk-promises' callback scanning model (~4ms server verification, <1s client auth) is a potential direction for institutional compliance hooks that require post-issuance state updates while preserving holder privacy.
+### Primitives
 
-### Tools & Primitives
+| Primitive | Purpose | Requirements |
+|-----------|---------|--------------|
+| **ZK proving system** | Enrollment, membership, and link proofs | Universal SRS (no per-circuit trusted setup). Must support non-native field arithmetic for in-circuit EC operations. |
+| **ZK-friendly hash** | Commitments, nullifiers, Merkle tree nodes | Algebraic hash over the proving system's native scalar field. This spec assumes Poseidon over BN254 F_r. |
+| **Elliptic curve** | On-chain proof verification, OPRF base group | Must have efficient on-chain verification (e.g., EVM precompiles). This spec assumes BN254 (alt_bn128) via EIP-196/EIP-197. |
+| **Incremental Merkle tree** | On-chain identity tree | Append-only, depth 20, capacity 2^20. Hash function must match the ZK circuit's in-circuit hash. |
+| **vOPRF (RFC 9497 extended)** | Sybil-resistant enrollment nullifier derivation | Threshold secret sharing per Jarecki et al. Verifiable via DLEQ proofs. |
+| **hashToCurve (RFC 9380)** | Deterministic mapping from identity to curve point | Fouque-Tibouchi SVDW map. Must be computable in-circuit with witness-based verification. |
 
-| Tool | Purpose |
-|------|---------|
-| **Noir v1.0.0-beta.3** | ZK circuit language for enrollment, membership, and link proofs |
-| **UltraHonk (Barretenberg v0.82.0)** | Proving system. Universal SRS (Aztec Ignition ceremony, 2^20 points). No per-circuit trusted setup. |
-| **Poseidon** | ZK-friendly hash for commitments, nullifiers, Merkle tree nodes. BN254 scalar field. |
-| **BN254 (alt_bn128)** | Elliptic curve. Ethereum precompiles EIP-196/EIP-197. ~100-110 bits classical security. |
-| **@zk-kit/imt v2.1.0** | Incremental Merkle tree (Solidity). Depth 20, capacity 2^20. |
-| **vOPRF (RFC 9497 extended)** | Threshold OPRF for sybil-resistant enrollment nullifier derivation. |
-| **hashToCurve (RFC 9380)** | Fouque-Tibouchi SVDW (Shallue-van de Woerter) mapping for BN254 G1. Field element derived via `Poseidon(DOMAIN_H2C, user_id_hash)`. |
+> **PoC implementation choices:** Noir v1.0.0-beta.3 (circuit language), UltraHonk/Barretenberg v0.82.0 (proving system, Aztec Ignition SRS with 2^20 points), Poseidon (hash), BN254 (curve), @zk-kit/imt v2.1.0 (Merkle tree). See [README.md](./README.md) for build instructions and version details.
 
 ## Protocol Design
 
@@ -192,7 +191,7 @@ The vOPRF approach provides sybil resistance without biometric hardware, works w
 | **Enrollee/Holder** | Proves real-world identity ownership. Enrolls via vOPRF. Generates ZK membership proofs. Stores `identity_secret` and attributes locally. |
 | **vOPRF MPC Network** | Threshold network (t=4, n=7) that evaluates blinded identity points. Verifies identity-blinding link proofs before responding. Stateless per request. |
 | **Verifier** | Checks ZK proofs on-chain or off-chain. Enforces access policy. Cannot extract holder identity. |
-| **Governance Multisig** | 4-of-7 multisig. Controls `IdentityTree` authorization and MPC key rotation (with timelock). |
+| **Governance Multisig** | 4-of-7 multisig. Controls `IdentityTree` authorization and MPC key rotation (with timelock). Distinct from the MPC network operators—governance manages on-chain parameters, not OPRF evaluation. |
 | **Guardian** | Can veto pending MPC key rotations during the timelock window. Set at deployment, not upgradeable. |
 | **Auditor** | Receives scoped access to specific credential attributes or proof metadata via selective disclosure. |
 
@@ -223,11 +222,10 @@ Holders MUST update their Merkle path before generating proofs. Recommended meth
 
 #### Verification
 
-1. Verifier computes `external_nullifier = H(DOMAIN_EXTERNAL_NULLIFIER, chain_id, verifier_address, application_scope)`. The verifier MUST compute this value from its own address, the chain ID, and its registered application scope.
+1. Verifier (a dApp or institution backend, not the `IdentityVerifier` contract itself) computes `external_nullifier = H(DOMAIN_EXTERNAL_NULLIFIER, chain_id, verifier_address, application_scope)` from its own address, the chain ID, and its registered application scope.
 2. Holder generates a membership proof (see Circuit: Membership and Selective Disclosure).
 3. Holder submits `(proof, root, nullifier, external_nullifier, version, predicate_type, predicate_attr_index, predicate_value, predicate_result)` to the verifier.
-4. Verifier calls `IdentityVerifier.verifyProof(...)`. The contract checks root freshness, nullifier uniqueness, attribute index restriction, and proof validity. If the call does not revert, the proof is valid.
-5. Verifier MUST independently compute the expected `external_nullifier` from its own address, chain ID, and application scope, and MUST reject submissions where the submitted value does not match.
+4. Verifier MUST check that the submitted `external_nullifier` matches the value computed in step 1 and MUST reject mismatches before proceeding. Verifier then calls `IdentityVerifier.verifyProof(...)`. The contract checks root freshness, nullifier uniqueness, attribute index restriction, and proof validity. If the call does not revert, the proof is valid.
 
 If verification reverts due to root eviction, the holder MUST regenerate the Merkle proof against a current root and produce a new ZK proof. The nullifier will be the same (since `identity_secret` and `external_nullifier` are unchanged) and will still be unused.
 
@@ -300,7 +298,7 @@ The `user_id` is derived from a Web2 identity proof source. Each source type def
 | Source | Canonical `user_id` encoding |
 |--------|------------------------------|
 | ZK Email | `"email:" \|\| lowercase(NFC(local_part)) \|\| "@" \|\| lowercase(domain)`. Strip Gmail dots from local part. |
-| TLSNotary | `"tls:" \|\| lowercase(NFC(provider_canonical_id))`. The provider's canonical user identifier extracted from the TLS session. |
+| TLSNotary | `"tls:" \|\| lowercase(NFC(user_canonical_id))`. The user's canonical identifier as issued by the provider, extracted from the TLS session (e.g., a username or account ID). |
 | Anon Aadhaar | `"aadhaar:" \|\| aadhaar_number_string` |
 | ZKPassport | `"passport:" \|\| uppercase(issuing_country_alpha3) \|\| ":" \|\| passport_number_string` |
 
@@ -612,7 +610,7 @@ This proof is verified by the vOPRF MPC network before responding to blinded req
 
 ### Threat Model
 
-The adversary is a single issuer who cooperated during initial credential issuance but has since become adversarial. The adversary can refuse new issuance, mass-revoke credentials, publish false revocation lists, attempt de-anonymization, or forge credentials for non-holders. Verifiers are honest-but-curious. The vOPRF MPC network is honest above its threshold (t-of-n nodes).
+The adversary is a single issuer who cooperated during initial credential issuance but has since become adversarial. The adversary can refuse new issuance, mass-revoke credentials, publish false revocation lists, attempt de-anonymization, or forge credentials for non-holders. Additionally, individual users may attempt to bypass sybil resistance (duplicate enrollment via credential theft, identity sharing, or cross-source enrollment) or forge attribute predicates. Verifiers are honest-but-curious. The vOPRF MPC network is honest above its threshold (t-of-n nodes).
 
 **Out of scope:** Verifier collusion with issuer, 51% attacks on Ethereum, compromise of the BN254 discrete-log assumption, unsoundness of the UltraHonk proving system, compromise of t or more MPC nodes, front-running by adversaries with MPC infrastructure access.
 
