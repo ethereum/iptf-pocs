@@ -114,6 +114,49 @@ Recursive verification of existing identity proof systems (Groth16 on BN254) ins
 
 See [SPEC.md](./SPEC.md) for the full future work specification including name normalization, MPC implications, and detailed circuit constraints.
 
+## Future Work: Web of Trust
+
+### Problem
+
+The vOPRF sybil gate binds one identity source credential to one on-chain leaf. But if the identity source itself is compromised (unlimited burner emails, forged documents), an attacker can generate T fake source identities that each pass the vOPRF legitimately. The cryptographic gate holds (one source identity, one leaf) but the source is a mint.
+
+### Design: Off-Chain Recursive Vouch Aggregation
+
+A second sybil gate layers social trust on top of the vOPRF. Before enrollment, the enrollee must collect K=3 vouches from existing tree members. Vouches are generated off-chain and aggregated into a single recursive proof, submitted atomically with the enrollment transaction.
+
+```mermaid
+sequenceDiagram
+    participant E as Enrollee
+    participant V1 as Voucher 1
+    participant V2 as Voucher 2
+    participant V3 as Voucher 3
+    participant C as VouchGate Contract
+
+    Note over E: Complete vOPRF (existing flow)
+    E->>V1: Request vouch (off-chain)
+    E->>V2: Request vouch (off-chain)
+    E->>V3: Request vouch (off-chain)
+    V1-->>E: pi_vouch proof
+    V2-->>E: pi_vouch proof
+    V3-->>E: pi_vouch proof
+    Note over E: Generate pi_vouch_aggregate (recursive)
+    E->>C: enrollWithVouches(aggregate_proof, enrollment_proof)
+    Note over C: Verify 1 aggregate proof + 1 enrollment proof<br/>Check K nullifiers not reused<br/>Check K budget nullifiers not reused<br/>Insert leaf
+```
+
+**Key properties:**
+
+- **No on-chain vouch graph.** All vouch activity is off-chain. The single enrollment TX is indistinguishable from a non-vouched enrollment except for the K nullifier checks. No timing trail, no vouch counter, no social graph leakage.
+- **Bounded sybil amplification.** Each member has a lifetime vouch budget of V=2 (enforced via budget nullifiers). Since V < K, an attacker with T fake identities creates at most TV/(K-V) = 2T additional sybils. Total: 3T. Growth is linear and bounded.
+- **Constant on-chain cost.** The recursive proof aggregates K inner proofs into one. On-chain verification is 2 proof checks (aggregate + enrollment) regardless of K, plus K nullifier lookups.
+- **Cross-chain replay prevention.** `chain_id` is a public input constrained in both the inner and outer circuits.
+- **Censorship resistance.** Governance multisig can force-enroll via `governanceEnroll()` to prevent vouch cartels from blocking legitimate enrollees.
+- **Bootstrap.** First N members enroll without vouches (bootstrap phase), after which the vouch requirement activates irreversibly.
+
+**New circuits:** `pi_vouch` (prove tree membership + produce vouch and budget nullifiers) and `pi_vouch_aggregate` (recursively verify K=3 inner proofs, enforce distinctness).
+
+**New domain tags:** `DOMAIN_VOUCH = 9`, `DOMAIN_VOUCH_BUDGET = 10`.
+
 ## References
 
 - [Resilient Private Identity SPEC](./SPEC.md)
