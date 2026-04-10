@@ -19,6 +19,7 @@ contract IdentityTree {
     bool public paused;
 
     event LeafInserted(uint256 indexed index, uint256 leaf, uint256 enrollmentNullifier, uint256 newRoot);
+    event LeafRemoved(uint256 leaf, uint256 newRoot);
 
     error NotGovernance();
     error NotAuthorized();
@@ -60,6 +61,16 @@ contract IdentityTree {
         recentRoots[rootIndex] = newRoot;
 
         emit LeafInserted(index, leaf, enrollmentNullifier, newRoot);
+    }
+
+    function removeLeaf(uint256 leaf, uint256[] calldata siblingNodes) external onlyAuthorized whenNotPaused {
+        tree.remove(leaf, siblingNodes);
+        uint256 newRoot = tree.root();
+
+        rootIndex = (rootIndex + 1) % 1000;
+        recentRoots[rootIndex] = newRoot;
+
+        emit LeafRemoved(leaf, newRoot);
     }
 
     function isRecentRoot(uint256 root) public view returns (bool) {

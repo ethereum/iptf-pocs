@@ -412,7 +412,7 @@ Incremental Merkle tree (depth 20, Poseidon t=3 without domain tag) with a unive
 
 #### Enrollment.sol
 
-Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universal sybil gate: every real-world identity maps to exactly one enrollment nullifier, preventing duplicate enrollment regardless of when enrollment occurs.
+Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universal sybil gate: every real-world identity maps to exactly one enrollment nullifier, preventing duplicate enrollment regardless of when enrollment occurs. A configurable stake (default 0.1 ETH) is required at enrollment, making bulk registration economically costly even if identity sources are compromised.
 
 **State:**
 - `mpcPublicKey: (uint256 x, uint256 y)` (aggregated vOPRF network key)
@@ -425,7 +425,7 @@ Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universa
 **Governance:** 4-of-7 multisig with 48-hour timelock on MPC key rotation. A separate `guardian` address can veto pending key rotations during the timelock window. The multisig and guardian addresses are set at deployment and are not upgradeable.
 
 **Functions:**
-- `enroll(bytes32 leaf, bytes32 enrollmentNullifier, uint256 G_id_x, uint256 G_id_y, bytes calldata enrollmentProof) external whenNotPaused`: Reads `mpcPublicKey` from contract storage. Constructs the public input vector `[leaf, enrollmentNullifier, mpcPublicKey.x, mpcPublicKey.y, G_id_x, G_id_y]` and verifies the Noir enrollment proof against the enrollment circuit's verification key. If verification fails AND `block.number <= keyGraceExpiry`, retries with `previousMPCKey`. MUST revert if all verifications fail. Calls `IdentityTree.insertLeaf(leaf, enrollmentNullifier)`.
+- `enroll(bytes32 leaf, bytes32 enrollmentNullifier, uint256 G_id_x, uint256 G_id_y, bytes calldata enrollmentProof) external payable whenNotPaused`: Requires `msg.value >= stakeAmount` (default 0.1 ETH). Stake is recorded per leaf and can be reclaimed via `unstake(leaf, siblingNodes)`, which removes the leaf from the identity tree. Reads `mpcPublicKey` from contract storage. Constructs the public input vector `[leaf, enrollmentNullifier, mpcPublicKey.x, mpcPublicKey.y, G_id_x, G_id_y]` and verifies the Noir enrollment proof against the enrollment circuit's verification key. If verification fails AND `block.number <= keyGraceExpiry`, retries with `previousMPCKey`. MUST revert if all verifications fail. Calls `IdentityTree.insertLeaf(leaf, enrollmentNullifier)`.
 - `proposeMPCPublicKey(uint256 x, uint256 y) external onlyMultisig`: MUST verify the point is on BN254 G1: `y^2 == x^3 + 3 mod p`. MUST verify the point is not (0, 0). Sets `pendingKey = (x, y)` and `pendingKeyActivation = block.number + TIMELOCK_BLOCKS`.
 - `finalizeMPCPublicKey() external onlyMultisig`: MUST revert if `block.number < pendingKeyActivation` or `pendingKey == (0, 0)`. Sets `previousMPCKey = mpcPublicKey`, `mpcPublicKey = pendingKey`, `keyGraceExpiry = block.number + GRACE_BLOCKS`, clears `pendingKey`.
 - `vetoPendingKey() external onlyGuardian`: Clears `pendingKey` and `pendingKeyActivation`. Callable only while a proposal is pending.

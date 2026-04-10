@@ -23,10 +23,15 @@ contract MockVerifier is IVerifier {
 contract MockIdentityTree is IIdentityTree {
     uint256 public lastLeaf;
     uint256 public lastNullifier;
+    uint256 public removedLeaf;
 
     function insertLeaf(uint256 leaf, uint256 enrollmentNullifier) external {
         lastLeaf = leaf;
         lastNullifier = enrollmentNullifier;
+    }
+
+    function removeLeaf(uint256 leaf, uint256[] calldata) external {
+        removedLeaf = leaf;
     }
 }
 
@@ -42,6 +47,8 @@ contract EnrollmentTest is Test {
     uint256 constant G1_X = 1;
     uint256 constant G1_Y = 2;
 
+    uint256 constant STAKE_AMOUNT = 0.1 ether;
+
     function setUp() public {
         mockVerifier = new MockVerifier(true);
         mockTree = new MockIdentityTree();
@@ -51,7 +58,8 @@ contract EnrollmentTest is Test {
             G1_X,
             G1_Y,
             multisigAddr,
-            guardianAddr
+            guardianAddr,
+            STAKE_AMOUNT
         );
     }
 
@@ -65,15 +73,21 @@ contract EnrollmentTest is Test {
 
 
     function test_enroll_success() public {
-        enrollment.enroll(42, 100, 5, 6, hex"1234");
+        enrollment.enroll{value: STAKE_AMOUNT}(42, 100, 5, 6, hex"1234");
         assertEq(mockTree.lastLeaf(), 42);
         assertEq(mockTree.lastNullifier(), 100);
+        assertEq(enrollment.stakers(42), address(this));
+    }
+
+    function test_enroll_revertsOnInsufficientStake() public {
+        vm.expectRevert(Enrollment.InsufficientStake.selector);
+        enrollment.enroll{value: STAKE_AMOUNT - 1}(42, 100, 5, 6, hex"1234");
     }
 
     function test_enroll_revertsOnInvalidProof() public {
         mockVerifier.setReturnValue(false);
         vm.expectRevert(Enrollment.InvalidProof.selector);
-        enrollment.enroll(42, 100, 5, 6, hex"1234");
+        enrollment.enroll{value: STAKE_AMOUNT}(42, 100, 5, 6, hex"1234");
     }
 
     function test_enroll_graceKeyFallback() public {
@@ -103,7 +117,8 @@ contract EnrollmentTest is Test {
             newX,
             newY,
             multisigAddr,
-            guardianAddr
+            guardianAddr,
+            STAKE_AMOUNT
         );
 
         // Simulate that the previous key was set (we need to do key rotation on enrollmentAlt)
@@ -117,7 +132,8 @@ contract EnrollmentTest is Test {
             G1_X,
             G1_Y,
             multisigAddr,
-            guardianAddr
+            guardianAddr,
+            STAKE_AMOUNT
         );
 
         // Rotate key on enrollment2
@@ -132,7 +148,7 @@ contract EnrollmentTest is Test {
         assertTrue(block.number < graceExpiry);
 
         // altVer2: first call returns false, second returns true
-        enrollment2.enroll(42, 100, 5, 6, hex"1234");
+        enrollment2.enroll{value: STAKE_AMOUNT}(42, 100, 5, 6, hex"1234");
         assertEq(mockTree.lastLeaf(), 42);
     }
 
@@ -244,6 +260,28 @@ contract EnrollmentTest is Test {
         assertEq(px, 0);
         assertEq(py, 0);
     }
+    function test_unstake_success() public {
+        enrollment.enroll{value: STAKE_AMOUNT}(42, 100, 5, 6, hex"1234");
+        uint256 balanceBefore = address(this).balance;
+
+        uint256[] memory siblings = new uint256[](0);
+        enrollment.unstake(42, siblings);
+
+        assertEq(address(this).balance, balanceBefore + STAKE_AMOUNT);
+        assertEq(enrollment.stakers(42), address(0));
+        assertEq(mockTree.removedLeaf(), 42);
+    }
+
+    function test_unstake_revertsNotStaker() public {
+        enrollment.enroll{value: STAKE_AMOUNT}(42, 100, 5, 6, hex"1234");
+
+        vm.prank(address(0xdead));
+        vm.expectRevert(Enrollment.NotStaker.selector);
+        uint256[] memory siblings = new uint256[](0);
+        enrollment.unstake(42, siblings);
+    }
+
+    receive() external payable {}
 }
 
 /// @dev Returns false on first call, true on second call

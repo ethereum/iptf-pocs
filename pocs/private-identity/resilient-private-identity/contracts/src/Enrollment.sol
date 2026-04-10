@@ -3,6 +3,7 @@ pragma solidity ^0.8.21;
 
 interface IIdentityTree {
     function insertLeaf(uint256 leaf, uint256 enrollmentNullifier) external;
+    function removeLeaf(uint256 leaf, uint256[] calldata siblingNodes) external;
 }
 
 interface IVerifier {
@@ -28,11 +29,16 @@ contract Enrollment {
     address public multisig;
     address public guardian;
 
+    uint256 public stakeAmount;
+
     uint256 public constant TIMELOCK_BLOCKS = 14400;
     uint256 public constant GRACE_BLOCKS = 14400;
     uint256 public constant BN254_P = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
 
+    mapping(uint256 => address) public stakers;
+
     event Enrolled(uint256 indexed leaf, uint256 enrollmentNullifier);
+    event Unstaked(uint256 indexed leaf, address staker, uint256 amount);
     event MPCKeyProposed(uint256 x, uint256 y, uint256 activationBlock);
     event MPCKeyFinalized(uint256 x, uint256 y);
     event PendingKeyVetoed();
@@ -44,6 +50,9 @@ contract Enrollment {
     error NoPendingKey();
     error TimelockNotExpired();
     error KeyAlreadyPending();
+    error InsufficientStake();
+    error NotStaker();
+    error TransferFailed();
 
     modifier onlyMultisig() {
         if (msg.sender != multisig) revert NotMultisig();
@@ -61,13 +70,15 @@ contract Enrollment {
         uint256 _mpcPubKeyX,
         uint256 _mpcPubKeyY,
         address _multisig,
-        address _guardian
+        address _guardian,
+        uint256 _stakeAmount
     ) {
         identityTree = IIdentityTree(_identityTree);
         verifier = IVerifier(_verifier);
         mpcPublicKey = ECPoint(_mpcPubKeyX, _mpcPubKeyY);
         multisig = _multisig;
         guardian = _guardian;
+        stakeAmount = _stakeAmount;
     }
 
     function enroll(
@@ -76,7 +87,8 @@ contract Enrollment {
         uint256 gIdX,
         uint256 gIdY,
         bytes calldata proof
-    ) external {
+    ) external payable {
+        if (msg.value < stakeAmount) revert InsufficientStake();
         bytes32[] memory publicInputs = new bytes32[](6);
         publicInputs[0] = bytes32(leaf);
         publicInputs[1] = bytes32(enrollmentNullifier);
@@ -96,8 +108,21 @@ contract Enrollment {
 
         if (!valid) revert InvalidProof();
 
+        stakers[leaf] = msg.sender;
         identityTree.insertLeaf(leaf, enrollmentNullifier);
         emit Enrolled(leaf, enrollmentNullifier);
+    }
+
+    function unstake(uint256 leaf, uint256[] calldata siblingNodes) external {
+        if (stakers[leaf] != msg.sender) revert NotStaker();
+
+        delete stakers[leaf];
+        identityTree.removeLeaf(leaf, siblingNodes);
+
+        (bool ok, ) = msg.sender.call{value: stakeAmount}("");
+        if (!ok) revert TransferFailed();
+
+        emit Unstaked(leaf, msg.sender, stakeAmount);
     }
 
     function proposeMPCPublicKey(uint256 x, uint256 y) external onlyMultisig {

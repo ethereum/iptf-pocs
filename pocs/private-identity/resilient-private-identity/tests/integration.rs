@@ -77,7 +77,7 @@ sol! {
             uint256 gIdX,
             uint256 gIdY,
             bytes calldata proof
-        ) external;
+        ) external payable;
 
         function mpcPublicKey() external view returns (uint256 x, uint256 y);
     }
@@ -288,6 +288,7 @@ async fn test_full_enrollment_and_verification() {
     let g_id_x = fq_to_u256(enrollment_data.g_id.x);
     let g_id_y = fq_to_u256(enrollment_data.g_id.y);
 
+    let stake_amount = U256::from(100_000_000_000_000_000u128); // 0.1 ether
     let enroll_tx = enrollment_contract
         .enroll(
             fr_to_u256(enrollment_data.leaf),
@@ -296,6 +297,7 @@ async fn test_full_enrollment_and_verification() {
             g_id_y,
             Bytes::from(enrollment_proof_bytes),
         )
+        .value(stake_amount)
         .send()
         .await
         .expect("Failed to send enrollment tx");
@@ -514,6 +516,7 @@ async fn test_real_proofs_enrollment_and_verification() {
     let g_id_x = fq_to_u256(enrollment_data.g_id.x);
     let g_id_y = fq_to_u256(enrollment_data.g_id.y);
 
+    let stake_amount = U256::from(100_000_000_000_000_000u128); // 0.1 ether
     let enroll_tx = enrollment_contract
         .enroll(
             fr_to_u256(enrollment_data.leaf),
@@ -522,6 +525,7 @@ async fn test_real_proofs_enrollment_and_verification() {
             g_id_y,
             Bytes::from(enrollment_proof_bytes),
         )
+        .value(stake_amount)
         .send()
         .await
         .expect("Failed to send enrollment tx");

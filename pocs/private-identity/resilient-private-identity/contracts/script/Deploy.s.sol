@@ -51,13 +51,15 @@ contract Deploy is Script, Config {
         }
 
         // 3. Deploy Enrollment
+        uint256 stakeAmount = 0.1 ether;
         Enrollment enrollment = new Enrollment(
             address(identityTree),
             enrollmentVerifierAddr,
             mpcKeyX,
             mpcKeyY,
             multisigAddr,
-            guardianAddr
+            guardianAddr,
+            stakeAmount
         );
         console.log("Enrollment:", address(enrollment));
 
