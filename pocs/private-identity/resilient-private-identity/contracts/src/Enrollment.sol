@@ -99,7 +99,7 @@ contract Enrollment {
 
         bool valid = verifier.verify(proof, publicInputs);
 
-        if (!valid && block.number < keyGraceExpiry) {
+        if (!valid && block.number <= keyGraceExpiry) {
             // Retry with previous key
             publicInputs[2] = bytes32(previousMPCKey.x);
             publicInputs[3] = bytes32(previousMPCKey.y);
