@@ -145,7 +145,7 @@ After enrollment, the on-chain Merkle root is the sole trust anchor. The issuer 
 | **Regulatory** | Selective disclosure grants auditors scoped read access. Append-only audit trail records verification events. |
 | **Operational** | On-chain proof verification in a single transaction. No issuer online requirement after enrollment. Proof generation practical on consumer hardware. |
 | **Trust** | Verifiers are honest-but-curious. vOPRF MPC network is honest above its threshold (t-of-n). Verifiers cannot extract holder identity or credential contents beyond the boolean result. |
-| **Sybil resistance** | Each real-world identity maps to exactly one on-chain leaf via the vOPRF enrollment nullifier. |
+| **Sybil resistance** | Layered. vOPRF nullifier: one leaf per source credential. Refundable stake: capital lockup per leaf bounds sybils when sources are compromised. Web-of-trust vouching (future): social reach limits amplification further. See [Sybil Resistance Model](#sybil-resistance-model). |
 
 ## Approach
 
@@ -412,7 +412,7 @@ Incremental Merkle tree (depth 20, Poseidon t=3 without domain tag) with a unive
 
 #### Enrollment.sol
 
-Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universal sybil gate: every real-world identity maps to exactly one enrollment nullifier, preventing duplicate enrollment regardless of when enrollment occurs. A configurable stake (default 0.1 ETH) is required at enrollment, making bulk registration economically costly even if identity sources are compromised.
+Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universal sybil gate: every real-world identity maps to exactly one enrollment nullifier, preventing duplicate enrollment regardless of when enrollment occurs. A configurable refundable stake (default 0.1 ETH) is required at enrollment, locking capital per leaf. N sybil leaves require N * stake locked, bounding bulk registration when identity sources are compromised. The stake is a capital bond, not a burned fee; holders reclaim it by unstaking, which removes their leaf from the tree.
 
 **State:**
 - `mpcPublicKey: (uint256 x, uint256 y)` (aggregated vOPRF network key)
@@ -421,6 +421,8 @@ Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universa
 - `pendingKey: (uint256 x, uint256 y)` (proposed key, pending timelock)
 - `pendingKeyActivation: uint256` (block number when pendingKey can be finalized)
 - `guardian: address` (can veto pending key rotations, set at deployment)
+- `stakeAmount: uint256` (required stake per leaf, set at deployment)
+- `stakers: mapping(uint256 => address)` (leaf to staker address, for unstake reclaim)
 
 **Governance:** 4-of-7 multisig with 48-hour timelock on MPC key rotation. A separate `guardian` address can veto pending key rotations during the timelock window. The multisig and guardian addresses are set at deployment and are not upgradeable.
 
@@ -429,6 +431,7 @@ Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universa
 - `proposeMPCPublicKey(uint256 x, uint256 y) external onlyMultisig`: MUST verify the point is on BN254 G1: `y^2 == x^3 + 3 mod p`. MUST verify the point is not (0, 0). Sets `pendingKey = (x, y)` and `pendingKeyActivation = block.number + TIMELOCK_BLOCKS`.
 - `finalizeMPCPublicKey() external onlyMultisig`: MUST revert if `block.number < pendingKeyActivation` or `pendingKey == (0, 0)`. Sets `previousMPCKey = mpcPublicKey`, `mpcPublicKey = pendingKey`, `keyGraceExpiry = block.number + GRACE_BLOCKS`, clears `pendingKey`.
 - `vetoPendingKey() external onlyGuardian`: Clears `pendingKey` and `pendingKeyActivation`. Callable only while a proposal is pending.
+- `unstake(uint256 leaf, uint256[] calldata siblingNodes) external`: MUST revert if `stakers[leaf] != msg.sender`. Deletes `stakers[leaf]`, calls `IdentityTree.removeLeaf(leaf, siblingNodes)` to zero the leaf in the Merkle tree, then transfers `stakeAmount` to the caller. Follows checks-effects-interactions: state mutation before external call.
 
 **Constants:** `TIMELOCK_BLOCKS = 14400` (~48 hours at 12s blocks). `GRACE_BLOCKS = 14400` (~48 hours grace for old key acceptance).
 
@@ -436,6 +439,7 @@ Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universa
 - `MPCKeyRotationProposed(uint256 x, uint256 y, uint256 activationBlock)`
 - `MPCKeyRotationFinalized(uint256 x, uint256 y, uint256 graceExpiry)`
 - `MPCKeyRotationVetoed()`
+- `Unstaked(uint256 indexed leaf, address staker, uint256 amount)`
 
 #### IdentityVerifier.sol
 
@@ -620,7 +624,7 @@ The adversary is a single issuer who cooperated during initial credential issuan
 |----------|-----------|
 | Membership soundness | Only holders who completed vOPRF enrollment can produce valid membership proofs. |
 | Nullifier uniqueness | A holder cannot present twice in the same application context without detection. |
-| Sybil resistance | The vOPRF enrollment nullifier is deterministic per canonical `user_id`. Duplicate enrollment is rejected on-chain via the `usedEnrollmentNullifiers` mapping. Each real-world identity maps to exactly one leaf, modulo the MPC honest-threshold assumption and `user_id` canonicalization correctness. |
+| Sybil resistance | Layered. **Cryptographic:** the vOPRF enrollment nullifier is deterministic per canonical `user_id`; duplicate enrollment is rejected on-chain via `usedEnrollmentNullifiers` (one leaf per source credential, modulo MPC honest-threshold and `user_id` canonicalization correctness). **Economic:** a refundable stake (default 0.1 ETH) locks capital per leaf; N sybil leaves from compromised sources require N * stake locked. The resource consumed is capital lockup, not a burned fee. **Social (future):** web-of-trust vouching bounds amplification by social reach. See [Sybil Resistance Model](#sybil-resistance-model). |
 | Domain separation | All Poseidon invocations use unique domain tags (values 1-8) with specified arities, preventing cross-context collisions. Merkle tree nodes use untagged Poseidon t=3, distinct from all tagged invocations. |
 | Root freshness | Proofs are valid against any of the last 1000 stored roots. |
 | Selective disclosure | Verifiers learn the predicate result and the public predicate parameters (type, index, value). Attribute indices 2 and 3 are non-queryable. The attribute vector itself remains hidden behind `identity_secret`. Note: predicate parameters are public inputs (see "Predicate parameter leakage" in Limitations). |
@@ -628,6 +632,24 @@ The adversary is a single issuer who cooperated during initial credential issuan
 | OPRF privacy | The raw OPRF coordinates never appear in calldata or in any on-chain data. The Chaum-Pedersen verification is performed inside the ZK circuit against `G_id`. Only the hashed enrollment nullifier is revealed on-chain. The MPC network can compute OPRF outputs given its key shares (see "MPC collusion" in Limitations). |
 | DLEQ binding | The enrollment circuit verifies DLEQ against a specific `G_id` public input, cryptographically binding the enrollment nullifier to a specific identity point. Combined with MPC pi_link verification, this chains real-world identity -> G_id -> OPRF output -> enrollment nullifier. |
 | Attribute integrity | The enrollment circuit derives `attr_hash` from the attribute vector inside the circuit. There is no independent `attr_hash` input that could be manipulated. Note: attribute values are self-declared (see Limitations). |
+
+### Sybil Resistance Model
+
+The protocol layers three independent sybil gates, each addressing a different failure mode:
+
+| Layer | Mechanism | What it bounds | Assumption |
+|-------|-----------|---------------|------------|
+| **Cryptographic** | vOPRF enrollment nullifier | One leaf per source credential | Identity sources issue unique, unforgeable credentials |
+| **Economic** | Refundable stake (default 0.1 ETH) | Capital lockup per leaf (N leaves = N * stake) | Attacker capital is finite |
+| **Social** (future) | Web-of-trust vouching (K=3 vouches, V=2 budget) | Amplification bounded by social reach | Social graph is not fully captured by attacker |
+
+When identity sources are honest, the cryptographic layer alone enforces strict one-to-one binding between a real-world identity and an on-chain leaf.
+
+When identity sources are compromised (unlimited burner emails, forged documents), the model shifts to capital-bounded plural identity: an attacker can register N sybil leaves, but must lock N * stake. The stake is a refundable bond, not a burned fee. The resource consumed is capital lockup (opportunity cost of locked ETH), not a direct payment. Holders reclaim their stake by unstaking, which removes their leaf from the tree.
+
+The social layer (see [README: Future Work: Web of Trust](./README.md#future-work-web-of-trust)) adds a third constraint for environments where both credentials and capital are abundant. Vouch requirements from existing members bound sybil amplification by social reach.
+
+A production deployment tunes these layers to its threat model: high-trust environments may reduce the stake for vouched members; bootstrap phases may rely on stake alone before a social graph forms.
 
 ### Limitations & Shortcuts (PoC Scope)
 
@@ -657,7 +679,7 @@ The adversary is a single issuer who cooperated during initial credential issuan
 ### Contract Deployment Order
 
 1. Deploy `IdentityTree(address governance)`. The constructor initializes all 1000 `recentRoots` slots to the empty-tree root (untagged Poseidon applied recursively with zero leaves for depth 20). Sets `governance` to the multisig address.
-2. Deploy `Enrollment(address identityTree, uint256 mpcPubKeyX, uint256 mpcPubKeyY, address multisig, address guardian)`. The constructor validates the MPC public key is on BN254 G1.
+2. Deploy `Enrollment(address identityTree, address verifier, uint256 mpcPubKeyX, uint256 mpcPubKeyY, address multisig, address guardian, uint256 stakeAmount)`. The constructor validates the MPC public key is on BN254 G1.
 3. Deploy `IdentityVerifier(address identityTree)`.
 4. Call `IdentityTree.addAuthorized(address(Enrollment))` from the governance multisig.
 

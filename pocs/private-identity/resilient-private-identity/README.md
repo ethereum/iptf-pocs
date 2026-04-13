@@ -120,6 +120,8 @@ See [SPEC.md](./SPEC.md) for the full future work specification including name n
 
 The vOPRF sybil gate binds one identity source credential to one on-chain leaf. But if the identity source itself is compromised (unlimited burner emails, forged documents), an attacker can generate T fake source identities that each pass the vOPRF legitimately. The cryptographic gate holds (one source identity, one leaf) but the source is a mint.
 
+The refundable enrollment stake (see [SPEC.md: Sybil Resistance Model](./SPEC.md#sybil-resistance-model)) provides a second gate: each fake leaf requires locked capital. But for well-funded adversaries, capital lockup alone is insufficient. A social gate complements both layers.
+
 ### Design: Off-Chain Recursive Vouch Aggregation
 
 A second sybil gate layers social trust on top of the vOPRF. Before enrollment, the enrollee must collect K=3 vouches from existing tree members. Vouches are generated off-chain and aggregated into a single recursive proof, submitted atomically with the enrollment transaction.
