@@ -50,9 +50,12 @@ contract Enrollment {
     error NoPendingKey();
     error TimelockNotExpired();
     error KeyAlreadyPending();
-    error InsufficientStake();
+    error StakeAmountMismatch();
     error NotStaker();
     error TransferFailed();
+    error ContractPaused();
+
+    bool public paused;
 
     modifier onlyMultisig() {
         if (msg.sender != multisig) revert NotMultisig();
@@ -61,6 +64,11 @@ contract Enrollment {
 
     modifier onlyGuardian() {
         if (msg.sender != guardian) revert NotGuardian();
+        _;
+    }
+
+    modifier whenNotPaused() {
+        if (paused) revert ContractPaused();
         _;
     }
 
@@ -87,8 +95,8 @@ contract Enrollment {
         uint256 gIdX,
         uint256 gIdY,
         bytes calldata proof
-    ) external payable {
-        if (msg.value < stakeAmount) revert InsufficientStake();
+    ) external payable whenNotPaused {
+        if (msg.value != stakeAmount) revert StakeAmountMismatch();
         bytes32[] memory publicInputs = new bytes32[](6);
         publicInputs[0] = bytes32(leaf);
         publicInputs[1] = bytes32(enrollmentNullifier);
@@ -113,7 +121,7 @@ contract Enrollment {
         emit Enrolled(leaf, enrollmentNullifier);
     }
 
-    function unstake(uint256 leaf, uint256[] calldata siblingNodes) external {
+    function unstake(uint256 leaf, uint256[] calldata siblingNodes) external whenNotPaused {
         if (stakers[leaf] != msg.sender) revert NotStaker();
 
         delete stakers[leaf];
@@ -156,6 +164,14 @@ contract Enrollment {
         pendingKeyActivation = 0;
 
         emit PendingKeyVetoed();
+    }
+
+    function pause() external onlyMultisig {
+        paused = true;
+    }
+
+    function unpause() external onlyMultisig {
+        paused = false;
     }
 
     function _requireOnCurve(uint256 x, uint256 y) internal pure {

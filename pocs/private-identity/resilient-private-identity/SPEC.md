@@ -398,11 +398,13 @@ Incremental Merkle tree (depth 20, Poseidon t=3 without domain tag) with a unive
 - `rootIndex: uint256` (current position in circular buffer)
 - `insertedLeaves: mapping(bytes32 => bool)` (leaf uniqueness enforcement)
 - `usedEnrollmentNullifiers: mapping(bytes32 => bool)` (vOPRF sybil gate, shared across all callers)
+- `leafEnrollmentNullifier: mapping(uint256 => uint256)` (leaf to enrollment nullifier, cleared on removal to allow re-enrollment)
 - `authorized: mapping(address => bool)` (managed via governance)
 - `governance: address` (multisig, set at deployment)
 
 **Functions:**
-- `insertLeaf(bytes32 leaf, bytes32 enrollmentNullifier) external onlyAuthorized whenNotPaused`: MUST revert if `insertedLeaves[leaf]` is true. MUST revert if `usedEnrollmentNullifiers[enrollmentNullifier]` is true. MUST revert if `nextIndex >= 2^20`. Appends leaf, sets `insertedLeaves[leaf] = true`, sets `usedEnrollmentNullifiers[enrollmentNullifier] = true`, updates Merkle root via path recomputation, pushes root: `recentRoots[rootIndex % 1000] = newRoot; rootIndex = rootIndex + 1`.
+- `insertLeaf(bytes32 leaf, bytes32 enrollmentNullifier) external onlyAuthorized whenNotPaused`: MUST revert if `insertedLeaves[leaf]` is true. MUST revert if `usedEnrollmentNullifiers[enrollmentNullifier]` is true. MUST revert if `nextIndex >= 2^20`. Appends leaf, sets `insertedLeaves[leaf] = true`, sets `usedEnrollmentNullifiers[enrollmentNullifier] = true`, stores `leafEnrollmentNullifier[leaf] = enrollmentNullifier`, updates Merkle root via path recomputation, pushes root: `recentRoots[rootIndex % 1000] = newRoot; rootIndex = rootIndex + 1`.
+- `removeLeaf(uint256 leaf, uint256[] calldata siblingNodes) external onlyAuthorized whenNotPaused`: Removes the leaf from the Merkle tree. Clears `insertedLeaves[leaf]`, `usedEnrollmentNullifiers[leafEnrollmentNullifier[leaf]]`, and `leafEnrollmentNullifier[leaf]` so the same identity can re-enroll after removal. Updates the root circular buffer.
 - `isRecentRoot(bytes32 root) view returns (bool)`: Returns true if root is in `recentRoots`. MUST return false for `bytes32(0)`.
 - `addAuthorized(address addr) external onlyGovernance`: Sets `authorized[addr] = true`.
 - `removeAuthorized(address addr) external onlyGovernance`: Sets `authorized[addr] = false`.
@@ -427,7 +429,7 @@ Handles all enrollment via vOPRF. The vOPRF enrollment nullifier is the universa
 **Governance:** 4-of-7 multisig with 48-hour timelock on MPC key rotation. A separate `guardian` address can veto pending key rotations during the timelock window. The multisig and guardian addresses are set at deployment and are not upgradeable.
 
 **Functions:**
-- `enroll(bytes32 leaf, bytes32 enrollmentNullifier, uint256 G_id_x, uint256 G_id_y, bytes calldata enrollmentProof) external payable whenNotPaused`: Requires `msg.value >= stakeAmount` (default 0.1 ETH). Stake is recorded per leaf and can be reclaimed via `unstake(leaf, siblingNodes)`, which removes the leaf from the identity tree. Reads `mpcPublicKey` from contract storage. Constructs the public input vector `[leaf, enrollmentNullifier, mpcPublicKey.x, mpcPublicKey.y, G_id_x, G_id_y]` and verifies the Noir enrollment proof against the enrollment circuit's verification key. If verification fails AND `block.number <= keyGraceExpiry`, retries with `previousMPCKey`. MUST revert if all verifications fail. Calls `IdentityTree.insertLeaf(leaf, enrollmentNullifier)`.
+- `enroll(bytes32 leaf, bytes32 enrollmentNullifier, uint256 G_id_x, uint256 G_id_y, bytes calldata enrollmentProof) external payable whenNotPaused`: Requires `msg.value == stakeAmount` (default 0.1 ETH). Stake is recorded per leaf and can be reclaimed via `unstake(leaf, siblingNodes)`, which removes the leaf from the identity tree. Reads `mpcPublicKey` from contract storage. Constructs the public input vector `[leaf, enrollmentNullifier, mpcPublicKey.x, mpcPublicKey.y, G_id_x, G_id_y]` and verifies the Noir enrollment proof against the enrollment circuit's verification key. If verification fails AND `block.number <= keyGraceExpiry`, retries with `previousMPCKey`. MUST revert if all verifications fail. Calls `IdentityTree.insertLeaf(leaf, enrollmentNullifier)`.
 - `proposeMPCPublicKey(uint256 x, uint256 y) external onlyMultisig`: MUST verify the point is on BN254 G1: `y^2 == x^3 + 3 mod p`. MUST verify the point is not (0, 0). Sets `pendingKey = (x, y)` and `pendingKeyActivation = block.number + TIMELOCK_BLOCKS`.
 - `finalizeMPCPublicKey() external onlyMultisig`: MUST revert if `block.number < pendingKeyActivation` or `pendingKey == (0, 0)`. Sets `previousMPCKey = mpcPublicKey`, `mpcPublicKey = pendingKey`, `keyGraceExpiry = block.number + GRACE_BLOCKS`, clears `pendingKey`.
 - `vetoPendingKey() external onlyGuardian`: Clears `pendingKey` and `pendingKeyActivation`. Callable only while a proposal is pending.
@@ -447,14 +449,15 @@ Verifies membership and selective disclosure proofs.
 
 **State:**
 - `usedNullifiers: mapping(bytes32 => bool)`
+- `governance: address` (multisig, set at deployment)
 
 **Functions:**
-- `verifyProof(bytes calldata proof, bytes32 root, bytes32 nullifier, bytes32 externalNullifier, uint256 version, uint256 predicateType, uint256 predicateAttrIndex, uint256 predicateValue, uint256 predicateResult) external whenNotPaused`: Constructs the public input vector `[root, nullifier, externalNullifier, version, predicateType, predicateAttrIndex, predicateValue, predicateResult]` and verifies the Noir proof against the membership circuit's verification key. MUST revert if `!IdentityTree.isRecentRoot(root)`. MUST revert if `usedNullifiers[nullifier]` is true. MUST revert if `predicateAttrIndex >= 2` (only indices 0-1 are queryable for version 1). MUST revert if proof verification fails. On success, sets `usedNullifiers[nullifier] = true`.
+- `verifyProof(bytes calldata proof, bytes32 root, bytes32 nullifier, bytes32 externalNullifier, uint256 version, uint256 predicateType, uint256 predicateAttrIndex, uint256 predicateValue, uint256 predicateResult) external whenNotPaused`: NOTE: `externalNullifier` is not validated on-chain. The calling verifier (dApp contract) MUST compute `externalNullifier = H(DOMAIN_EXTERNAL_NULLIFIER, chain_id, verifier_address, scope)` and reject mismatches before calling this function. Constructs the public input vector `[root, nullifier, externalNullifier, version, predicateType, predicateAttrIndex, predicateValue, predicateResult]` and verifies the Noir proof against the membership circuit's verification key. MUST revert if `!IdentityTree.isRecentRoot(root)`. MUST revert if `usedNullifiers[nullifier]` is true. MUST revert if `predicateAttrIndex >= 2` (only indices 0-1 are queryable for version 1). MUST revert if proof verification fails. On success, sets `usedNullifiers[nullifier] = true`.
 
 This function MUST revert on ANY failure condition. It does not return a value. The only observable outcome of a non-reverting call is that the nullifier has been consumed and the proof is valid.
 
 **Events:**
-- `ProofVerified(bytes32 indexed nullifier, bytes32 root, bytes32 externalNullifier, uint256 version)`
+- `ProofVerified(bytes32 indexed nullifier, bytes32 root, bytes32 externalNullifier, uint256 version, uint256 predicateType, uint256 predicateAttrIndex, uint256 predicateValue, uint256 predicateResult)`
 
 ## Cryptographic Details
 

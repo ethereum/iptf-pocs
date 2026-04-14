@@ -37,6 +37,8 @@ contract IdentityVerifierTest is Test {
     MockVerifier public mockVerifier;
     MockIdentityTree public mockTree;
 
+    address public governanceAddr = address(0xCC);
+
     uint256 constant ROOT = 12345;
     uint256 constant NULLIFIER = 67890;
     uint256 constant EXT_NULLIFIER = 11111;
@@ -45,7 +47,7 @@ contract IdentityVerifierTest is Test {
     function setUp() public {
         mockVerifier = new MockVerifier(true);
         mockTree = new MockIdentityTree();
-        iv = new IdentityVerifier(address(mockTree), address(mockVerifier));
+        iv = new IdentityVerifier(address(mockTree), address(mockVerifier), governanceAddr);
 
         mockTree.setRoot(ROOT, true);
     }
@@ -68,7 +70,7 @@ contract IdentityVerifierTest is Test {
 
     function test_verifyProof_emitsEvent() public {
         vm.expectEmit(true, false, false, true);
-        emit IdentityVerifier.ProofVerified(NULLIFIER, ROOT, EXT_NULLIFIER, VERSION);
+        emit IdentityVerifier.ProofVerified(NULLIFIER, ROOT, EXT_NULLIFIER, VERSION, 1, 0, 100, 1);
 
         iv.verifyProof(hex"1234", ROOT, NULLIFIER, EXT_NULLIFIER, VERSION, 1, 0, 100, 1);
     }

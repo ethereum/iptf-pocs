@@ -80,7 +80,7 @@ contract EnrollmentTest is Test {
     }
 
     function test_enroll_revertsOnInsufficientStake() public {
-        vm.expectRevert(Enrollment.InsufficientStake.selector);
+        vm.expectRevert(Enrollment.StakeAmountMismatch.selector);
         enrollment.enroll{value: STAKE_AMOUNT - 1}(42, 100, 5, 6, hex"1234");
     }
 

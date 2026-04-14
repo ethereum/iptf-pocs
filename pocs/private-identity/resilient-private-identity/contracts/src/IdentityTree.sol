@@ -13,6 +13,7 @@ contract IdentityTree {
 
     mapping(uint256 => bool) public insertedLeaves;
     mapping(uint256 => bool) public usedEnrollmentNullifiers;
+    mapping(uint256 => uint256) public leafEnrollmentNullifier;
     mapping(address => bool) public authorized;
 
     address public governance;
@@ -52,6 +53,7 @@ contract IdentityTree {
 
         insertedLeaves[leaf] = true;
         usedEnrollmentNullifiers[enrollmentNullifier] = true;
+        leafEnrollmentNullifier[leaf] = enrollmentNullifier;
 
         uint256 index = tree.size;
         tree.insert(leaf);
@@ -65,6 +67,12 @@ contract IdentityTree {
 
     function removeLeaf(uint256 leaf, uint256[] calldata siblingNodes) external onlyAuthorized whenNotPaused {
         tree.remove(leaf, siblingNodes);
+
+        delete insertedLeaves[leaf];
+        uint256 enrollmentNullifier = leafEnrollmentNullifier[leaf];
+        delete usedEnrollmentNullifiers[enrollmentNullifier];
+        delete leafEnrollmentNullifier[leaf];
+
         uint256 newRoot = tree.root();
 
         rootIndex = (rootIndex + 1) % 1000;
