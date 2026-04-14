@@ -66,7 +66,8 @@ contract Deploy is Script, Config {
         // 4. Deploy IdentityVerifier
         IdentityVerifier identityVerifierContract = new IdentityVerifier(
             address(identityTree),
-            membershipVerifierAddr
+            membershipVerifierAddr,
+            governance
         );
         console.log("IdentityVerifier:", address(identityVerifierContract));
 

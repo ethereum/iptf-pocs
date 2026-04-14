@@ -12,21 +12,49 @@ interface IVerifier {
 contract IdentityVerifier {
     IIdentityTree public identityTree;
     IVerifier public verifier;
+    address public governance;
+    bool public paused;
 
     mapping(uint256 => bool) public usedNullifiers;
 
-    event ProofVerified(uint256 indexed nullifier, uint256 root, uint256 externalNullifier, uint256 version);
+    event ProofVerified(
+        uint256 indexed nullifier,
+        uint256 root,
+        uint256 externalNullifier,
+        uint256 version,
+        uint256 predicateType,
+        uint256 predicateAttrIndex,
+        uint256 predicateValue,
+        uint256 predicateResult
+    );
 
     error StaleRoot();
     error NullifierUsed();
     error InvalidAttrIndex();
     error InvalidProof();
+    error NotGovernance();
+    error ContractPaused();
 
-    constructor(address _identityTree, address _verifier) {
-        identityTree = IIdentityTree(_identityTree);
-        verifier = IVerifier(_verifier);
+    modifier onlyGovernance() {
+        if (msg.sender != governance) revert NotGovernance();
+        _;
     }
 
+    modifier whenNotPaused() {
+        if (paused) revert ContractPaused();
+        _;
+    }
+
+    constructor(address _identityTree, address _verifier, address _governance) {
+        identityTree = IIdentityTree(_identityTree);
+        verifier = IVerifier(_verifier);
+        governance = _governance;
+    }
+
+    /// @notice Verify a membership proof with selective disclosure.
+    /// @dev externalNullifier is NOT validated on-chain. The calling verifier (dApp contract)
+    ///      MUST compute externalNullifier = H(DOMAIN, chain_id, verifier_address, scope) and
+    ///      reject mismatches before calling this function. See SPEC section 6.2, step 1 and 4.
     function verifyProof(
         bytes calldata proof,
         uint256 root,
@@ -37,7 +65,7 @@ contract IdentityVerifier {
         uint256 predicateAttrIndex,
         uint256 predicateValue,
         uint256 predicateResult
-    ) external {
+    ) external whenNotPaused {
         if (!identityTree.isRecentRoot(root)) revert StaleRoot();
         if (usedNullifiers[nullifier]) revert NullifierUsed();
         if (predicateAttrIndex >= 2) revert InvalidAttrIndex();
@@ -56,6 +84,14 @@ contract IdentityVerifier {
 
         usedNullifiers[nullifier] = true;
 
-        emit ProofVerified(nullifier, root, externalNullifier, version);
+        emit ProofVerified(nullifier, root, externalNullifier, version, predicateType, predicateAttrIndex, predicateValue, predicateResult);
+    }
+
+    function pause() external onlyGovernance {
+        paused = true;
+    }
+
+    function unpause() external onlyGovernance {
+        paused = false;
     }
 }
