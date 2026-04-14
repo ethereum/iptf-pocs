@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "circuits/lib",
+    "circuits/membership",
+    "circuits/enrollment",
+    "circuits/link_proof",
+]
