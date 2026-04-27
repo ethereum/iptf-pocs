@@ -7,19 +7,20 @@
 
 #![deny(unsafe_code)]
 
-use std::{fs, path::Path, time::Instant};
+use std::time::Instant;
 
 use binius_mayo::{Prover, SignedMessage, Verifier, compute_commitments};
 
 const SIG_BYTES: usize = 186;
 const CPK_BYTES: usize = 4912;
 
+const KAT_RSP: &str = include_str!("../tests/kat/mayo2.rsp");
+
 /// Tiny KAT loader for the first stanza in `tests/kat/mayo2.rsp`.
-fn load_first_kat(path: &Path) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
-    let raw = fs::read_to_string(path)?;
+fn load_first_kat() -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
     let mut pk: Option<Vec<u8>> = None;
     let mut sm: Option<Vec<u8>> = None;
-    for line in raw.lines() {
+    for line in KAT_RSP.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() && pk.is_some() && sm.is_some() {
             break;
@@ -39,7 +40,7 @@ fn load_first_kat(path: &Path) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error:
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (pk_bytes, sm_bytes) = load_first_kat(Path::new("tests/kat/mayo2.rsp"))?;
+    let (pk_bytes, sm_bytes) = load_first_kat()?;
     let cpk: &[u8; CPK_BYTES] = pk_bytes.as_slice().try_into()?;
     let sig: &[u8; SIG_BYTES] = sm_bytes[..SIG_BYTES].try_into()?;
     let payload: &[u8] = &sm_bytes[SIG_BYTES..];
