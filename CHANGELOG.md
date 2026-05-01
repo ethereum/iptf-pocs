@@ -24,6 +24,9 @@ Use `[repo]` for repository-wide changes (CI, templates, docs).
 
 ## Unreleased
 
+### [repo]
+- **Changed**: README PoC table synced with current `pocs/` (added `private-identity`, linked published writeups, updated statuses)
+
 ### [diy-validium]
 - **Changed**: IMAGE_IDs from hardcoded `bytes32(0)` constants to immutable constructor params in all contracts
 - **Added**: `risc0-ethereum-contracts` for real seal encoding in E2E test
