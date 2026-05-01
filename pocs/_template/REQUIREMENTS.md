@@ -1,6 +1,7 @@
 ---
 title: "{{poc_name}} Requirements"
-use_case: "[link to iptf-map use case]"
+use_cases: 
+  - "[link to iptf-map use case]"
 approach: "[link to iptf-map approach]"
 ---
 

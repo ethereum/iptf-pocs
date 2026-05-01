@@ -1,6 +1,8 @@
 ---
 title: "Private Identity Requirements"
-use_case: "https://github.com/ethereum/iptf-map/blob/master/use-cases/private-identity.md"
+use_cases: 
+  - "https://github.com/ethereum/iptf-map/blob/master/use-cases/private-identity.md"
+  - "https://github.com/ethereum/iptf-map/blob/master/use-cases/resilient-identity-continuity.md"
 approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-identity.md"
 ---
 

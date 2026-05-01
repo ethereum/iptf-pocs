@@ -1,0 +1,8 @@
+[package]
+name = "resilient_disbursement_rails"
+version = "0.1.0"
+authors = ["rymnc <43716372+rymnc@users.noreply.github.com>"]
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"

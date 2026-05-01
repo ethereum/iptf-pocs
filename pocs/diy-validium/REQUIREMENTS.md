@@ -1,7 +1,8 @@
 ---
 title: "DIY Validium Requirements"
-use_case: "Private institutional payments"
-approach: "Validium with ZK proofs"
+use_cases: 
+  - "https://github.com/ethereum/iptf-map/blob/master/use-cases/private-payments.md"
+approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-payments.md"
 ---
 
 # DIY Validium Requirements

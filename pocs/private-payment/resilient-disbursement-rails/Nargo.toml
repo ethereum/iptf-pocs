@@ -1,0 +1,3 @@
+[workspace]
+members = ["circuits/resilient_disbursement_rails"]
+default-member = "circuits/resilient_disbursement_rails"
