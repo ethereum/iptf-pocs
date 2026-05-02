@@ -1,7 +1,7 @@
 ---
 title: "Resilient Disbursement Rails"
 status: Draft
-version: 0.3.0
+version: 0.5.0
 authors: []
 created: 2026-04-30
 iptf_use_case: "https://github.com/ethereum/iptf-map/blob/master/use-cases/resilient-disbursement-rails.md"
@@ -10,38 +10,24 @@ iptf_approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/appr
 
 # Resilient Disbursement Rails: Protocol Specification
 
+The keywords MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are interpreted as in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in capitals.
+
 ## Problem Statement
 
-Humanitarian disbursements in adversarial jurisdictions face the eleven-capability adversary set enumerated in [Threat Model](#threat-model). Recipients operate tamper-resistant smartcards with no client-side ZK, intermittent or absent internet, and a high probability of device loss. Off-ramp unlinkability is the dominant cryptographic requirement: every documented prosecution between 2013 and 2026 pivoted on KYC'd off-ramps or subpoena'd exchange records, never on pure on-chain clustering. The protocol prevents off-ramp KYC from linking back to the disbursement event, subject to an explicit organizational separation between the registry operator and the implementing partner.
+A funder distributes a fixed per-recipient amount to a cohort of recipients in a jurisdiction whose authorities are hostile to the funder, the implementing partner, or the recipients themselves. The off-ramp is the primary linkage vector: licensed exchanges identify customers and can tie any deposit address to a recipient on demand.
 
-## Use Case Overview
+Recipients hold tamper-resistant smartcards. They cannot run zero-knowledge provers on the card, may have intermittent or no internet, and lose devices at meaningful rates.
 
-A funder distributes a fixed per-recipient amount to a cohort of recipients enrolled through a public-key registry. Each recipient holds a tamper-resistant smartcard running a custom applet that signs an offline voucher. A relay lifts the voucher into an on-chain ZK proof and submits the claim through an anonymous transport. Funds settle to a one-time stealth destination derived on-card.
+### Constraints
 
-### Components
+| Category | Requirement |
+|----------|-------------|
+| Privacy | Off-ramp unlinkability up to the stealth destination. Cohort-level anonymity within `cohortRoot`. Pool-level k-anonymity bounded by the calling claim contract's pool sub-tree. Cross-funder anonymity and forward secrecy of past claim identifiers under card seizure are out of scope. |
+| Regulatory | Pool-level k-anonymity within the chosen IShieldedPool association set. Compliance witnesses tolerated as opaque pool inputs. |
+| Operational | Smartcard signing only; no on-card ZK. Tolerance for high-latency mesh transport. No real-time recipient internet. Card loss recoverable via re-enrollment. Settlement on Ethereum L1 or an EVM L2 of comparable finality, with reorg-safety margin set per deployment to at least the deepest observed reorg on the target chain. |
+| Trust | Funder is a multisig. Registry operator and implementing partner are organizationally separated (distinct legal entities, jurisdictions, personnel, infrastructure). The funder MAY coincide with either party but not with both. At least one honest reachable relay per claim attempt. Recipient-side relay diversity across rounds. |
 
-| Component | Role | Operator |
-|-----------|------|----------|
-| Smartcard | Custom applet on a JCOP-class secure element, holding a single secp256k1 keypair `(m, M)` generated on-card. Custom `SIGN_VOUCHER` APDU constructs the voucher preimage internally and signs it; derives the per-claim stealth public key on-card via HMAC-SHA256. | Recipient |
-| Companion device | Reads smartcard, computes nullifier, encrypts voucher, hands ciphertext to mesh transport. Holds no long-lived recipient secrets. | Recipient |
-| Registry | Holds `(cardId, M, status)` per enrolled card; publishes `cohortRoot` on-chain whenever the active set changes. Public-data only, no secret state. | Independent registry operator (distinct legal entity from implementing partner) |
-| IShieldedPool | Shielded ERC-20 transfer with sender/recipient unlinkability; k-anonymity within an association set | Existing privacy pool deployment |
-| ISubmission | Mesh or store-and-forward delivery of encrypted vouchers from companion to relay | Mesh transport network |
-| IAnonymousTransport | Network-layer submission decorrelating origin from Ethereum endpoint | Tor or Nym |
-| Round Factory | Atomic shield-and-publish; registers round header with Claim Contract | Ethereum smart contract |
-| Claim Contract | Verifies relay ZK proofs, tracks nullifiers, invokes pool unshield | Ethereum smart contract |
-| Relay | Decrypts vouchers, generates ECDSA-in-SNARK proofs, submits via IAnonymousTransport. Rotates voucher key ≥ every 24h; rotates submission EOA per round or per day. | Independent relay operators (jurisdictionally diverse) |
-| Funder | Multisig that publishes rounds and signs round headers. Holds no beneficiary list. | Funding organization |
-| Implementing Partner | Field distribution of smartcards and round headers | Distinct legal entity from registry operator |
-
-### Recipient Actions
-
-1. Receive a signed round header out-of-band (mesh, SMS, USSD, radio, poster QR, agent handoff). Companion device verifies funder signature.
-2. Insert smartcard into companion device. Card derives the on-card stealth public key, constructs the voucher preimage internally, and signs it.
-3. Companion encrypts the voucher to one or more relays and hands the ciphertext to mesh transport.
-4. After settlement, recipient unshields at their off-ramp through the resulting stealth address.
-
-### System Architecture
+### System Overview
 
 ```mermaid
 graph TD
@@ -71,30 +57,66 @@ graph TD
     SP -- "ERC-20" --> OFF
 ```
 
-### Constraints
-
-| Category | Requirement |
-|----------|-------------|
-| Settlement | Ethereum L1 or a comparable EVM L2 of equivalent finality. Reorg-safety margin set per deployment to at least the deepest observed reorg on the target chain. |
-| Privacy | Off-ramp unlinkability up to the stealth destination. Cohort-level anonymity within `cohortRoot`. Forward secrecy of past claim identifiers under card seizure is NOT provided; see [Forward Secrecy](#forward-secrecy). |
-| Regulatory | Pool-level k-anonymity within the chosen IShieldedPool association set. Compliance witnesses tolerated as opaque pool inputs. Off-ramp KYC out of scope. |
-| Operational | Smartcard-only signing; no on-card ZK. Tolerance for high-latency mesh transport. No real-time recipient internet. Card loss recoverable via re-enrollment. |
-| Trust | Funder is multisig. Registry operator and implementing partner MUST be organizationally separated; the funder MAY coincide with either party but not with both. At least one honest reachable relay per claim. Recipient-side relay diversity across rounds. |
-
 ## Approach
 
 ### Strategy
 
-- Funder publishes a round through a round-factory contract that, in order, verifies funder signature, asserts cohort and `chainId` equality against the Registry, shields `perRecipientAmount * cohortSize` to IShieldedPool, registers the signed header with the Claim Contract, and emits a publication event.
-- Smartcard derives a per-claim stealth public key via HMAC-SHA256 over its master secret, constructs the voucher preimage internally (binding round, cohort root, master pubkey, stealth pubkey, amount, claim contract, and `chainId`), and signs it.
-- Companion derives the Ethereum stealth address off-card, computes the nullifier, wraps the voucher in IND-CCA2 AEAD to a relay's rotating public key, and hands the ciphertext to mesh transport.
-- Relay decrypts, generates a ZK proof of cohort membership, ECDSA validity, nullifier consistency, and `chainId` binding, then submits via IAnonymousTransport.
-- Claim Contract verifies the proof, recomputes the stealth address on-chain via keccak256, checks header binding, `chainId`, and nullifier non-consumption, then invokes pool unshield under strict checks-effects-interactions ordering.
-- Residual is recoverable by the funder after `closeBlock + 30 days`.
+A round runs in four stages.
 
-Rationale for this approach is in [Alternatives Considered](#appendix-a-alternatives-considered); cryptographic primitives are listed in [Primitives](#primitives).
+1. **Publication.** The funder publishes a round through a round-factory contract. The factory verifies the funder multisig signature on the round header, asserts cohort identity and `chainId` against the Registry, deposits one per-recipient commitment into the calling claim contract's pool sub-tree for each active card, and registers the signed header with the claim contract together with `firstPoolLeafIndex`. All steps are atomic.
+2. **Voucher construction.** The recipient inserts the smartcard into a companion device. The card derives a per-claim stealth public key via HMAC-SHA256 over its master secret, constructs the 308-byte voucher preimage internally, signs it with secp256k1 ECDSA, and returns the signature and stealth public key. The companion derives the destination, computes the nullifier, and wraps the voucher in IND-CCA2 AEAD to a relay's rotating public key.
+3. **Submission and settlement.** The companion hands the ciphertext to a mesh or store-and-forward transport. A relay decrypts, generates two ZK proofs (claim circuit and pool-withdraw circuit), and submits via an anonymous transport. The claim contract verifies both proofs, recomputes the destination on-chain, enforces cross-proof public-input binding, and invokes pool unshield.
+4. **Close and residual.** After `closeBlock`, the claim contract rejects further claims. After a further 30-day timelock the funder multisig MAY recover residual shielded balance via balance accounting at the pool, gated by a one-shot flag. No ZK proof on the residual path.
+
+### Why This Approach
+
+| Alternative | Reason rejected |
+|-------------|-----------------|
+| Recipient-generated ZK proofs | Smartcards cannot evaluate Poseidon or in-circuit ECDSA; companion-side proving relocates secrets to the most exposed recipient surface. |
+| Companion-side stealth-scalar derivation | Companion compromise enumerates all stealth public keys. |
+| Direct (non-shielded) ERC-20 disbursement | Off-ramp KYC plus on-chain trace identifies recipients. |
+| Pre-hashed `H_msg` accepted by a stock smartcard `SIGN` APDU | Permits companion-side substitution of `derivedPubkey`. |
+| Forward-secure SHA-256 hash chain on-card | Requires non-wear-leveled persistent memory, vendor letter, bounded card lifetime, enrollment-time pubkey-list precommitment ceremony, and Faraday-shielded perso-bureau. Out of scope for this PoC. |
+| Issuer-side secret hash-chain HSM mirror | Permits Registry-operator forgery and nullifier computation. |
+| Threshold/MPC issuer key shares | Multi-party coordination protocol; expanded compelled-party surface. |
+
+### Tools and Primitives
+
+| Tool | Use |
+|------|-----|
+| Poseidon1 over BN254 Fr | Cohort tree, pool sub-tree, commitments, nullifier. |
+| SHA-256 | Voucher signed-message preimage; round-header hash; in-circuit voucher preimage. |
+| keccak256 | Off-card and on-chain destination derivation from the stealth public key. |
+| HMAC-SHA256 | On-card stealth-scalar derivation. |
+| ECDSA over secp256k1 | Smartcard voucher signature; verified inside the claim circuit. |
+| BN254 SNARKs | Claim and pool-withdraw circuits. Reference: Noir + Barretenberg UltraHonk. |
+| IShieldedPool | Per-claim-contract partitioned shielded ERC-20 pool with k-anonymity over deposits matching `(token, amount)` in the calling claim contract's sub-tree. |
+| IAnonymousTransport | Tor or Nym. |
 
 ## Protocol Design
+
+### Participants and Roles
+
+| Component | Role | Operator |
+|-----------|------|----------|
+| Smartcard | JCOP-class secure element running a custom applet. Holds a single secp256k1 master keypair `(m, M)` generated on-card. The custom `SIGN_VOUCHER` APDU constructs the voucher preimage internally and signs it; derives the per-claim stealth public key via on-card HMAC-SHA256. | Recipient |
+| Companion device | Reads the smartcard, computes the nullifier, encrypts the voucher to a relay, hands the ciphertext to mesh transport. Holds long-lived non-secret state (`cohort_position` per active enrollment). | Recipient |
+| Registry | Holds `(cardId, M, status, cohort_position)` per enrolled card and publishes `cohortRoot` on-chain whenever the active set changes. Public-data only. | Independent registry operator |
+| IShieldedPool | Shielded ERC-20 transfers with sender/recipient unlinkability and k-anonymity within an association set. | Existing privacy pool deployment |
+| ISubmission | Mesh or store-and-forward delivery of encrypted vouchers from companion to relay. | Mesh transport network |
+| IAnonymousTransport | Network-layer submission decorrelating origin from Ethereum endpoint. | Tor or Nym |
+| Round Factory | Atomic shield-and-publish; registers the round header with the claim contract. | Ethereum smart contract |
+| Claim Contract | Verifies relay ZK proofs, tracks nullifiers, invokes pool unshield, gates residual recovery. | Ethereum smart contract |
+| Relay | Decrypts vouchers, generates ZK proofs, submits via IAnonymousTransport. Rotates voucher key at least every 24 hours; rotates submission EOA per round or per day. | Independent relay operators (jurisdictionally diverse) |
+| Funder | Multisig that publishes rounds and signs round headers. | Funding organization |
+| Implementing Partner | Field distribution of smartcards and round headers. | Distinct legal entity from registry operator |
+
+### Recipient Lifecycle
+
+1. **Personalization.** The operator embeds `cohort_position` on the card or its packaging at distribution. The companion device stores `cohort_position` per active cohort version.
+2. **Round receipt.** The recipient receives the signed round header out-of-band (mesh, SMS, USSD, radio, poster QR, agent handoff) along with `firstPoolLeafIndex`. The companion verifies the funder signature on `H_header`.
+3. **Voucher.** The recipient inserts the smartcard. The card produces a signature; the companion encrypts the voucher and hands the ciphertext to mesh transport.
+4. **Off-ramp.** After settlement, the recipient unshields at the off-ramp through the resulting stealth address.
 
 ### Flows
 
@@ -109,21 +131,21 @@ sequenceDiagram
     participant CC as Claim Contract
 
     F->>REG: cohortRoot, cohortSize
-    REG-->>F: root, size, version
-    F->>F: Sign header (roundId, cohortVersion, cohortRoot, perRecipient, size, token, closeBlock, claimContract, chainId)
-    F->>RF: publishRound(header) via IAnonymousTransport
+    REG-->>F: root, size, version, M_i for i in [0, cohortSize)
+    F->>F: Sign header
+    F->>RF: publishRound(header, M_list) via IAnonymousTransport
     RF->>RF: Verify funder multisig signature
-    RF->>REG: Read cohortRoot(version), cohortSize(version); assert header equality
+    RF->>REG: Read cohortRoot(version), cohortSize(version), M_i; assert header equality
     RF->>RF: Assert header.chainId == block.chainid
-    RF->>F: Pull perRecipient * size of token (ERC-20 approve)
-    RF->>SP: shield(token, perRecipient * size, claimContract.shieldedRecipient)
-    RF->>CC: registerHeader(header) [onlyFactory]
-    RF-->>RF: emit RoundPublished(header)
+    RF->>F: Pull perRecipient * size of token
+    RF->>SP: deposit(claimContract, commitment_i, perRecipient) for i in [0, cohortSize)
+    RF->>CC: registerHeader(header, firstPoolLeafIndex)
+    RF-->>RF: emit RoundPublished(header, firstPoolLeafIndex)
 ```
 
-All pre-shield checks (signature, cohort equality, `chainId`) execute before the shield. A revert in any step reverts the entire factory call.
+`firstPoolLeafIndex` is the pool sub-tree size at the moment of the first deposit in the call. It is set atomically by the factory and is not part of `H_header`. A revert in any step reverts the entire transaction.
 
-#### Voucher Construction (Recipient, Offline)
+#### Voucher Construction
 
 ```mermaid
 sequenceDiagram
@@ -131,7 +153,7 @@ sequenceDiagram
     participant CD as Companion Device
     participant SC as Smartcard
 
-    H-->>CD: round header bytes (includes cohortRoot, chainId)
+    H-->>CD: round header bytes
     CD->>CD: Verify funder signature
     CD->>CD: authToken = HMAC-SHA256(companion_pre_key, H_header)
     CD->>SC: voucherContext = (roundId, cohortRoot, claimContract, perRecipient, chainId), authToken
@@ -142,11 +164,13 @@ sequenceDiagram
     SC->>SC: H_msg = SHA-256(DOMAIN_VOUCHER || roundId || cohortRoot || chainId || M_x || M_y || derivedPubkey_x || derivedPubkey_y || amount || claimContract)
     SC->>SC: signature = ECDSA-Sign(m, H_msg)
     SC-->>CD: (M, derivedPubkey, signature)
-    CD->>CD: Normalize signature to canonical-s if needed (s <= n/2)
+    CD->>CD: Normalize signature to canonical-s (s <= n/2)
     CD->>CD: destination = keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]
-    CD->>CD: nullifier = Poseidon1(NULL_TAG, decompose128(M_x), decompose128(M_y), decompose128(roundId), claimContract, decompose128(chainId))
+    CD->>CD: nullifier = Poseidon1(NULL_DOMAIN_TAG, M_packed, roundId_packed, claimContract, chainId_packed)
     CD->>CD: voucher = (roundId, chainId, M, derivedPubkey, nullifier, destination, perRecipient, claimContract, signature)
 ```
+
+The card MUST construct the SHA-256 preimage internally and MUST NOT accept a pre-hashed digest.
 
 #### Voucher Submission and Settlement
 
@@ -155,28 +179,34 @@ sequenceDiagram
     participant CD as Companion Device
     participant M as Mesh / Store-and-Forward
     participant R as Relay
+    participant SP as IShieldedPool
     participant AT as IAnonymousTransport
     participant CC as Claim Contract
-    participant SP as IShieldedPool
 
     CD->>CD: Encrypt voucher to relay public key (X25519 + AEAD)
     CD->>M: submitVoucher(ciphertext, relayId)
     M-->>R: ciphertext (eventually)
     R->>R: Decrypt
-    R->>R: Generate ZK proof (membership + ECDSA + nullifier + chainId + submitter binding)
+    R->>SP: commitmentIndex(claimContract, commitment) -> leafIndex; subTreeRoot(claimContract) -> pool_root
+    SP-->>R: (leafIndex, pool_root, merkle_path)
+    R->>R: Generate claim proof
+    R->>R: Generate pool-withdraw proof
     R->>AT: submit(claim_tx) signed by rotating relay EOA
-    AT->>CC: claim(proof, publicInputs, poolWitness)
-    CC->>CC: Verify proof, check binding (incl. chainId) and nullifier
-    CC->>SP: unshield(token, amount, destination, poolWitness)
+    AT->>CC: claim(claimProof, claimPublicInputs, poolWithdrawProof, poolWithdrawPublicInputs)
+    CC->>CC: Verify both proofs
+    CC->>CC: Header bindings + cross-proof bindings
+    CC->>SP: unshield(claimContract, poolWithdrawProof, nullifier, token, amount, recipient)
     SP-->>CC: success
-    CC->>CC: Record nullifier (only on successful unshield)
+    CC->>CC: Set nullifierConsumed; increment counters
 ```
 
-A recipient MAY fan out the encrypted voucher to up to `k < N_relays` relays per voucher. The nullifier ensures only the first on-chain settlement succeeds; duplicate submissions revert at the claim contract and the relay bears the gas cost.
+A recipient MAY fan out the encrypted voucher to up to `k < N_relays` relays per voucher; only the first on-chain settlement consumes the nullifier.
 
-#### Round Close
+#### Round Close and Residual
 
-After `closeBlock`, the claim contract rejects further claims. After a further 30-day timelock, the funder multisig MAY call `funderUnshieldResidual` to recover residual shielded balance. Reorg safety: relays and companion devices treat the round as CLOSED for submission decisions from `closeBlock - 64`. Deployments on chains with deeper reorgs MUST set the margin equal to the deepest observed reorg depth.
+After `closeBlock`, the claim contract rejects further claims. After `closeBlock + 30 days` the funder multisig MAY call `funderUnshieldResidual(roundId)`. The claim contract computes `residual = roundDeposit[roundId] - roundClaimed[roundId]` and forwards a single call to `pool.recoverResidual(roundId, residual, funderResidualDestination)`. The path is gated by the multisig, the timelock, and the one-shot `roundResidualPaid[claimContract][roundId]` flag.
+
+Reorg safety: relays and companion devices treat the round as closed for submission decisions from `closeBlock - 64`. Deployments on chains with deeper reorgs MUST set the margin to at least the deepest observed reorg depth.
 
 ### Data Structures
 
@@ -186,13 +216,13 @@ After `closeBlock`, the claim contract rejects further claims. After a further 3
 voucher = (
     roundId: bytes32,
     chainId: uint256,
-    M: (bytes32, bytes32),                // card master public key (cohort tree leaf source)
-    derivedPubkey: (bytes32, bytes32),    // one-time stealth pubkey, derived on-card
+    M: (bytes32, bytes32),
+    derivedPubkey: (bytes32, bytes32),
     nullifier: bytes32,
-    destination: address,                 // = keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]; recomputed on-chain
-    amount: uint256,                      // == header.perRecipientAmount
+    destination: address,
+    amount: uint256,
     claimContractAddress: address,
-    signature: (bytes32, bytes32)         // (r, s) with s <= n/2 (canonicalized off-card)
+    signature: (bytes32, bytes32)
 )
 ```
 
@@ -211,7 +241,7 @@ Signed-message preimage (308 bytes), in order:
 | `amount` | 32 | big-endian `uint256` |
 | `claimContractAddress` | 20 | as-is |
 
-Total: `32 × 9 + 20 = 308` bytes. The in-circuit verifier MUST reproduce this byte string bit-identically. The destination is NOT in the preimage; it is derived on-chain from public-input `derivedPubkey` limbs, foreclosing companion-side manipulation without requiring on-card or in-circuit keccak256.
+`destination = keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]` is recomputed on-chain from the public-input `derivedPubkey` limbs.
 
 #### Round Header
 
@@ -223,98 +253,126 @@ Total: `32 × 9 + 20 = 308` bytes. The in-circuit verifier MUST reproduce this b
 | `perRecipientAmount` | `uint256` | Fixed per claim |
 | `cohortSize` | `uint256` | Asserted equal to `Registry.cohortSize(cohortVersion)` |
 | `token` | `address` | ERC-20 |
-| `closeBlock` | `uint64` | CLAIMING ends |
+| `closeBlock` | `uint64` | Claiming ends |
 | `claimContractAddress` | `address` | Pinned in voucher binding |
 | `chainId` | `uint256` | Asserted equal to `block.chainid` at publication and at every claim |
 | `funderSignature` | `bytes` | ECDSA over `H_header` |
+| `firstPoolLeafIndex` | `uint64` | Set atomically by the factory at publication; pinned in the claim contract via `registerHeader`; distributed alongside the signed header out-of-band. |
 
 ```
 H_header = SHA256(DOMAIN_HEADER || encode(roundId, cohortVersion, cohortRoot, perRecipient, cohortSize, token, closeBlock, claimContract, chainId))
 DOMAIN_HEADER = SHA256("RDR/header/v1")
 ```
 
+`firstPoolLeafIndex` is not in `H_header`.
+
 #### Claim Proof Inputs
 
-Public inputs (each one BN254 Fr element):
+Public (each one BN254 Fr element):
 
 | Input | Notes |
 |-------|-------|
-| `roundId_hi`, `roundId_lo` | 128-bit limbs s.t. `uint256(roundId) = 2^128 · roundId_hi + roundId_lo`. Each limb constrained `< 2^128` in-circuit. |
-| `cohortRoot` | `bytes32` reduced to canonical Fr; on-chain asserted `== header.cohortRoot`. |
-| `chainId_hi`, `chainId_lo` | 128-bit limbs of `chainId`; each `< 2^128`; on-chain asserted `== block.chainid` AND `== header.chainId`. |
-| `derivedPubkey_x_hi`, `derivedPubkey_x_lo` | 128-bit limbs of stealth public key x; each `< 2^128`. Recombined on-chain to compute `destination`. |
-| `derivedPubkey_y_hi`, `derivedPubkey_y_lo` | 128-bit limbs of stealth public key y; each `< 2^128`. |
+| `roundId_hi`, `roundId_lo` | 128-bit limbs, each `< 2^128`. |
+| `cohortRoot` | `bytes32` reduced to canonical Fr; on-chain `== header.cohortRoot`. |
+| `chainId_hi`, `chainId_lo` | 128-bit limbs; on-chain `== block.chainid` and `== header.chainId`. |
+| `derivedPubkey_x_hi`, `derivedPubkey_x_lo` | 128-bit limbs of stealth public key x. |
+| `derivedPubkey_y_hi`, `derivedPubkey_y_lo` | 128-bit limbs of stealth public key y. |
 | `amount` | `Fr(uint256(amount))`. |
 | `nullifier` | `Fr` directly. |
 | `claimContractAddress` | `Fr(uint160(addr))`; constrained `< 2^160`. |
-| `relaySubmitter` | `Fr(uint160(addr))`; constrained `< 2^160`; bound on-chain to `msg.sender`. |
+| `relaySubmitter` | `Fr(uint160(addr))`; constrained `< 2^160`; on-chain `== msg.sender`. |
 
-Private inputs (witness):
+Private:
 
 | Input | Notes |
 |-------|-------|
-| `M_x`, `M_y` | Card master public key; single shared witness wire across all gadgets |
+| `M_x`, `M_y` | Card master public key |
 | `signature_r`, `signature_s` | Canonical-s asserted in-circuit |
 | `merklePath` | Depth 20 |
 | `merklePathDirections` | Bit decomposition |
 
-### Interfaces
+#### Pool-Withdraw Proof Inputs
+
+Public (each one BN254 Fr element):
+
+| Input | Notes |
+|-------|-------|
+| `pool_root` | Claim contract asserts `IShieldedPool.isKnownRoot(address(this), pool_root)`. |
+| `nullifier` | Cross-proof asserted `== claim.nullifier`. |
+| `token` | Cross-proof asserted `== header.token`; `Fr(uint160(addr))`; constrained `< 2^160`. |
+| `amount` | Cross-proof asserted `== header.perRecipientAmount`. |
+| `recipient` | Cross-proof asserted `== destination`; `Fr(uint160(addr))`; constrained `< 2^160`. |
+
+Private:
+
+| Input | Notes |
+|-------|-------|
+| `M_x_hi`, `M_x_lo`, `M_y_hi`, `M_y_lo` | 128-bit limbs of card master public key |
+| `roundId_hi`, `roundId_lo` | 128-bit limbs of `roundId` |
+| `chainId_hi`, `chainId_lo` | 128-bit limbs of `chainId` |
+| `claimContractAddress` | `Fr(uint160(addr))`; constrained `< 2^160` |
+| `leaf_index` | Pool sub-tree leaf index for the per-recipient commitment |
+| `merklePath` | Depth 32 |
+| `merklePathDirections` | Bit decomposition |
+
+### On-Chain State
 
 #### Registry
-
-Operator-maintained on-chain commitment to cohort membership. Registry holds public commitments only; compromise of the Registry operator does NOT enable voucher forgery, nullifier computation, or destination deanonymization.
 
 State:
 - `cohortRoot[version]: bytes32`
 - `cohortSize[version]: uint256`
 - `currentVersion: uint64`
-- `operatorKey: address` (rotation procedure published per deployment)
+- `operatorKey: address`
 
 Functions:
 - `currentVersion() -> uint64`
-- `cohortRoot(version) -> bytes32` (on-chain readable)
+- `cohortRoot(version) -> bytes32`
 - `cohortSize(version) -> uint256`
-- `publishCohort(root, size, operatorSig)`: appends a new `(version, root, size)` tuple under `operatorKey`. Past entries are immutable; in-flight rounds keep verifying against their pinned version.
+- `publishCohort(root, size, operatorSig)`: appends a new `(version, root, size)` tuple under `operatorKey`. Past entries are immutable.
 - `enroll(cardId, M, status="active")`: operator-side, off-chain; effective at next `publishCohort`.
 - `revoke(cardId)`: operator-side, off-chain; effective at next `publishCohort`.
 
-Operator off-chain state: per-card `(cardId, M, status)`. Cohort tree built from the M values of currently-active cards.
+Operator off-chain state: `(cardId, M, status, cohort_position)` per card. The cohort tree is built from the `M` values of currently active cards in `cohort_position` order.
 
 #### IShieldedPool
 
-External shielded ERC-20 transfer.
+Per-claim-contract partitioned shielded ERC-20 pool. Each registered claim contract has its own commitment sub-tree.
 
 Functions:
-- `shield(token, amount, shieldedRecipient)`
-- `unshield(token, amount, unshieldedRecipient, witness)`
+- `deposit(claimContract, commitment, amount)`: append `commitment` to `subTreeRoot[claimContract]`; record `commitmentIndex[claimContract][commitment] = leafIndex`; pull `amount` of `token` from caller; increment `balance[claimContract]` and `roundDeposit[claimContract][roundId]`. Authorized: `factory[claimContract]`.
+- `unshield(claimContract, withdrawProof, nullifier, token, amount, recipient)`: verify `withdrawProof` against `subTreeRoot[claimContract]` or its recent-roots window; assert `nullifier` not in the pool spent set; transfer `amount` of `token` to `recipient`; mark `nullifier` consumed; decrement `balance[claimContract]`; increment `roundClaimed[claimContract][roundId]`. Authorized: `claimContract`.
+- `recoverResidual(roundId, amount, recipient)`: transfer `amount` of `token` to `recipient`; mark `roundResidualPaid[claimContract][roundId] = true`; decrement `balance[claimContract]`. Authorized: `claimContract`. Reverts if already paid.
+- `commitmentIndex(claimContract, commitment) -> uint256`: public read.
+- `isKnownRoot(claimContract, root) -> bool`: public read.
 
-Required properties: sender unlinkability, recipient unlinkability, deterministic recipient addressing without prior interaction, k-anonymity within the active association set.
-
-Integration constraint: contract-as-shielded-recipient with delegated unshield authorization (e.g., Railgun, Privacy Pools, Hinkal in versions verified to support this), permitting a registered "residual-only" authorization scope used by `funderUnshieldResidual`.
+State per registered claim contract:
+- `subTreeRoot[claimContract]`, `subTreeRootHistory[claimContract]` (bounded window)
+- `commitmentIndex[claimContract][commitment]`
+- `balance[claimContract]`, `roundDeposit[claimContract][roundId]`, `roundClaimed[claimContract][roundId]`, `roundResidualPaid[claimContract][roundId]`
+- `nullifierConsumed[nullifier]`: pool-side spent set across all claim contracts.
 
 #### ISubmission
-
-Mesh or store-and-forward delivery from companion to relay.
 
 Functions:
 - `submitVoucher(encryptedVoucher, relayIdentifier) -> deliveryReceipt`
 
-Required properties: end-to-end IND-CCA2 AEAD with ephemeral sender keying; source-fingerprinting resistance via ≥ 2 orthogonal mitigations across physical and network layers; eventual delivery; relay key rotation ≥ every 24h with secure erase.
+Required properties:
+- End-to-end IND-CCA2 AEAD with ephemeral sender keying.
+- Source-fingerprinting resistance via at least two orthogonal mitigations across physical and network layers.
+- Eventual delivery.
+- Relay key rotation at least every 24 hours with secure erase.
 
-Relay roster discovery: the set of valid `relayIdentifier` values, current relay public keys, and the active rotation epoch are distributed by the funder out-of-band on the same channels carrying the signed round header. Roster updates are signed by the funder multisig under a domain tag distinct from the round-header tag. Companion devices verify the funder signature on the roster before encrypting any voucher and treat a roster older than 48 hours as stale.
+The funder distributes the relay roster (valid `relayIdentifier` values, current public keys, active rotation epoch) out-of-band on the same channels carrying the signed round header. Roster updates are signed by the funder multisig under a domain tag distinct from the round-header tag. Companion devices verify the signature and treat a roster older than 48 hours as stale.
 
 #### IAnonymousTransport
-
-Network-layer submission of signed Ethereum transactions.
 
 Functions:
 - `submit(signedTransaction) -> txHash`
 
-Required properties: no single entity simultaneously observes submitter network origin and plaintext transaction.
+Required property: no single entity simultaneously observes submitter network origin and plaintext transaction.
 
 #### Round Factory
-
-Atomic round publication.
 
 State:
 - `funderMultisig: address`
@@ -322,49 +380,70 @@ State:
 - `registry: address`
 
 Functions:
-- `publishRound(header) external`: in order,
-  1. Verify `funderSignature` against the funder multisig.
-  2. Read `cohortRoot(cohortVersion)` and `cohortSize(cohortVersion)` from Registry; assert header equality.
-  3. Assert `header.chainId == block.chainid`.
-  4. Pull `perRecipient * cohortSize` of `token` from funder approval.
-  5. `IShieldedPool.shield(token, perRecipient * cohortSize, claimContract.shieldedRecipient)`.
-  6. `claimContract.registerHeader(header)` (gated `onlyFactory`).
-  7. Emit `RoundPublished`.
 
-All pre-shield checks (1-3) execute before the shield. A revert in any step reverts the entire call.
+`publishRound(header, M_list) external`, in order:
+
+1. Verify `funderSignature` against `funderMultisig` over `H_header`.
+2. Read `cohortRoot(cohortVersion)` and `cohortSize(cohortVersion)` from Registry. Recompute the cohort tree from `M_list` in cohort-position order and assert equality with `header.cohortRoot`. Assert `header.cohortSize == Registry.cohortSize(cohortVersion) == M_list.length`.
+3. Assert `header.chainId == block.chainid`.
+4. Pull `perRecipient * cohortSize` of `token` from funder approval.
+5. Approve the pool to draw `perRecipient * cohortSize` of `token`.
+6. Snapshot `firstPoolLeafIndex = IShieldedPool.subTreeSize(claimContract)`.
+7. For `i` in `[0, cohortSize)` in cohort-position order: compute `commitment_i = Poseidon1(COMMITMENT_DOMAIN_TAG, token, perRecipient, M_packed_i, roundId_packed)` and call `IShieldedPool.deposit(claimContract, commitment_i, perRecipient)`.
+8. `claimContract.registerHeader(header, firstPoolLeafIndex)`.
+9. Emit `RoundPublished`.
+
+A revert in any step reverts the entire transaction.
 
 Events:
-- `RoundPublished(roundId, cohortVersion, cohortRoot, perRecipientAmount, cohortSize, token, closeBlock, claimContractAddress, chainId, funderSignature)`
+- `RoundPublished(roundId, cohortVersion, cohortRoot, perRecipientAmount, cohortSize, token, closeBlock, claimContractAddress, chainId, funderSignature, firstPoolLeafIndex)`
 
 #### Claim Contract
 
-Verifies relay ZK proofs and invokes pool unshield under strict checks-effects-interactions. Round headers are written by `registerHeader` from the factory at publication and are immutable thereafter; `cohortRoot` is read live from Registry at publication only, so subsequent claims use the pinned header to prevent re-targeting.
-
 State:
 - `header[roundId]: RoundHeader`
+- `firstPoolLeafIndex[roundId]: uint64`
 - `nullifierConsumed[nullifier]: bool`
 - `nullifiersConsumed[roundId]: uint256`
+- `roundDeposit[roundId]: uint256`
+- `roundClaimed[roundId]: uint256`
+- `roundResidualPaid[roundId]: bool`
 - `funderMultisig: address`
 - `factory: address`
-- `shieldedRecipient: bytes32`
+- `pool: address`
 - `funderResidualDestination: address`
+- `claimVerifier: address`, `poolWithdrawVerifier: address`
 
 Functions:
-- `registerHeader(header) external onlyFactory`: writes `header[header.roundId] = header`. Reverts on `roundId` collision.
-- `claim(proof, publicInputs, poolWitness) external`:
-  1. Recombine `roundId`, `derivedPubkey_x`, `derivedPubkey_y`, `chainId` from limbs (range constraints `< 2^128` enforced in-circuit).
-  2. `destination = address(uint160(uint256(keccak256(abi.encodePacked(derivedPubkey_x, derivedPubkey_y)))))`.
-  3. `block.number < header[roundId].closeBlock`.
-  4. Verify ZK proof against pinned verifier with all public inputs.
-  5. `publicInputs.cohortRoot == header[roundId].cohortRoot`.
-  6. `publicInputs.amount == header[roundId].perRecipientAmount`.
-  7. `publicInputs.claimContractAddress == address(this)`.
-  8. `chainId == block.chainid && chainId == header[roundId].chainId`.
-  9. `publicInputs.relaySubmitter == msg.sender`.
-  10. `nullifierConsumed[publicInputs.nullifier] == false`.
-  11. `IShieldedPool.unshield(header[roundId].token, header[roundId].perRecipientAmount, destination, poolWitness)` (NOT wrapped in try/catch).
-  12. Set `nullifierConsumed[publicInputs.nullifier] = true`; increment `nullifiersConsumed[roundId]`.
-- `funderUnshieldResidual(roundId, poolWitness) external onlyFunderMultisig`: callable when `block.number >= header[roundId].closeBlock + 30 days`. Computes `residual = header.perRecipientAmount * (header.cohortSize - nullifiersConsumed[roundId])` and calls `IShieldedPool.unshield(header.token, residual, funderResidualDestination, poolWitness)`. The `poolWitness` is constructed off-chain by the funder via the same path used by relays for per-claim unshield: the pool's contract-as-shielded-recipient integration delegates witness construction to the claim contract's authorized signers; `funderMultisig` is registered with the pool under a residual-only authorization scope at deployment.
+
+`registerHeader(header, firstPoolLeafIndex) external onlyFactory`: writes `header[header.roundId] = header`, `firstPoolLeafIndex[header.roundId] = firstPoolLeafIndex`, `roundDeposit[header.roundId] = header.perRecipientAmount * header.cohortSize`. Reverts on `roundId` collision.
+
+`claim(claimProof, claimPublicInputs, poolWithdrawProof, poolWithdrawPublicInputs) external`:
+
+1. Recombine `roundId`, `derivedPubkey_x`, `derivedPubkey_y`, `chainId` from limbs.
+2. `destination = address(uint160(uint256(keccak256(abi.encodePacked(derivedPubkey_x, derivedPubkey_y)))))`.
+3. Assert `block.number < header[roundId].closeBlock`.
+4. Verify the claim proof.
+5. Verify the pool-withdraw proof.
+6. Header bindings:
+   - `claimPublicInputs.cohortRoot == header[roundId].cohortRoot`
+   - `claimPublicInputs.amount == header[roundId].perRecipientAmount`
+   - `claimPublicInputs.claimContractAddress == address(this)`
+   - `chainId == block.chainid && chainId == header[roundId].chainId`
+   - `claimPublicInputs.relaySubmitter == msg.sender`
+7. Cross-proof bindings:
+   - `poolWithdrawPublicInputs.nullifier == claimPublicInputs.nullifier`
+   - `poolWithdrawPublicInputs.token == header[roundId].token`
+   - `poolWithdrawPublicInputs.amount == header[roundId].perRecipientAmount`
+   - `poolWithdrawPublicInputs.recipient == destination`
+8. `IShieldedPool.isKnownRoot(address(this), poolWithdrawPublicInputs.pool_root) == true`.
+9. `nullifierConsumed[claimPublicInputs.nullifier] == false`.
+10. `IShieldedPool.unshield(address(this), poolWithdrawProof, claimPublicInputs.nullifier, header[roundId].token, header[roundId].perRecipientAmount, destination)`.
+11. Set `nullifierConsumed[claimPublicInputs.nullifier] = true`; increment `nullifiersConsumed[roundId]`; `roundClaimed[roundId] += header[roundId].perRecipientAmount`.
+
+The unshield call MUST NOT be wrapped in try/catch.
+
+`funderUnshieldResidual(roundId) external onlyFunderMultisig`: callable when `block.number >= header[roundId].closeBlock + 30 days` and `!roundResidualPaid[roundId]`. Computes `residual = roundDeposit[roundId] - roundClaimed[roundId]`, sets `roundResidualPaid[roundId] = true`, then calls `IShieldedPool.recoverResidual(roundId, residual, funderResidualDestination)`. The pool independently asserts `msg.sender == address(this)` and `!roundResidualPaid[address(this)][roundId]`.
 
 Events:
 - `Claimed(roundId, nullifier, destination, amount, relaySubmitter)`
@@ -376,133 +455,141 @@ Events:
 
 | Primitive | Specification | Parameters |
 |-----------|---------------|------------|
-| Hash (algebraic) | Poseidon1 | BN254 Fr; circomlib parameterization (alpha = 5, R_F = 8); width-2 and width-3 invocations. |
+| Hash (algebraic) | Poseidon1 | BN254 Fr; circomlib parameterization (alpha = 5, R_F = 8); 2-, 3-, 4-, and 5-input invocations. |
 | Hash (cryptographic) | SHA-256 | On-card preimage hash; round-header hash; in-circuit voucher preimage. |
-| Hash (Ethereum) | keccak256 | Companion + on-chain claim contract over `derivedPubkey_x \|\| derivedPubkey_y` to derive the destination. NOT computed on-card or in-circuit. |
+| Hash (Ethereum) | keccak256 | Companion and on-chain destination derivation from `derivedPubkey_x \|\| derivedPubkey_y`. |
 | MAC | HMAC-SHA256 | On-card stealth scalar derivation. |
-| Signature | ECDSA over secp256k1 | Platform-RNG-derived nonces from the secure element TRNG; canonical-s per EIP-2 enforced in-circuit and normalized off-card. |
+| Signature | ECDSA over secp256k1 | Platform-RNG-derived nonces from the secure-element TRNG; canonical-s per EIP-2 enforced in-circuit and normalized off-card. |
 | Curve (signing) | secp256k1 | SEC 1. |
 | Curve (proving) | BN254 (alt_bn128) | EIP-196, EIP-197. |
-| Merkle tree | Binary Poseidon1, depth 20 | Empty-leaf sentinel `0`. Distinct domain tags for leaf and internal node. |
+| Merkle tree | Binary Poseidon1 LeanIMT-style | Depth 20 (cohort), depth 32 (pool sub-tree). Empty-leaf sentinel `0`. Domain-tagged leaf hash; bare `Poseidon1(left, right)` internal nodes. |
 | Proving system | secp256k1 ECDSA gadget + in-circuit SHA-256 + Poseidon1 membership | Reference: Noir + Barretenberg UltraHonk. |
 
 ### Domain Tags
 
 | Tag | Value | Usage |
 |-----|-------|-------|
-| `LEAF_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/leaf/v1") mod r_BN254)` | Cohort tree leaf hash |
-| `NODE_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/node/v1") mod r_BN254)` | Cohort tree internal node hash |
-| `NULL_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/null/v1") mod r_BN254)` | Nullifier hash |
-| `DOMAIN_VOUCHER` | `SHA256("RDR/voucher/v1")` | Voucher signed-message preimage |
-| `DOMAIN_HEADER` | `SHA256("RDR/header/v1")` | Round-header signed-message preimage |
-| `DOMAIN_STEALTH` | `SHA256("RDR/stealth/v1")` | On-card stealth scalar derivation |
+| `LEAF_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/leaf/v1") mod r_BN254)` | Cohort tree leaf hash and `M_packed`. |
+| `COMMITMENT_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/commitment/v1") mod r_BN254)` | Pool sub-tree leaf hash. |
+| `NULL_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/null/v1") mod r_BN254)` | Nullifier hash. |
+| `DOMAIN_VOUCHER` | `SHA256("RDR/voucher/v1")` | Voucher signed-message preimage. |
+| `DOMAIN_HEADER` | `SHA256("RDR/header/v1")` | Round-header signed-message preimage. |
+| `DOMAIN_STEALTH` | `SHA256("RDR/stealth/v1")` | On-card stealth scalar derivation. |
 
 ### Cohort Tree
 
-Leaf per active card `c`: `L^c = Poseidon1_t3(LEAF_DOMAIN_TAG, decompose128(M^c_x), decompose128(M^c_y))`, where `decompose128(x)` splits a 256-bit value into two 128-bit big-endian Fr elements. Internal node: `node = Poseidon1_t3(NODE_DOMAIN_TAG, left, right)`.
+Leaf per active card `c`:
 
-The Registry rebuilds and republishes `cohortRoot` whenever the active set changes (enrollment or revocation). Tree construction is a pure public computation from the per-card `M` table.
+```
+M_packed^c = Poseidon1(LEAF_DOMAIN_TAG, decompose128(M^c_x), decompose128(M^c_y))
+```
+
+`decompose128(x)` splits a 256-bit value into two 128-bit big-endian Fr elements. Internal nodes: `Poseidon1(left, right)` with no tag. The Registry rebuilds and republishes `cohortRoot` whenever the active set changes.
+
+### Per-Recipient Commitment
+
+```
+roundId_packed = Poseidon1(decompose128(roundId))
+commitment     = Poseidon1(COMMITMENT_DOMAIN_TAG, token, perRecipientAmount, M_packed, roundId_packed)
+```
 
 ### Nullifier
 
 ```
-nullifier = Poseidon1(
-    NULL_DOMAIN_TAG,
-    decompose128(M_x), decompose128(M_y),
-    decompose128(roundId_as_uint256),
-    address_as_field(claimContractAddress),
-    decompose128(chainId)
-)
+M_packed       = Poseidon1(LEAF_DOMAIN_TAG, decompose128(M_x), decompose128(M_y))
+roundId_packed = Poseidon1(decompose128(roundId))
+chainId_packed = Poseidon1(decompose128(chainId))
+nullifier      = Poseidon1(NULL_DOMAIN_TAG, M_packed, roundId_packed, claimContractAddress, chainId_packed)
 ```
 
-Companion computes off-card; the circuit re-evaluates so a malicious companion cannot substitute. Deterministic in `(M, roundId, claimContractAddress, chainId)` — prevents double-spend within a round.
+The companion computes `nullifier` for the voucher; the claim and pool-withdraw circuits both recompute it from the same private witness inputs.
 
 ### On-Card Stealth Public Key
 
 ```
-derivedScalar = HMAC-SHA256(m, DOMAIN_STEALTH || roundId || claimContractAddress || chainId)
-derivedPrivkey = (derivedScalar mod (n - 1)) + 1     in [1, n-1]; deterministic, no rejection branch
-derivedPubkey = derivedPrivkey * G                    on secp256k1
+derivedScalar  = HMAC-SHA256(m, DOMAIN_STEALTH || roundId || claimContractAddress || chainId)
+derivedPrivkey = (derivedScalar mod (n - 1)) + 1
+derivedPubkey  = derivedPrivkey * G
 ```
 
-The card returns `derivedPubkey` alongside the signature. The destination is `keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]`, derived off-card by the companion and recomputed on-chain by the claim contract. The companion cannot influence the destination because `derivedPubkey` is signed by the smartcard inside the voucher preimage.
+`destination = keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]`, recomputed on-chain by the claim contract.
 
-### Circuit Relation
-
-The relay-side circuit enforces:
+### Claim Circuit Constraints
 
 | Constraint | Notes |
 |------------|-------|
-| `M_x_hi`, `M_x_lo`, `M_y_hi`, `M_y_lo < 2^128` | Range checks on master-pubkey witness limbs |
-| `M_x = 2^128 · M_x_hi + M_x_lo` over the secp256k1 base field | Limb consistency for x |
-| `M_y = 2^128 · M_y_hi + M_y_lo` over the secp256k1 base field | Limb consistency for y |
-| `derivedPubkey_x_hi`, `derivedPubkey_x_lo`, `derivedPubkey_y_hi`, `derivedPubkey_y_lo < 2^128` | Range checks (public-input limbs) |
-| `derivedPubkey_x = 2^128 · derivedPubkey_x_hi + derivedPubkey_x_lo` over the secp256k1 base field | Required so SHA-256 preimage agrees with on-chain `keccak256` recombination |
-| `derivedPubkey_y = 2^128 · derivedPubkey_y_hi + derivedPubkey_y_lo` over the secp256k1 base field | Limb consistency |
-| `roundId_hi < 2^128`, `roundId_lo < 2^128`, `chainId_hi < 2^128`, `chainId_lo < 2^128` | Range checks |
-| `chainId = 2^128 · chainId_hi + chainId_lo` | Binds SHA-256 preimage to on-chain `block.chainid` assertion |
+| `M_x_hi`, `M_x_lo`, `M_y_hi`, `M_y_lo < 2^128` | Range checks |
+| `M_x = 2^128 * M_x_hi + M_x_lo` over secp256k1 base field | Limb consistency |
+| `M_y = 2^128 * M_y_hi + M_y_lo` over secp256k1 base field | Limb consistency |
+| `derivedPubkey_*_hi`, `derivedPubkey_*_lo < 2^128` | Range checks |
+| `derivedPubkey_x = 2^128 * derivedPubkey_x_hi + derivedPubkey_x_lo` over secp256k1 base field | Limb consistency |
+| `derivedPubkey_y = 2^128 * derivedPubkey_y_hi + derivedPubkey_y_lo` over secp256k1 base field | Limb consistency |
+| `roundId_hi`, `roundId_lo`, `chainId_hi`, `chainId_lo < 2^128` | Range checks |
+| `chainId = 2^128 * chainId_hi + chainId_lo` | Limb consistency |
 | `claimContractAddress < 2^160`, `relaySubmitter < 2^160` | Address-typed public inputs |
-| `leaf == Poseidon1_t3(LEAF_DOMAIN_TAG, decompose128(M_x), decompose128(M_y))` | Leaf computation |
-| `MerkleVerify(leaf, merklePath, merklePathDirections, cohortRoot)` | Depth-20 Poseidon1 membership |
+| `M_packed == Poseidon1(LEAF_DOMAIN_TAG, M_x_hi, M_x_lo, M_y_hi, M_y_lo)` | Cohort leaf hash |
+| `MerkleVerify(M_packed, merklePath, merklePathDirections, cohortRoot)` | Depth-20 LeanIMT |
 | `ECDSA-Verify(M, H_msg, r, s)` over secp256k1 | secp256k1 ECDSA gadget |
-| `s <= n/2` | Canonical-s; rejects malleable signatures |
-| `H_msg == SHA-256(DOMAIN_VOUCHER \|\| roundId \|\| cohortRoot \|\| chainId \|\| M_x \|\| M_y \|\| derivedPubkey_x \|\| derivedPubkey_y \|\| amount \|\| claimContractAddress)` | In-circuit SHA-256 over the pinned 308-byte preimage |
-| `nullifier == Poseidon1(NULL_DOMAIN_TAG, decompose128(M_x), decompose128(M_y), decompose128(roundId), claimContractAddress, decompose128(chainId))` | Nullifier re-computation |
+| `s <= n/2` | Canonical-s |
+| `H_msg == SHA-256(DOMAIN_VOUCHER \|\| roundId \|\| cohortRoot \|\| chainId \|\| M_x \|\| M_y \|\| derivedPubkey_x \|\| derivedPubkey_y \|\| amount \|\| claimContractAddress)` | In-circuit SHA-256 over the 308-byte preimage |
+| `roundId_packed == Poseidon1(roundId_hi, roundId_lo)` | Width-3 fold |
+| `chainId_packed == Poseidon1(chainId_hi, chainId_lo)` | Width-3 fold |
+| `nullifier == Poseidon1(NULL_DOMAIN_TAG, M_packed, roundId_packed, claimContractAddress, chainId_packed)` | Width-5 nullifier |
 | `M`, `derivedPubkey`, `roundId`, `chainId`, `cohortRoot`, `claimContractAddress` shared as single witness or public-input wires across all gadgets | Audit MUST verify wire identity, not equality constraints |
-| `publicInputs.relaySubmitter` bound on-chain to `msg.sender` | Closes proof-stealing front-running |
+| `publicInputs.relaySubmitter` bound on-chain to `msg.sender` | Asserted at the claim contract |
 
-### Forward Secrecy
+### Pool-Withdraw Circuit Constraints
 
-The protocol does **not** provide forward secrecy of past claim identifiers under card seizure. A seized card exposes the master secret `m`; from `m` an attacker recomputes every past `derivedScalar`, every past `derivedPubkey`, every past destination, and every past nullifier whose `roundId` is known.
-
-Rationale for not pursuing forward secrecy: the dominant attack pivot (per the Problem Statement and the documented prosecution record between 2013 and 2026) is off-ramp KYC linking the stealth destination back to a recipient at fiat conversion. Forward secrecy of past on-chain nullifiers under physical card seizure does not defend against this pivot; it defends against a separate, secondary scenario (post-seizure forensic correlation of past on-chain claims to a specific card) whose practical value is bounded — possession of the card already gives an attacker the recipient's identity and current claim capability. Earlier protocol drafts achieved nullifier forward secrecy via a forward-secure SHA-256 hash chain stored in a non-wear-leveled persistent region of the chip; that design required a custom non-leveled-memory APDU, an NXP vendor letter, a bounded card lifetime, an enrollment-time pubkey precommitment ceremony, and a Faraday-shielded perso-bureau. The complexity-to-benefit ratio against the dominant threat did not justify it for this PoC.
-
-Operational mitigation: revoke promptly on suspected seizure (next `publishCohort` excludes the cardId); standard KYC-grade physical-custody hygiene; deployments needing nullifier forward secrecy MUST adopt a forward-chain extension (see [Alternatives Considered](#appendix-a-alternatives-considered)).
+| Constraint | Notes |
+|------------|-------|
+| `M_x_hi`, `M_x_lo`, `M_y_hi`, `M_y_lo`, `roundId_hi`, `roundId_lo`, `chainId_hi`, `chainId_lo < 2^128` | Range checks |
+| `claimContractAddress < 2^160`, `recipient < 2^160`, `token < 2^160` | Range checks |
+| `amount < 2^128` | Range check |
+| `M_packed == Poseidon1(LEAF_DOMAIN_TAG, M_x_hi, M_x_lo, M_y_hi, M_y_lo)` | Same formula as cohort leaf and claim circuit |
+| `roundId_packed == Poseidon1(roundId_hi, roundId_lo)` | Width-3 fold |
+| `chainId_packed == Poseidon1(chainId_hi, chainId_lo)` | Width-3 fold |
+| `commitment == Poseidon1(COMMITMENT_DOMAIN_TAG, token, amount, M_packed, roundId_packed)` | Pool sub-tree leaf |
+| `MerkleVerify(commitment, merklePath, leaf_index, pool_root)` | Depth-32 LeanIMT |
+| `nullifier == Poseidon1(NULL_DOMAIN_TAG, M_packed, roundId_packed, claimContractAddress, chainId_packed)` | Identical to the claim circuit's nullifier formula |
+| `M`, `roundId`, `chainId`, `claimContractAddress` shared as single witness wires across all gadgets | Audit MUST verify wire identity |
 
 ### Smartcard Requirements
 
 | Requirement | Notes |
 |-------------|-------|
-| ECDSA secp256k1 with platform-RNG-derived nonces | Hardware-accelerated on NXP JCOP-class secure elements. Card returns raw `(r, s)`; canonical-s normalized off-card; in-circuit `s ≤ n/2` enforces canonicality. |
-| SHA-256, HMAC-SHA256 | Java Card `MessageDigest.ALG_SHA_256` and `Signature.ALG_HMAC_SHA_256`. |
-| secp256k1 base-point multiplication | For `derivedPubkey = derivedPrivkey · G`; reuses platform ECDSA arithmetic. |
-| Single master keypair `(m, M)` | Generated on-card during initialization via the standard `GENERATE_KEY` APDU using the on-card TRNG. `m` never leaves the card. `M` is exported once at enrollment via `EXPORT_KEY`. |
-| `SIGN_VOUCHER` APDU (custom applet fork) | Single APDU performs (in order): (a) verify `authToken`; (b) `derivedScalar = HMAC-SHA256(m, DOMAIN_STEALTH \|\| roundId \|\| claimContract \|\| chainId)`; (c) `derivedPrivkey = (derivedScalar mod (n-1)) + 1`; `derivedPubkey = derivedPrivkey · G`; (d) construct the 308-byte preimage internally from companion-supplied `(roundId, cohortRoot, claimContract, perRecipientAmount, chainId)` plus on-card-derived `M`, `derivedPubkey`; (e) SHA-256 it; (f) sign the digest with `m`; (g) return `(M, derivedPubkey, signature)`. The card MUST construct the preimage internally and MUST NOT accept a pre-hashed digest, otherwise a malicious companion could substitute `derivedPubkey` and redirect funds. This is the load-bearing reason a forked applet is required. |
-| NIST SP 800-88 Clear-level erase on re-provisioning | Single-pass overwrite of `m` under `JCSystem.beginTransaction` when the card is wiped for re-issuance. |
+| ECDSA secp256k1 with platform-RNG-derived nonces | Hardware-accelerated on JCOP-class secure elements. Card returns raw `(r, s)`; canonical-s normalized off-card. |
+| SHA-256, HMAC-SHA256 | Java Card `MessageDigest.ALG_SHA_256`, `Signature.ALG_HMAC_SHA_256`. |
+| secp256k1 base-point multiplication | For `derivedPubkey = derivedPrivkey * G`. |
+| Single master keypair `(m, M)` | Generated on-card during initialization via `GENERATE_KEY` using the on-card TRNG. `m` never leaves the card. `M` is exported once at enrollment via `EXPORT_KEY`. |
+| `SIGN_VOUCHER` APDU | Single APDU performs, in order: verify `authToken`; derive stealth scalar; derive `derivedPrivkey` and `derivedPubkey`; construct the 308-byte preimage internally from companion-supplied context plus on-card-derived `M` and `derivedPubkey`; SHA-256 the preimage; ECDSA-sign the digest with `m`; return `(M, derivedPubkey, signature)`. |
+| NIST SP 800-88 Clear-level erase on re-provisioning | Single-pass overwrite of `m` under `JCSystem.beginTransaction`. |
 
-The card does NOT evaluate Poseidon1 or BN254 arithmetic, does NOT compute keccak256, does NOT implement RFC 6979, and does NOT hold per-claim transient state.
-
-The custom applet is a single additional APDU on top of a standard secp256k1 Java Card applet. It does not require non-leveled persistent memory, vendor JC extensions, vendor letters from NXP, or any hash-chain machinery.
+The card MUST NOT evaluate Poseidon1 or BN254 arithmetic, MUST NOT compute keccak256, MUST NOT implement RFC 6979, and MUST NOT hold per-claim transient state.
 
 ## Security Model
 
 ### Threat Model
 
-The adversary is assumed to possess all of the following capabilities, exercisable at registration, disbursement, off-ramp, after a round closes, or after a state transition.
+The adversary is assumed to possess all of the following capabilities, exercisable at registration, disbursement, off-ramp, after a round closes, or after a state transition:
 
-| Capability |
-|------------|
-| Compel implementing partner to disclose beneficiary records |
-| Inherit databases via state transition or territorial seizure |
-| Subpoena KYC and transaction records from exchanges or banks |
-| Cyber-breach NGO or aid infrastructure |
-| Freeze accounts at scale |
-| De-risk humanitarian rails wholesale |
-| Combine on-chain trace with off-ramp KYC to identify individuals |
-| Deploy targeted spyware against aid workers, defenders, journalists |
-| Seize recipient devices and conduct mobile forensics |
-| Weaponize state civil-identity registries |
-| Physically observe recipients at distribution points |
+- Compel implementing partner to disclose beneficiary records.
+- Inherit databases via state transition or territorial seizure.
+- Subpoena KYC and transaction records from exchanges or banks.
+- Cyber-breach NGO or aid infrastructure.
+- Freeze accounts at scale.
+- Combine on-chain trace with off-ramp KYC.
+- Deploy targeted spyware against aid workers, defenders, journalists.
+- Seize recipient devices and conduct mobile forensics.
+- Weaponize state civil-identity registries.
+- Physically observe recipients at distribution points.
 
 Honest-party assumptions:
 
-- Registry operator and implementing partner are organizationally separated (distinct legal entities, jurisdictions, personnel, infrastructure).
-- Smartcard tamper-resistance at the AVA_VAN.5 chip platform level. The chip is CC-evaluated; the applet is NOT in any CC TOE.
+- Registry operator and implementing partner are organizationally separated.
+- Smartcard tamper-resistance at the AVA_VAN.5 chip platform level. The chip is CC-evaluated; the applet is not in any CC TOE.
 - At least one honest reachable relay per claim attempt; recipient-side relay diversity across rounds.
 - Ethereum censorship resistance at the settlement layer.
 - Off-ramp is outside the trust boundary.
-
-Cohort-integrity adversaries (fraudulent enrollment, sybil, double-enrollment) are bounded by the Registry operator's enrollment policy. Soundness requires the active-card set to reflect only legitimately enrolled distinct identities; the protocol provides no cryptographic defense against Registry-operator misbehavior at enrollment time. **Post-enrollment Registry compromise does NOT enable forgery** (the Registry holds only public `M` values).
 
 Out of scope:
 
@@ -510,88 +597,89 @@ Out of scope:
 - Feature-phone-only recipients with no companion device.
 - Privacy of the off-ramp transaction itself.
 - Cryptographic prevention of relay-level voucher retention.
-- Forward secrecy of past claim identifiers under card seizure (see [Forward Secrecy](#forward-secrecy)).
+- Forward secrecy of past claim identifiers under card seizure.
 - Defense against full degradation of AVA_VAN.5 chip-platform tamper-resistance or chip-level invasive analysis.
+- Cohort-integrity defense against Registry-operator misbehavior at enrollment time.
 
 ### Guarantees
 
 | Property | Guarantee |
 |----------|-----------|
-| Off-ramp unlinkability | Up to the stealth destination, claim events are unlinkable to a specific cohort member beyond membership in `cohortRoot`. K-anonymity at the off-ramp is bounded by the IShieldedPool association-set size. |
-| Cohort anonymity | Within `cohortRoot`, a claim is unlinkable to a specific cohort member except through capability paths flagged in Limitations. |
-| Soundness under post-enrollment Registry compromise | Registry holds only `(cardId, M)` per active card. Compromise (including database inheritance by a successor regime) does NOT enable voucher forgery, nullifier computation, or destination deanonymization. Registry compromise can deny service or inflate the active set with sybils at enrollment time; cryptographic forgery resistance is preserved. |
-| Cross-chain replay resistance | `chainId` is bound into the voucher preimage, the nullifier, the stealth-scalar derivation, and the round header; the claim contract asserts `chainId == block.chainid`. A voucher accepted on chain A cannot be replayed on chain B. |
-| Nullifier determinism | Two vouchers from the same card for the same `(roundId, claimContractAddress, chainId)` collide. A relay decrypting two vouchers from the same card sees the same `M` and can link them across rounds; recipient-side relay diversity is the mitigation. |
-| No proof-stealing front-running | Proof binds `relaySubmitter` to `msg.sender`; re-submission from a different address fails verification. |
-| No witness-griefing nullifier burn | Nullifier write is post-unshield and not revert-suppressed; a pool revert reverts the entire claim transaction. |
-| Funder restraint | Funder holds no on-chain beneficiary list. Funder multisig compromise does not expose recipients. |
-| Compelled-partner survival | No central beneficiary list at the on-chain layer. Coverage is contingent on the operator-partner separation. |
+| Off-ramp unlinkability | Up to the stealth destination, claim events are unlinkable to a specific cohort member beyond membership in `cohortRoot`. K-anonymity at the off-ramp is bounded by unspent deposits matching `(token, perRecipientAmount)` across the calling claim contract's rounds. |
+| Cohort anonymity | Within `cohortRoot`, a claim is unlinkable to a specific cohort member, subject to the limitations table. |
+| Soundness under post-enrollment Registry compromise | Registry holds only `(cardId, M)` per active card. Compromise does not enable voucher forgery, nullifier computation, or destination deanonymization. |
+| Cross-chain replay resistance | `chainId` is bound into the voucher preimage, the nullifier, the stealth-scalar derivation, and the round header; the claim contract asserts `chainId == block.chainid`. |
+| Nullifier determinism | Two vouchers from the same card for the same `(roundId, claimContractAddress, chainId)` collide. |
+| No proof-stealing front-running | `relaySubmitter` is bound to `msg.sender`. |
+| No witness-griefing nullifier burn | The nullifier write is post-unshield and not revert-suppressed. |
+| Funder restraint | Funder holds no on-chain beneficiary list. |
 
 ### Observability
 
 | Party | What it sees during a normal claim |
-|-------|-----------------------------------|
+|-------|------------------------------------|
 | Funder | `cohortRoot`, round-level aggregates, its own on-chain identity |
-| Registry operator | Per-card `(cardId, M, status)` plus per-version `cohortRoot`, `cohortSize`. Holds NO `m`. |
-| Smartcard | Its own `m`, voucher-context fields, derived `M` and stealth public key |
-| Companion device | Voucher-context fields, `M`, `derivedPubkey`, `destination`, Merkle path, signature, nullifier, ciphertext. Does NOT see `m`. |
-| Mesh peer | Ciphertext, companion mesh-layer identifiers (subject to physical-layer mitigations) |
-| Relay (after decryption) | `M`, `derivedPubkey`, `roundId`, `chainId`, `destination`, `amount`, `claimContractAddress`, `nullifier`, `signature`, Merkle path, claim transaction, its own network origin |
+| Registry operator | Per-card `(cardId, M, status, cohort_position)` plus per-version `cohortRoot`, `cohortSize` |
+| Smartcard | `m`, voucher-context fields, derived `M` and stealth public key |
+| Companion device | Voucher-context fields, `M`, `derivedPubkey`, `destination`, Merkle path, signature, nullifier, ciphertext |
+| Mesh peer | Ciphertext, companion mesh-layer identifiers |
+| Relay (after decryption) | `M`, `derivedPubkey`, `roundId`, `chainId`, `destination`, `amount`, `claimContractAddress`, `nullifier`, signature, Merkle path, claim transaction, its own network origin |
 | Anonymous-transport peer | Entry: relay network origin only. Exit: claim transaction only. |
 | Screening-set operator (if pool requires it) | Compliance-witness artifacts |
 | RPC provider | Without IAnonymousTransport: submitter origin and transaction. With it: one or the other. |
 | Ethereum observer | Public inputs of each claim, claim envelope, round header, funder identity |
 
-### Limitations and Side Channels
+### Limitations and Shortcuts (PoC Scope)
 
-| Concern | Mitigation / Bound |
-|---------|---------------------|
-| Cross-round per-relay linkability | Same `M` across all rounds; any relay handling ≥ 2 vouchers from one card can link them. Mitigated by recipient-side relay diversity per round; not cryptographically prevented. |
-| Card seizure | Master secret `m` exposed; all past and future destinations and nullifiers recomputable. Mitigation is operational (revocation on suspected seizure). |
-| Registry-relay collusion | Registry holds `M` per card; a relay observing one `M` matches it to a `cardId` via collusion. Mitigated by relay-set diversity and Registry oversight; not cryptographically prevented. |
-| Claim-time correlation | Relays SHOULD randomize submission delay over ≥ 1 hour and emit Poisson cover traffic. |
-| Nullifier-count time-series | Real-time operational indicator; cohort pooling, batched settlement, delayed header publication reduce; not cryptographically eliminated. |
-| Companion-device fingerprinting at the mesh layer | ISubmission requires ≥ 2 orthogonal mitigations across physical and network layers. |
+| Concern | Mitigation / Production Path |
+|---------|------------------------------|
+| Forward secrecy of past claim identifiers under card seizure | Operational revocation on suspected seizure. Deployments needing forward secrecy MUST adopt a forward-chain extension as a separate spec addendum. |
+| Cross-round per-relay linkability | Recipient-side relay diversity per round. |
+| Registry-relay collusion | Relay-set diversity and Registry oversight. |
+| Registry leak combined with public `firstPoolLeafIndex` | Registry-relay separation per the threat model. |
+| Claim-time correlation | Relays SHOULD randomize submission delay over at least one hour and emit Poisson cover traffic. |
+| Nullifier-count time-series | Cohort pooling, batched settlement, and delayed header publication. |
+| Companion-device fingerprinting at the mesh layer | At least two orthogonal mitigations across physical and network layers. |
 | Long-lived submission-EOA funding trails | Relays MUST rotate EOAs per round or per 24 hours. |
 | Tor end-to-end confirmation under a global passive adversary | Migration to Nym once Ethereum wallet integration matures. |
-| Cellebrite / HIIDE class device-seizure forensics | Track research vs. chosen secure-element; update threat-model documentation per deployment. |
+| Companion device-seizure forensics | Update threat-model documentation per deployment. |
 | Supply-chain compromise at applet provisioning | Reproducible builds, multi-party signing of applet-loading keys, perso-bureau personnel vetting. |
-| Funder-insider deanonymization via cohort selection or round timing | Organizational separation, audit logging. Cryptographic protection out of scope. |
+| Funder-insider deanonymization via cohort selection or round timing | Organizational separation; audit logging. |
 | Recipient coercion | Out of scope. |
 | Companion-device sharing | Each shared companion is equivalent to a relay for claims it handles. |
-| Co-location of Registry operator and implementing partner | Conformance-breaking; deployment MUST publish separation attestation. |
-| Multi-round program-level fingerprinting | Funder identity, cohort-size evolution, round cadence, token choice. Funders MAY rotate identities per round. |
+| Co-location of Registry operator and implementing partner | Conformance-breaking; deployment MUST publish a separation attestation. |
+| Multi-round program-level fingerprinting | Funders MAY rotate identities per round. |
 
-## Deployment Gate
+### Deployment Gate
 
-| # | Item | Artifact | Owner |
-|---|------|----------|-------|
-| 1 | Round-factory and claim-contract audit | Public audit report | Auditor |
-| 2 | ECDSA-in-SNARK relay circuit + verifier audit | Public audit report | Auditor |
-| 3 | Field-pilot mesh-to-Ethereum relay software | Pilot results at representative scale | Implementing partner |
-| 4 | Smartcard applet audit | Independent security review (Trail of Bits / Cure53 / NCC Group). Scope: `SIGN_VOUCHER` APDU correctness (preimage construction, HMAC stealth derivation, deterministic `(x mod (n-1)) + 1`, on-card SHA-256 over the 308-byte preimage, ECDSA signing, refusal on bad `authToken`); NIST SP 800-88 Clear-level erase on re-provisioning; fault-injection / side-channel testing. | Auditor |
-| 5 | Organizational separation attestation | Public attestation between Registry operator and implementing partner | Both |
-| 6 | IShieldedPool integration verification | Verification attestation for chosen pool version, including residual-only authorization scope for funder multisig | Funder |
-| 7 | Registry operator-side procedures | Cohort-tree construction code, revocation processing, `publishCohort` operator-key rotation, public commitment-table integrity controls | Registry operator |
-| 8 | Relay-set roster | `N_relays ≥ 8` pilot, `≥ 16` production; independent operators; jurisdictional diversity | Funder |
-| 9 | Relay-economic-recovery model | Chosen model + privacy-consequence analysis | Funder |
-| 10 | Supply-chain controls for applet production-load | Reproducible builds, multi-party signing of applet-loading keys, perso-bureau personnel vetting | Implementing partner |
-| 11 | Component maturity disclosure | Per chosen component (incl. specific Nym SDK if used) | Funder |
+| # | Item | Owner |
+|---|------|-------|
+| 1 | Round-factory and claim-contract audit | Auditor |
+| 2 | ECDSA-in-SNARK relay circuit and verifier audit | Auditor |
+| 3 | Field-pilot mesh-to-Ethereum relay software at representative scale | Implementing partner |
+| 4 | Smartcard applet audit covering `SIGN_VOUCHER` correctness, NIST SP 800-88 erase, and fault-injection / side-channel testing | Auditor |
+| 5 | Organizational separation attestation between Registry operator and implementing partner | Both |
+| 6 | IShieldedPool integration verification | Funder |
+| 7 | Registry operator-side procedures: cohort-tree construction, revocation processing, `publishCohort` operator-key rotation, public-commitment-table integrity controls | Registry operator |
+| 8 | Relay-set roster: at least 8 independent operators in pilot, at least 16 in production; jurisdictional diversity | Funder |
+| 9 | Relay-economic-recovery model and privacy-consequence analysis | Funder |
+| 10 | Supply-chain controls for applet production-load: reproducible builds, multi-party signing of applet-loading keys, perso-bureau personnel vetting | Implementing partner |
+| 11 | Component maturity disclosure per chosen component | Funder |
 
 ## Terminology
 
 | Term | Definition |
 |------|------------|
-| AVA_VAN.5 chip platform | CC-evaluated secure-element + Java Card OS at vulnerability-analysis level 5. Reference: NXP JCOP 4 P71 / J3R200. The applet is NOT itself in the CC TOE unless a separate composite evaluation is performed. |
-| Cohort | Set of currently-active enrolled cards at a given Registry version; committed by `cohortRoot`. |
-| Companion device | Internet- or mesh-capable device that reads the smartcard, computes the nullifier, and submits encrypted vouchers. Holds no long-lived recipient secret. |
-| Master keypair `(m, M)` | Single per-card secp256k1 keypair, generated on-card during Keycard initialization. `m` never leaves the card. |
-| Nullifier | Unique identifier for a `(card, round, claimContract, chainId)` tuple; deterministic in `(M, roundId, claimContractAddress, chainId)`; prevents double-spend within a round. |
-| Poseidon1 | Algebraic permutation hash function over BN254 Fr, optimized for ZK circuits. |
-| Registry | Operator-maintained public-commitment store and on-chain `cohortRoot` publisher. Holds no secret material. |
+| AVA_VAN.5 chip platform | CC-evaluated secure element and Java Card OS at vulnerability-analysis level 5. Reference: NXP JCOP 4 P71 / J3R200. |
+| Cohort | Set of currently active enrolled cards at a given Registry version; committed by `cohortRoot`. |
+| Companion device | Internet- or mesh-capable device that reads the smartcard, computes the nullifier, and submits encrypted vouchers. |
+| Master keypair `(m, M)` | Single per-card secp256k1 keypair generated on-card. |
+| Nullifier | Unique identifier for a `(card, round, claimContract, chainId)` tuple; deterministic in `(M, roundId, claimContractAddress, chainId)`. |
+| Poseidon1 | Algebraic permutation hash function over BN254 Fr. |
+| Registry | Operator-maintained public-commitment store and on-chain `cohortRoot` publisher. |
 | Relay | Third party that decrypts vouchers, generates a ZK proof, and submits via IAnonymousTransport. |
 | Round | Disbursement event delivering a fixed per-recipient amount to each member of a cohort. |
-| Stealth destination | One-time Ethereum address `keccak256(derivedPubkey_x \|\| derivedPubkey_y)[-20:]`, with `derivedPubkey` derived on-card. Not enumerable without the card. |
+| Stealth destination | One-time Ethereum address `keccak256(derivedPubkey_x \|\| derivedPubkey_y)[-20:]`. |
 | Voucher | Smartcard-signed authority binding a claim to a round, master pubkey, stealth pubkey, `chainId`, and a nullifier. |
 
 ## References
@@ -610,15 +698,3 @@ Out of scope:
 - Pools: [Railgun](https://www.railgun.org/), [Privacy Pools](https://privacypools.com/), [Hinkal](https://hinkal.pro/)
 - Anonymous transport: [Tor](https://www.torproject.org/), [Nym](https://nymtech.net/)
 - Tooling: [Noir](https://noir-lang.org/), [Barretenberg](https://github.com/AztecProtocol/barretenberg)
-
-## Appendix A: Alternatives Considered
-
-| Alternative | Why Not |
-|-------------|---------|
-| Recipient-generated ZK proofs | Smartcards cannot evaluate Poseidon or in-circuit ECDSA. Pushing proving onto a companion device worsens hardware requirements and does not improve forward secrecy because the companion remains the most exposed surface. |
-| Companion-side stealth scalar derivation | Companion compromise (Pegasus, Predator class) would enumerate all stealth public keys. On-card HMAC-SHA256 derivation removes that surface. |
-| Direct (non-shielded) ERC-20 disbursement | Off-ramp KYC plus on-chain trace identifies recipients within a year of public-record cases. Does not address the dominant attack pivot. |
-| Pre-hashed `H_msg` accepted by a stock smartcard `SIGN` APDU | Allows companion-side substitution of `derivedPubkey`, redirecting funds. The custom `SIGN_VOUCHER` APDU exists exclusively to prevent this. |
-| Forward-secure SHA-256 hash chain on-card with per-epoch keypair rotation | Earlier draft. Required non-wear-leveled persistent memory, a vendor letter from NXP, a bounded card lifetime, an enrollment-time pubkey-list precommitment ceremony, and a Faraday-shielded perso-bureau. The protected property (forward secrecy of past nullifiers under card seizure) is a defense-in-depth against a non-dominant attack pivot; the complexity-to-benefit ratio against the dominant threat (off-ramp KYC) did not justify it for this PoC. Deployments needing this property MUST adopt the forward-chain extension as a separate spec addendum. |
-| Issuer-side secret hash-chain HSM mirror | Same earlier draft, broken: allowed Registry operator (or successor regime inheriting the database) to forge any voucher and compute any nullifier. |
-| Threshold/MPC issuer key shares | Heavy multi-party infrastructure; expanded the compelled-party surface; replaced a clean public-only Registry with a coordination protocol. |
