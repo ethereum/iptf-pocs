@@ -1,3 +1,7 @@
 [workspace]
-members = ["circuits/resilient_disbursement_rails"]
-default-member = "circuits/resilient_disbursement_rails"
+members = [
+    "circuits/lib",
+    "circuits/claim",
+    "circuits/withdraw",
+]
+default-member = "circuits/claim"
