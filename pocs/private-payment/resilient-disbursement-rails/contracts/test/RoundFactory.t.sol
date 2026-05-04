@@ -87,7 +87,7 @@ contract RoundFactoryTest is Test {
         uint256[] memory c = _commitments();
 
         vm.prank(funderMultisig);
-        factory.publishRound(h, hex"DEADBEEF", c);
+        factory.publishRound(h, c);
 
         // Pool was credited.
         assertEq(pool.balance(address(claimContract)), PER_RECIPIENT_AMOUNT * COHORT_SIZE);
@@ -108,7 +108,7 @@ contract RoundFactoryTest is Test {
         uint256[] memory c = _commitments();
 
         vm.expectRevert(RoundFactory.NotFunderMultisig.selector);
-        factory.publishRound(h, hex"00", c);
+        factory.publishRound(h, c);
     }
 
     function test_publishRound_revertsCohortRootMismatch() public {
@@ -118,7 +118,7 @@ contract RoundFactoryTest is Test {
 
         vm.prank(funderMultisig);
         vm.expectRevert(RoundFactory.CohortRootMismatch.selector);
-        factory.publishRound(h, hex"00", c);
+        factory.publishRound(h, c);
     }
 
     function test_publishRound_revertsCohortSizeMismatch() public {
@@ -128,7 +128,7 @@ contract RoundFactoryTest is Test {
 
         vm.prank(funderMultisig);
         vm.expectRevert(RoundFactory.CohortSizeMismatch.selector);
-        factory.publishRound(h, hex"00", c);
+        factory.publishRound(h, c);
     }
 
     function test_publishRound_revertsWrongCommitmentCount() public {
@@ -137,7 +137,7 @@ contract RoundFactoryTest is Test {
 
         vm.prank(funderMultisig);
         vm.expectRevert(RoundFactory.WrongCommitmentCount.selector);
-        factory.publishRound(h, hex"00", c);
+        factory.publishRound(h, c);
     }
 
     function test_publishRound_revertsWrongChainId() public {
@@ -147,7 +147,7 @@ contract RoundFactoryTest is Test {
 
         vm.prank(funderMultisig);
         vm.expectRevert(RoundFactory.WrongChainId.selector);
-        factory.publishRound(h, hex"00", c);
+        factory.publishRound(h, c);
     }
 
     function test_publishRound_revertsWrongToken() public {
@@ -157,7 +157,7 @@ contract RoundFactoryTest is Test {
 
         vm.prank(funderMultisig);
         vm.expectRevert(RoundFactory.WrongToken.selector);
-        factory.publishRound(h, hex"00", c);
+        factory.publishRound(h, c);
     }
 
     function test_publishRound_revertsRoundIdCollision() public {
@@ -165,11 +165,11 @@ contract RoundFactoryTest is Test {
         uint256[] memory c = _commitments();
 
         vm.prank(funderMultisig);
-        factory.publishRound(h, hex"00", c);
+        factory.publishRound(h, c);
 
         vm.prank(funderMultisig);
         vm.expectRevert(RoundFactory.RoundIdCollision.selector);
-        factory.publishRound(h, hex"00", c);
+        factory.publishRound(h, c);
     }
 
     function test_publishRound_firstPoolLeafIndexCapturesPreLoop() public {
@@ -177,7 +177,7 @@ contract RoundFactoryTest is Test {
         RoundHeader memory h1 = _validHeader();
         uint256[] memory c1 = _commitments();
         vm.prank(funderMultisig);
-        factory.publishRound(h1, hex"00", c1);
+        factory.publishRound(h1, c1);
 
         // Second round: firstPoolLeafIndex must be 4 (not 8).
         RoundHeader memory h2 = _validHeader();
@@ -189,7 +189,7 @@ contract RoundFactoryTest is Test {
         }
 
         vm.prank(funderMultisig);
-        factory.publishRound(h2, hex"00", c2);
+        factory.publishRound(h2, c2);
 
         assertEq(claimContract.firstPoolLeafIndex(h2.roundId), uint64(COHORT_SIZE));
     }
@@ -201,7 +201,7 @@ contract RoundFactoryTest is Test {
         RoundHeader memory h1 = _validHeader();
         uint256[] memory c1 = _commitments();
         vm.prank(funderMultisig);
-        factory.publishRound(h1, hex"00", c1);
+        factory.publishRound(h1, c1);
 
         // Re-use the same commitments for a second round.
         RoundHeader memory h2 = _validHeader();
@@ -214,7 +214,7 @@ contract RoundFactoryTest is Test {
 
         vm.prank(funderMultisig);
         vm.expectRevert(ShieldedPool.CommitmentExists.selector);
-        factory.publishRound(h2, hex"00", c2);
+        factory.publishRound(h2, c2);
 
         // No state changes.
         assertEq(token.balanceOf(funderMultisig), balBefore);

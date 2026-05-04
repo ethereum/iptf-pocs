@@ -24,7 +24,7 @@ Recipients hold tamper-resistant smartcards. They cannot run zero-knowledge prov
 |----------|-------------|
 | Privacy | Off-ramp unlinkability up to the stealth destination. Cohort-level anonymity within `cohortRoot`. Pool-level k-anonymity bounded by the calling claim contract's pool sub-tree. Cross-funder anonymity and forward secrecy of past claim identifiers under card seizure are out of scope. |
 | Regulatory | Pool-level k-anonymity within the chosen IShieldedPool association set. Compliance witnesses tolerated as opaque pool inputs. |
-| Operational | Smartcard signing only; no on-card ZK. Tolerance for high-latency mesh transport. No real-time recipient internet. Card loss recoverable via re-enrollment. Settlement on Ethereum L1 or an EVM L2 of comparable finality, with reorg-safety margin set per deployment to at least the deepest observed reorg on the target chain. |
+| Operational | Smartcard signing only; no on-card ZK. Tolerance for high-latency mesh transport. No real-time recipient internet. Card loss recoverable via re-enrollment. Settlement on Ethereum L1 or an EVM L2 of comparable finality. The on-chain claim gate is `block.timestamp < closeTime`; deployers SHOULD apply a relay-side close-time buffer consistent with the target chain's observed reorg depth (no on-chain reorg margin is enforced). |
 | Trust | Funder is a multisig. Registry operator and implementing partner are organizationally separated (distinct legal entities, jurisdictions, personnel, infrastructure). The funder MAY coincide with either party but not with both. At least one honest reachable relay per claim attempt. Recipient-side relay diversity across rounds. |
 
 ### System Overview
@@ -63,10 +63,10 @@ graph TD
 
 A round runs in four stages.
 
-1. **Publication.** The funder publishes a round through a round-factory contract. The factory verifies the funder multisig signature on the round header, asserts cohort identity and `chainId` against the Registry, deposits one per-recipient commitment into the calling claim contract's pool sub-tree for each active card, and registers the signed header with the claim contract together with `firstPoolLeafIndex`. All steps are atomic.
+1. **Publication.** The funder publishes a round through a round-factory contract. The factory authorizes via `msg.sender == funderMultisig` (the on-chain Multisig contract is the single authority gate), asserts cohort identity and `chainId` against the Registry, deposits one per-recipient commitment into the calling claim contract's pool sub-tree for each active card, and registers the header with the claim contract together with `firstPoolLeafIndex`. All steps are atomic. The funder's ECDSA signature on `H_header` is distributed out-of-band alongside the header and verified by companion devices, not by the factory.
 2. **Voucher construction.** The recipient inserts the smartcard into a companion device. The card derives a per-claim stealth public key via HMAC-SHA256 over its master secret, constructs the 308-byte voucher preimage internally, signs it with secp256k1 ECDSA, and returns the signature and stealth public key. The companion derives the destination, computes the nullifier, and wraps the voucher in IND-CCA2 AEAD to a relay's rotating public key.
 3. **Submission and settlement.** The companion hands the ciphertext to a mesh or store-and-forward transport. A relay decrypts, generates two ZK proofs (claim circuit and pool-withdraw circuit), and submits via an anonymous transport. The claim contract verifies both proofs, recomputes the destination on-chain, enforces cross-proof public-input binding, and invokes pool unshield.
-4. **Close and residual.** After `closeBlock`, the claim contract rejects further claims. After a further 30-day timelock the funder multisig MAY recover residual shielded balance via balance accounting at the pool, gated by a one-shot flag. No ZK proof on the residual path.
+4. **Close and residual.** After `closeTime`, the claim contract rejects further claims. After a further 30-day timelock the funder multisig MAY recover residual shielded balance via balance accounting at the pool, gated by a one-shot flag. No ZK proof on the residual path.
 
 ### Why This Approach
 
@@ -114,7 +114,7 @@ A round runs in four stages.
 ### Recipient Lifecycle
 
 1. **Personalization.** The operator embeds `cohort_position` on the card or its packaging at distribution. The companion device stores `cohort_position` per active cohort version.
-2. **Round receipt.** The recipient receives the signed round header out-of-band (mesh, SMS, USSD, radio, poster QR, agent handoff) along with `firstPoolLeafIndex`. The companion verifies the funder signature on `H_header`.
+2. **Round receipt.** The recipient receives `(header, funderSignature, firstPoolLeafIndex)` out-of-band (mesh, SMS, USSD, radio, poster QR, agent handoff). `funderSignature` is the funder's ECDSA signature on `H_header`. The companion verifies it; this is the single signature-check gate on round headers, since the on-chain factory authorizes by multisig membership only.
 3. **Voucher.** The recipient inserts the smartcard. The card produces a signature; the companion encrypts the voucher and hands the ciphertext to mesh transport.
 4. **Off-ramp.** After settlement, the recipient unshields at the off-ramp through the resulting stealth address.
 
@@ -133,8 +133,8 @@ sequenceDiagram
     F->>REG: cohortRoot, cohortSize
     REG-->>F: root, size, version, M_i for i in [0, cohortSize)
     F->>F: Sign header
-    F->>RF: publishRound(header, M_list) via IAnonymousTransport
-    RF->>RF: Verify funder multisig signature
+    F->>RF: publishRound(header, M_list) via Multisig.execute
+    RF->>RF: Authorize msg.sender == funderMultisig
     RF->>REG: Read cohortRoot(version), cohortSize(version), M_i; assert header equality
     RF->>RF: Assert header.chainId == block.chainid
     RF->>F: Pull perRecipient * size of token
@@ -204,9 +204,9 @@ A recipient MAY fan out the encrypted voucher to up to `k < N_relays` relays per
 
 #### Round Close and Residual
 
-After `closeBlock`, the claim contract rejects further claims. After `closeBlock + 30 days` the funder multisig MAY call `funderUnshieldResidual(roundId)`. The claim contract computes `residual = roundDeposit[roundId] - roundClaimed[roundId]` and forwards a single call to `pool.recoverResidual(roundId, residual, funderResidualDestination)`. The path is gated by the multisig, the timelock, and the one-shot `roundResidualPaid[claimContract][roundId]` flag.
+After `closeTime`, the claim contract rejects further claims. After `closeTime + 30 days` the funder multisig MAY call `funderUnshieldResidual(roundId)`. The claim contract computes `residual = roundDeposit[roundId] - roundClaimed[roundId]` and forwards a single call to `pool.recoverResidual(roundId, residual, funderResidualDestination)`. The path is gated by the multisig, the timelock, and the one-shot `roundResidualPaid[claimContract][roundId]` flag.
 
-Reorg safety: relays and companion devices treat the round as closed for submission decisions from `closeBlock - 64`. Deployments on chains with deeper reorgs MUST set the margin to at least the deepest observed reorg depth.
+Reorg safety: the on-chain claim gate is `block.timestamp < header[roundId].closeTime` with no built-in reorg margin. Relays and companion devices SHOULD apply a deployment-specific submission cutoff before `closeTime` consistent with the target chain's observed reorg depth and finality characteristics. The buffer is a deployer policy, not an on-chain enforcement.
 
 ### Data Structures
 
@@ -253,14 +253,14 @@ Signed-message preimage (308 bytes), in order:
 | `perRecipientAmount` | `uint256` | Fixed per claim |
 | `cohortSize` | `uint256` | Asserted equal to `Registry.cohortSize(cohortVersion)` |
 | `token` | `address` | ERC-20 |
-| `closeBlock` | `uint64` | Claiming ends |
+| `closeTime` | `uint64` | Unix timestamp (seconds); claiming ends when `block.timestamp >= closeTime` |
 | `claimContractAddress` | `address` | Pinned in voucher binding |
 | `chainId` | `uint256` | Asserted equal to `block.chainid` at publication and at every claim |
-| `funderSignature` | `bytes` | ECDSA over `H_header` |
+| `funderSignature` | `bytes` | ECDSA over `H_header`, distributed out-of-band; verified by companion devices, not by the factory |
 | `firstPoolLeafIndex` | `uint64` | Set atomically by the factory at publication; pinned in the claim contract via `registerHeader`; distributed alongside the signed header out-of-band. |
 
 ```
-H_header = SHA256(DOMAIN_HEADER || encode(roundId, cohortVersion, cohortRoot, perRecipient, cohortSize, token, closeBlock, claimContract, chainId))
+H_header = SHA256(DOMAIN_HEADER || encode(roundId, cohortVersion, cohortRoot, perRecipient, cohortSize, token, closeTime, claimContract, chainId))
 DOMAIN_HEADER = SHA256("RDR/header/v1")
 ```
 
@@ -383,7 +383,7 @@ Functions:
 
 `publishRound(header, M_list) external`, in order:
 
-1. Verify `funderSignature` against `funderMultisig` over `H_header`.
+1. Authorize `msg.sender == funderMultisig`. The on-chain Multisig is the single authority gate; the funder's ECDSA signature on `H_header` is delivered out-of-band to companion devices and is not verified by the factory.
 2. Read `cohortRoot(cohortVersion)` and `cohortSize(cohortVersion)` from Registry. Recompute the cohort tree from `M_list` in cohort-position order and assert equality with `header.cohortRoot`. Assert `header.cohortSize == Registry.cohortSize(cohortVersion) == M_list.length`.
 3. Assert `header.chainId == block.chainid`.
 4. Pull `perRecipient * cohortSize` of `token` from funder approval.
@@ -396,7 +396,7 @@ Functions:
 A revert in any step reverts the entire transaction.
 
 Events:
-- `RoundPublished(roundId, cohortVersion, cohortRoot, perRecipientAmount, cohortSize, token, closeBlock, claimContractAddress, chainId, funderSignature, firstPoolLeafIndex)`
+- `RoundPublished(roundId, cohortVersion, cohortRoot, perRecipientAmount, cohortSize, token, closeTime, claimContractAddress, chainId, firstPoolLeafIndex, hHeader)`
 
 #### Claim Contract
 
@@ -422,7 +422,7 @@ Functions:
 
 1. Recombine `roundId`, `derivedPubkey_x`, `derivedPubkey_y`, `chainId` from limbs.
 2. `destination = address(uint160(uint256(keccak256(abi.encodePacked(derivedPubkey_x, derivedPubkey_y)))))`.
-3. Assert `block.number < header[roundId].closeBlock`.
+3. Assert `block.timestamp < header[roundId].closeTime`.
 4. Verify the claim proof.
 5. Verify the pool-withdraw proof.
 6. Header bindings:
@@ -443,7 +443,7 @@ Functions:
 
 The unshield call MUST NOT be wrapped in try/catch.
 
-`funderUnshieldResidual(roundId) external onlyFunderMultisig`: callable when `block.number >= header[roundId].closeBlock + 30 days` and `!roundResidualPaid[roundId]`. Computes `residual = roundDeposit[roundId] - roundClaimed[roundId]`, sets `roundResidualPaid[roundId] = true`, then calls `IShieldedPool.recoverResidual(roundId, residual, funderResidualDestination)`. The pool independently asserts `msg.sender == address(this)` and `!roundResidualPaid[address(this)][roundId]`.
+`funderUnshieldResidual(roundId) external onlyFunderMultisig`: callable when `block.timestamp >= header[roundId].closeTime + 30 days` and `!roundResidualPaid[roundId]`. Computes `residual = roundDeposit[roundId] - roundClaimed[roundId]`, sets `roundResidualPaid[roundId] = true`, then calls `IShieldedPool.recoverResidual(roundId, residual, funderResidualDestination)`. The pool independently asserts `msg.sender == address(this)` and `!roundResidualPaid[address(this)][roundId]`.
 
 Events:
 - `Claimed(roundId, nullifier, destination, amount, relaySubmitter)`

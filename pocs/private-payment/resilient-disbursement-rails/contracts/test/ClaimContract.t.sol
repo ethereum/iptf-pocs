@@ -78,7 +78,7 @@ contract ClaimContractTest is Test {
             commitments[i] = 0xAA00 + i;
         }
         vm.prank(funderMultisig);
-        factory.publishRound(h, hex"00", commitments);
+        factory.publishRound(h, commitments);
     }
 
     /// @dev Build a valid claim PI array for the given relay.

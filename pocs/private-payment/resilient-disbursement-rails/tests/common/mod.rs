@@ -110,7 +110,6 @@ use resilient_disbursement_rails::{
     },
     poseidon::{
         fr_from_be_bytes,
-        hash_m_packed,
         pack_round_id,
     },
     registry::OperatorRegistry,
@@ -149,7 +148,6 @@ sol! {
     #[sol(rpc)]
     interface IRegistry {
         function publishCohort(uint256 root, uint256 size) external;
-        function enroll(bytes32 cardId, uint256 mPacked, uint64 position) external;
         function currentVersion() external view returns (uint64);
         function cohortRoot(uint64 version) external view returns (uint256);
         function cohortSize(uint64 version) external view returns (uint256);
@@ -169,7 +167,7 @@ sol! {
             address claimContractAddress;
             uint256 chainId;
         }
-        function publishRound(RoundHeader calldata header, bytes calldata funderSig, uint256[] calldata commitments) external;
+        function publishRound(RoundHeader calldata header, uint256[] calldata commitments) external;
         event RoundPublished(
             uint256 indexed roundId,
             uint64 cohortVersion,
@@ -181,8 +179,7 @@ sol! {
             address claimContractAddress,
             uint256 chainId,
             uint64 firstPoolLeafIndex,
-            bytes32 hHeader,
-            bytes funderSig
+            bytes32 hHeader
         );
     }
 
@@ -469,26 +466,6 @@ pub async fn publish_cohort_on_chain(
         .await
         .expect("publishCohort receipt");
 
-    for (i, m) in m_pubs.iter().enumerate() {
-        let mut card_id = [0u8; 32];
-        card_id[24..32].copy_from_slice(&(i as u64).to_be_bytes());
-
-        let m_x_hi = fr_from_be_bytes(&m.x[..16]);
-        let m_x_lo = fr_from_be_bytes(&m.x[16..32]);
-        let m_y_hi = fr_from_be_bytes(&m.y[..16]);
-        let m_y_lo = fr_from_be_bytes(&m.y[16..32]);
-        let m_packed = hash_m_packed(m_x_hi, m_x_lo, m_y_hi, m_y_lo);
-
-        registry
-            .enroll(card_id.into(), fr_to_u256(m_packed), i as u64)
-            .send()
-            .await
-            .expect("enroll send")
-            .get_receipt()
-            .await
-            .expect("enroll receipt");
-    }
-
     registry
         .currentVersion()
         .call()
@@ -661,8 +638,7 @@ pub async fn publish_round(
     .await;
     multisig_call_token_approve(harness, deployment, total).await;
 
-    publish_round_via_multisig(harness, deployment, &header, &commitments, &funder_sig)
-        .await;
+    publish_round_via_multisig(harness, deployment, &header, &commitments).await;
 
     (header, commitments, funder_sig)
 }
@@ -688,13 +664,15 @@ async fn multisig_call_token_approve(
 }
 
 /// Drive the funder multisig: propose + 4 confirmations + execute calling
-/// `RoundFactory.publishRound` with the real funder signature.
+/// `RoundFactory.publishRound`. The factory authorizes via
+/// `msg.sender == funderMultisig`; the funder ECDSA signature on `H_header`
+/// is delivered out-of-band to companion devices, not threaded through the
+/// factory.
 async fn publish_round_via_multisig(
     harness: &AnvilHarness,
     deployment: &Deployment,
     header: &RoundHeader,
     commitments: &[Bytes32],
-    funder_sig: &[u8],
 ) {
     let header_sol = round_header_sol(header);
     let commitments_u256: Vec<U256> =
@@ -703,11 +681,7 @@ async fn publish_round_via_multisig(
     let owner0 = harness.owner_provider(0);
     let factory = IRoundFactory::new(deployment.factory, &owner0);
     let publish_calldata = factory
-        .publishRound(
-            header_sol,
-            Bytes::from(funder_sig.to_vec()),
-            commitments_u256,
-        )
+        .publishRound(header_sol, commitments_u256)
         .calldata()
         .clone();
 
@@ -1196,7 +1170,7 @@ pub fn build_claim_with_snapshots<P: ProofBackend>(
         rotated_at: Instant::now(),
         rotation_interval: Duration::from_secs(86_400),
     };
-    let relay = Relay::new(
+    let mut relay = Relay::new(
         BackendRef(backend),
         keys,
         snapshot_pool,

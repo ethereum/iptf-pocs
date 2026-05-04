@@ -5,8 +5,6 @@
 //! `AnvilHarness::start(use_mock)`, so the backend in this module and the
 //! deployed verifier always agree.
 
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 
 use resilient_disbursement_rails::{

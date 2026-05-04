@@ -5,8 +5,8 @@ import {IRegistry} from "./interfaces/IRegistry.sol";
 
 /// @title Registry
 /// @notice Versioned cohort commitment store. Operator publishes
-///         `cohortRoot` and `cohortSize` per version; per-card
-///         `cohort_position` is recorded for the operator side.
+///         `cohortRoot` and `cohortSize` per version. Per-card enrollment
+///         state lives off-chain in the operator's `OperatorRegistry`.
 contract Registry is IRegistry {
     /// @notice Current cohort version. Bumped on every `publishCohort`.
     uint64 public override currentVersion;
@@ -17,16 +17,7 @@ contract Registry is IRegistry {
     /// @notice cohortSize per version.
     mapping(uint64 => uint256) public override cohortSize;
 
-    /// @notice cohort_position per (version, cardId).
-    mapping(uint64 => mapping(bytes32 => uint64)) internal _cohortPosition;
-
-    /// @notice cardId enrolled per version.
-    mapping(uint64 => mapping(bytes32 => bool)) public cardEnrolled;
-
-    /// @notice M_packed enrolled per version (rejects duplicate-M attempts).
-    mapping(uint64 => mapping(uint256 => bool)) public mEnrolled;
-
-    /// @notice Address authorized to call `publishCohort` and `enroll`.
+    /// @notice Address authorized to call `publishCohort`.
     address public operatorKey;
 
     /// @notice Address authorized to rotate the operator key (under timelock).
@@ -40,7 +31,6 @@ contract Registry is IRegistry {
     uint256 public constant OPERATOR_KEY_TIMELOCK_BLOCKS = 14400;
 
     event CohortPublished(uint64 indexed version, uint256 root, uint256 size);
-    event CardEnrolled(uint64 indexed version, bytes32 indexed cardId, uint64 position);
     event OperatorKeyProposed(address indexed newKey, uint256 activationBlock);
     event OperatorKeyUpdated(address indexed oldKey, address indexed newKey);
 
@@ -48,8 +38,6 @@ contract Registry is IRegistry {
     error NotOperator();
     error EmptyRoot();
     error EmptySize();
-    error DuplicateCard();
-    error DuplicateM();
     error NoPendingKey();
     error TimelockNotExpired();
     error KeyAlreadyPending();
@@ -82,29 +70,6 @@ contract Registry is IRegistry {
         cohortSize[v] = size;
 
         emit CohortPublished(v, root, size);
-    }
-
-    /// @notice Record a card's enrollment in the current version with its
-    ///         cohort position. Operator-only. Rejects duplicate cardId or
-    ///         duplicate M_packed within the same version.
-    /// @param cardId The card identifier.
-    /// @param mPacked Hash of the card's master public key (cohort tree leaf).
-    /// @param position Cohort position assigned by the operator.
-    function enroll(bytes32 cardId, uint256 mPacked, uint64 position) external onlyOperator {
-        uint64 v = currentVersion;
-        if (cardEnrolled[v][cardId]) revert DuplicateCard();
-        if (mEnrolled[v][mPacked]) revert DuplicateM();
-
-        cardEnrolled[v][cardId] = true;
-        mEnrolled[v][mPacked] = true;
-        _cohortPosition[v][cardId] = position;
-
-        emit CardEnrolled(v, cardId, position);
-    }
-
-    /// @notice IRegistry view of cohort_position.
-    function cohortPosition(uint64 version, bytes32 cardId) external view override returns (uint64) {
-        return _cohortPosition[version][cardId];
     }
 
     /// @notice Propose a rotation of the operator key. Activates after the

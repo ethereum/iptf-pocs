@@ -54,56 +54,6 @@ contract RegistryTest is Test {
         registry.publishCohort(0xAAAA, 0);
     }
 
-    function test_enroll_recordsPosition() public {
-        vm.prank(operator);
-        registry.publishCohort(0xAAAA, 4);
-
-        vm.prank(operator);
-        registry.enroll(bytes32(uint256(0x01)), 0x111, 0);
-
-        assertEq(registry.cohortPosition(1, bytes32(uint256(0x01))), 0);
-        assertTrue(registry.cardEnrolled(1, bytes32(uint256(0x01))));
-        assertTrue(registry.mEnrolled(1, 0x111));
-    }
-
-    function test_enroll_revertsDuplicateCard() public {
-        vm.prank(operator);
-        registry.publishCohort(0xAAAA, 4);
-
-        vm.prank(operator);
-        registry.enroll(bytes32(uint256(0x01)), 0x111, 0);
-
-        vm.prank(operator);
-        vm.expectRevert(Registry.DuplicateCard.selector);
-        registry.enroll(bytes32(uint256(0x01)), 0x222, 1);
-    }
-
-    function test_enroll_revertsDuplicateM() public {
-        vm.prank(operator);
-        registry.publishCohort(0xAAAA, 4);
-
-        vm.prank(operator);
-        registry.enroll(bytes32(uint256(0x01)), 0x111, 0);
-
-        vm.prank(operator);
-        vm.expectRevert(Registry.DuplicateM.selector);
-        registry.enroll(bytes32(uint256(0x02)), 0x111, 1);
-    }
-
-    function test_enroll_acrossVersionsAllowed() public {
-        // Same cardId can re-enroll in a later version (revoke + re-publish flow).
-        vm.prank(operator);
-        registry.publishCohort(0xAAAA, 4);
-        vm.prank(operator);
-        registry.enroll(bytes32(uint256(0x01)), 0x111, 0);
-
-        vm.prank(operator);
-        registry.publishCohort(0xBBBB, 5);
-        vm.prank(operator);
-        registry.enroll(bytes32(uint256(0x01)), 0x111, 2);
-        assertEq(registry.cohortPosition(2, bytes32(uint256(0x01))), 2);
-    }
-
     function test_proposeOperatorKey_revertsNotGovernance() public {
         vm.prank(operator);
         vm.expectRevert(Registry.NotGovernance.selector);

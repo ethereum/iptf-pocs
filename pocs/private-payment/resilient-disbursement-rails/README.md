@@ -99,6 +99,15 @@ follows.
 - `pool.commitmentIndex(cc, commitment)` returns `leafIndex + 1`
   (0 means "absent") to disambiguate Solidity zero-init.
 
+### Round Factory
+- `RoundFactory.publishRound` does not verify a detached funder ECDSA
+  signature on `H_header`. On-chain authorization is
+  `msg.sender == funderMultisig` via `Multisig.execute`. The funder's
+  ECDSA signature on `H_header` is delivered out-of-band alongside the
+  header and verified only by companion devices
+  (`Companion::verify_signed_header`). The `RoundPublished` event emits
+  `hHeader` for traceability but no `funderSig` blob.
+
 ### Smartcard
 - Rust software emulator (`SoftwareSmartcard` in `src/adapters/`).
   Exposes APDU-shaped `Smartcard::transmit(apdu) -> response` with
@@ -126,8 +135,9 @@ follows.
 ### Operational concerns (out of scope)
 - Software smartcard; JCOP-class hardware deployment is out of scope.
 - Relay EOA rotation per round (operator concern).
-- Reorg margin (`closeTime - 768 seconds`) - documented in SPEC,
-  not enforced.
+- Reorg margin is a deployer-side policy applied to relay submission
+  decisions; the on-chain claim gate is `block.timestamp < closeTime`
+  with no built-in margin.
 - Source-fingerprinting mitigations at the network layer.
 - Cross-funder anonymity at the pool (per the per-claim-contract
   sub-tree partition).

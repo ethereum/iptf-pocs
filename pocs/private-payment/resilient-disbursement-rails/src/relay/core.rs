@@ -109,13 +109,19 @@ impl<P: ProofBackend, OC: OnChainPool, OR: OnChainCohort> Relay<P, OC, OR> {
     /// witnesses + generate both proofs. The caller submits them on-chain.
     /// `token` and the cohort coordinates are supplied separately because
     /// the voucher does not contain them (per Design Z prime).
+    ///
+    /// Performs a synchronous voucher-key rotation at entry if the
+    /// configured `rotation_interval` has elapsed (SPEC §ISubmission).
     pub fn submit_voucher(
-        &self,
+        &mut self,
         env: &EncryptedVoucher,
         token: Address,
         cohort_version: u64,
         cohort_position: u64,
     ) -> Result<SubmissionArtifacts, RelayError> {
+        if self.keys.is_due() {
+            self.keys.rotate();
+        }
         let plain = self.decrypt(env)?;
         let voucher: SignedVoucher = serde_json::from_slice(&plain)
             .map_err(|e| RelayError::BadVoucherFormat(e.to_string()))?;

@@ -60,8 +60,7 @@ contract RoundFactory {
         address claimContractAddress,
         uint256 chainId,
         uint64 firstPoolLeafIndex,
-        bytes32 hHeader,
-        bytes funderSig
+        bytes32 hHeader
     );
 
     error NotFunderMultisig();
@@ -100,14 +99,8 @@ contract RoundFactory {
     ///        8. Register header (with firstPoolLeafIndex) on claim contract.
     ///        9. Emit RoundPublished.
     /// @param header The round header signed off-band by the funder multisig.
-    /// @param funderSig Out-of-band signature on `H_header`. Recorded for
-    ///        traceability; on-chain authorization is by `msg.sender ==
-    ///        funderMultisig`. The funder distributes `funderSig` to companion
-    ///        devices alongside the header.
     /// @param commitments Per-recipient commitments in cohort-position order.
-    function publishRound(RoundHeader calldata header, bytes calldata funderSig, uint256[] calldata commitments)
-        external
-    {
+    function publishRound(RoundHeader calldata header, uint256[] calldata commitments) external {
         if (msg.sender != funderMultisig) revert NotFunderMultisig();
 
         // Cohort identity bindings.
@@ -155,7 +148,7 @@ contract RoundFactory {
 
         bytes32 hHeader = _computeHHeader(header);
 
-        _emitRoundPublished(header, firstPoolLeafIndex, hHeader, funderSig);
+        _emitRoundPublished(header, firstPoolLeafIndex, hHeader);
     }
 
     function _computeHHeader(RoundHeader calldata header) internal pure returns (bytes32) {
@@ -175,12 +168,7 @@ contract RoundFactory {
         return sha256(abi.encodePacked(DOMAIN_HEADER, body));
     }
 
-    function _emitRoundPublished(
-        RoundHeader calldata header,
-        uint64 firstPoolLeafIndex,
-        bytes32 hHeader,
-        bytes calldata funderSig
-    ) internal {
+    function _emitRoundPublished(RoundHeader calldata header, uint64 firstPoolLeafIndex, bytes32 hHeader) internal {
         emit RoundPublished(
             header.roundId,
             header.cohortVersion,
@@ -192,8 +180,7 @@ contract RoundFactory {
             header.claimContractAddress,
             header.chainId,
             firstPoolLeafIndex,
-            hHeader,
-            funderSig
+            hHeader
         );
     }
 
