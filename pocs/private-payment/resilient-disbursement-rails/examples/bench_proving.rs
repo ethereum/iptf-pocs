@@ -38,6 +38,7 @@ use resilient_disbursement_rails::{
     poseidon::{
         fr_from_be_bytes,
         hash_claim_nullifier,
+        hash_derived_pubkey_packed,
         hash_m_packed,
         hash_pool_commitment,
         pack_chain_id,
@@ -192,7 +193,18 @@ fn main() {
         fr_from_be_bytes(&chain_id.as_bytes()[16..32]),
     );
     let cc_fr = fr_from_be_bytes(&pad_address(&claim_contract));
-    let nullifier = hash_claim_nullifier(m_packed, r_packed, cc_fr, c_packed);
+    let derived_pubkey_x_hi = fr_from_be_bytes(&derived_pub.x[..16]);
+    let derived_pubkey_x_lo = fr_from_be_bytes(&derived_pub.x[16..32]);
+    let derived_pubkey_y_hi = fr_from_be_bytes(&derived_pub.y[..16]);
+    let derived_pubkey_y_lo = fr_from_be_bytes(&derived_pub.y[16..32]);
+    let derived_pubkey_packed = hash_derived_pubkey_packed(
+        derived_pubkey_x_hi,
+        derived_pubkey_x_lo,
+        derived_pubkey_y_hi,
+        derived_pubkey_y_lo,
+    );
+    let nullifier =
+        hash_claim_nullifier(m_packed, derived_pubkey_packed, r_packed, cc_fr, c_packed);
     let token_fr = fr_from_be_bytes(&pad_address(&token));
     let amount_fr = Fr::from_be_bytes_mod_order(amount.as_bytes());
     // Sanity: recompute the commitment and assert tree leaf agrees.
@@ -201,6 +213,7 @@ fn main() {
     assert_eq!(recomputed_commitment, commitment_fr);
 
     let relay_submitter: Address = [0x44u8; 20];
+    let destination_fr = fr_from_be_bytes(&pad_address(&destination));
 
     let claim_witness = ClaimWitness {
         round_id_hi: fr_from_be_bytes(&round_id[..16]),
@@ -208,14 +221,15 @@ fn main() {
         cohort_root: cohort_root_fr,
         chain_id_hi: fr_from_be_bytes(&chain_id.as_bytes()[..16]),
         chain_id_lo: fr_from_be_bytes(&chain_id.as_bytes()[16..32]),
-        derived_pubkey_x_hi: fr_from_be_bytes(&derived_pub.x[..16]),
-        derived_pubkey_x_lo: fr_from_be_bytes(&derived_pub.x[16..32]),
-        derived_pubkey_y_hi: fr_from_be_bytes(&derived_pub.y[..16]),
-        derived_pubkey_y_lo: fr_from_be_bytes(&derived_pub.y[16..32]),
+        destination: destination_fr,
         amount: amount_fr,
         nullifier,
         claim_contract_address: cc_fr,
         relay_submitter: fr_from_be_bytes(&pad_address(&relay_submitter)),
+        derived_pubkey_x_hi,
+        derived_pubkey_x_lo,
+        derived_pubkey_y_hi,
+        derived_pubkey_y_lo,
         m_x_hi,
         m_x_lo,
         m_y_hi,
@@ -229,11 +243,15 @@ fn main() {
         claim_nullifier: nullifier,
         token: token_fr,
         amount: amount_fr,
-        recipient: fr_from_be_bytes(&pad_address(&destination)),
+        recipient: destination_fr,
         m_x_hi,
         m_x_lo,
         m_y_hi,
         m_y_lo,
+        derived_pubkey_x_hi,
+        derived_pubkey_x_lo,
+        derived_pubkey_y_hi,
+        derived_pubkey_y_lo,
         round_id_hi: claim_witness.round_id_hi,
         round_id_lo: claim_witness.round_id_lo,
         chain_id_hi: claim_witness.chain_id_hi,

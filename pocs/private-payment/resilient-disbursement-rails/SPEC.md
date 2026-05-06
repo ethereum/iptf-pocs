@@ -1,7 +1,7 @@
 ---
 title: "Resilient Disbursement Rails"
 status: Draft
-version: 0.5.0
+version: 0.6.0
 authors: []
 created: 2026-04-30
 iptf_use_case: "https://github.com/ethereum/iptf-map/blob/master/use-cases/resilient-disbursement-rails.md"
@@ -133,9 +133,9 @@ sequenceDiagram
     F->>REG: cohortRoot, cohortSize
     REG-->>F: root, size, version, M_i for i in [0, cohortSize)
     F->>F: Sign header
-    F->>RF: publishRound(header, M_list) via Multisig.execute
+    F->>RF: publishRound(header, commitments) via Multisig.execute
     RF->>RF: Authorize msg.sender == funderMultisig
-    RF->>REG: Read cohortRoot(version), cohortSize(version), M_i; assert header equality
+    RF->>REG: Read cohortRoot(version), cohortSize(version); assert header equality and commitments.length
     RF->>RF: Assert header.chainId == block.chainid
     RF->>F: Pull perRecipient * size of token
     RF->>SP: deposit(claimContract, commitment_i, perRecipient) for i in [0, cohortSize)
@@ -166,7 +166,7 @@ sequenceDiagram
     SC-->>CD: (M, derivedPubkey, signature)
     CD->>CD: Normalize signature to canonical-s (s <= n/2)
     CD->>CD: destination = keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]
-    CD->>CD: nullifier = Poseidon1(NULL_DOMAIN_TAG, M_packed, roundId_packed, claimContract, chainId_packed)
+    CD->>CD: nullifier = Poseidon1(NULL_DOMAIN_TAG, M_packed, derivedPubkey_packed, roundId_packed, claimContract, chainId_packed)
     CD->>CD: voucher = (roundId, chainId, M, derivedPubkey, nullifier, destination, perRecipient, claimContract, signature)
 ```
 
@@ -241,7 +241,7 @@ Signed-message preimage (308 bytes), in order:
 | `amount` | 32 | big-endian `uint256` |
 | `claimContractAddress` | 20 | as-is |
 
-`destination = keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]` is recomputed on-chain from the public-input `derivedPubkey` limbs.
+`destination` is a public input of the claim circuit; the in-circuit constraint `destination == keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]` enforces the standard EOA derivation rule. The pool-withdraw circuit re-derives the nullifier from the same private `derivedPubkey` witness, so the cross-binding is via `claim_nullifier`.
 
 #### Round Header
 
@@ -268,15 +268,14 @@ DOMAIN_HEADER = SHA256("RDR/header/v1")
 
 #### Claim Proof Inputs
 
-Public (each one BN254 Fr element):
+Public (10 inputs total; each one BN254 Fr element):
 
 | Input | Notes |
 |-------|-------|
 | `roundId_hi`, `roundId_lo` | 128-bit limbs, each `< 2^128`. |
 | `cohortRoot` | `bytes32` reduced to canonical Fr; on-chain `== header.cohortRoot`. |
 | `chainId_hi`, `chainId_lo` | 128-bit limbs; on-chain `== block.chainid` and `== header.chainId`. |
-| `derivedPubkey_x_hi`, `derivedPubkey_x_lo` | 128-bit limbs of stealth public key x. |
-| `derivedPubkey_y_hi`, `derivedPubkey_y_lo` | 128-bit limbs of stealth public key y. |
+| `destination` | `Fr(uint160(addr))`; constrained `< 2^160`; in-circuit `== keccak256(derivedPubkey_x \|\| derivedPubkey_y)[-20:]`. |
 | `amount` | `Fr(uint256(amount))`. |
 | `nullifier` | `Fr` directly. |
 | `claimContractAddress` | `Fr(uint160(addr))`; constrained `< 2^160`. |
@@ -286,6 +285,8 @@ Private:
 
 | Input | Notes |
 |-------|-------|
+| `derivedPubkey_x_hi`, `derivedPubkey_x_lo` | 128-bit limbs of stealth public key x; consumed by the in-circuit keccak destination constraint and folded into the nullifier hash. Private so a Registry-compromise adversary holding cohort `M_list` cannot precompute candidate nullifiers. |
+| `derivedPubkey_y_hi`, `derivedPubkey_y_lo` | 128-bit limbs of stealth public key y. |
 | `M_x`, `M_y` | Card master public key |
 | `signature_r`, `signature_s` | Canonical-s asserted in-circuit |
 | `merklePath` | Depth 20 |
@@ -308,9 +309,10 @@ Private:
 | Input | Notes |
 |-------|-------|
 | `M_x_hi`, `M_x_lo`, `M_y_hi`, `M_y_lo` | 128-bit limbs of card master public key |
-| `roundId_hi`, `roundId_lo` | 128-bit limbs of `roundId` |
-| `chainId_hi`, `chainId_lo` | 128-bit limbs of `chainId` |
-| `claimContractAddress` | `Fr(uint160(addr))`; constrained `< 2^160` |
+| `derivedPubkey_x_hi`, `derivedPubkey_x_lo`, `derivedPubkey_y_hi`, `derivedPubkey_y_lo` | 128-bit limbs of the stealth public key, witnessed so the recomputed nullifier matches the claim's. |
+| `roundId_hi`, `roundId_lo` | 128-bit limbs of `roundId`; still feed the nullifier hash. |
+| `chainId_hi`, `chainId_lo` | 128-bit limbs of `chainId`; still feed the nullifier hash. |
+| `claimContractAddress` | `Fr(uint160(addr))`; constrained `< 2^160`; still feeds the nullifier hash. |
 | `leaf_index` | Pool sub-tree leaf index for the per-recipient commitment |
 | `merklePath` | Depth 32 |
 | `merklePathDirections` | Bit decomposition |
@@ -381,15 +383,15 @@ State:
 
 Functions:
 
-`publishRound(header, M_list) external`, in order:
+`publishRound(header, commitments) external`, in order:
 
 1. Authorize `msg.sender == funderMultisig`. The on-chain Multisig is the single authority gate; the funder's ECDSA signature on `H_header` is delivered out-of-band to companion devices and is not verified by the factory.
-2. Read `cohortRoot(cohortVersion)` and `cohortSize(cohortVersion)` from Registry. Recompute the cohort tree from `M_list` in cohort-position order and assert equality with `header.cohortRoot`. Assert `header.cohortSize == Registry.cohortSize(cohortVersion) == M_list.length`.
+2. Assert `header.cohortRoot == Registry.cohortRoot(cohortVersion)` and `header.cohortSize == Registry.cohortSize(cohortVersion) == commitments.length`. The cohort tree is *not* recomputed on-chain; the funder publishes pre-computed cohort-order commitments, and the cohort tree is anchored only via `header.cohortRoot` matching the registry.
 3. Assert `header.chainId == block.chainid`.
 4. Pull `perRecipient * cohortSize` of `token` from funder approval.
 5. Approve the pool to draw `perRecipient * cohortSize` of `token`.
 6. Snapshot `firstPoolLeafIndex = IShieldedPool.subTreeSize(claimContract)`.
-7. For `i` in `[0, cohortSize)` in cohort-position order: compute `commitment_i = Poseidon1(COMMITMENT_DOMAIN_TAG, token, perRecipient, M_packed_i, roundId_packed)` and call `IShieldedPool.deposit(claimContract, commitment_i, perRecipient)`.
+7. For `i` in `[0, cohortSize)` in cohort-position order: use the supplied `commitment_i = commitments[i]` (whose pre-image the funder computes off-chain as `Poseidon1(COMMITMENT_DOMAIN_TAG, token, perRecipient, M_packed_i, roundId_packed)`) and call `IShieldedPool.deposit(claimContract, commitment_i, perRecipient)`.
 8. `claimContract.registerHeader(header, firstPoolLeafIndex)`.
 9. Emit `RoundPublished`.
 
@@ -420,8 +422,8 @@ Functions:
 
 `claim(claimProof, claimPublicInputs, poolWithdrawProof, poolWithdrawPublicInputs) external`:
 
-1. Recombine `roundId`, `derivedPubkey_x`, `derivedPubkey_y`, `chainId` from limbs.
-2. `destination = address(uint160(uint256(keccak256(abi.encodePacked(derivedPubkey_x, derivedPubkey_y)))))`.
+1. Recombine `roundId`, `chainId` from limbs.
+2. Read `destination` directly from `claimPublicInputs.destination`; assert `destination < 2^160`. The in-circuit constraint `destination == keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]` enforces the EOA derivation; `derivedPubkey` is private to the claim circuit and not exposed on chain.
 3. Assert `block.timestamp < header[roundId].closeTime`.
 4. Verify the claim proof.
 5. Verify the pool-withdraw proof.
@@ -472,6 +474,7 @@ Events:
 | `LEAF_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/leaf/v1") mod r_BN254)` | Cohort tree leaf hash and `M_packed`. |
 | `COMMITMENT_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/commitment/v1") mod r_BN254)` | Pool sub-tree leaf hash. |
 | `NULL_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/null/v1") mod r_BN254)` | Nullifier hash. |
+| `DERIVED_PUBKEY_DOMAIN_TAG` | `Poseidon1_t2(0, SHA256("RDR/dpk/v1") mod r_BN254)` | `derivedPubkey_packed` hash for the nullifier. |
 | `DOMAIN_VOUCHER` | `SHA256("RDR/voucher/v1")` | Voucher signed-message preimage. |
 | `DOMAIN_HEADER` | `SHA256("RDR/header/v1")` | Round-header signed-message preimage. |
 | `DOMAIN_STEALTH` | `SHA256("RDR/stealth/v1")` | On-card stealth scalar derivation. |
@@ -496,13 +499,16 @@ commitment     = Poseidon1(COMMITMENT_DOMAIN_TAG, token, perRecipientAmount, M_p
 ### Nullifier
 
 ```
-M_packed       = Poseidon1(LEAF_DOMAIN_TAG, decompose128(M_x), decompose128(M_y))
-roundId_packed = Poseidon1(decompose128(roundId))
-chainId_packed = Poseidon1(decompose128(chainId))
-nullifier      = Poseidon1(NULL_DOMAIN_TAG, M_packed, roundId_packed, claimContractAddress, chainId_packed)
+M_packed              = Poseidon1(LEAF_DOMAIN_TAG, decompose128(M_x), decompose128(M_y))
+derivedPubkey_packed  = Poseidon1(DERIVED_PUBKEY_DOMAIN_TAG, decompose128(derivedPubkey_x), decompose128(derivedPubkey_y))
+roundId_packed        = Poseidon1(decompose128(roundId))
+chainId_packed        = Poseidon1(decompose128(chainId))
+nullifier             = Poseidon1(NULL_DOMAIN_TAG, M_packed, derivedPubkey_packed, roundId_packed, claimContractAddress, chainId_packed)
 ```
 
-The companion computes `nullifier` for the voucher; the claim and pool-withdraw circuits both recompute it from the same private witness inputs.
+Width grows from 5 to 6 to fold in `derivedPubkey_packed`. Round/chain/contract bindings remain as explicit nullifier inputs as defense in depth: they are also encoded in `derivedPubkey` via the on-card HMAC, but keeping them as in-circuit constraints preserves cross-round / cross-chain / cross-contract uniqueness independent of card-honest HMAC binding.
+
+`derivedPubkey` is a *private* witness of both circuits and is not exposed on chain. `M_list` alone (which a Registry-compromise adversary may obtain) is therefore insufficient to construct candidate nullifiers — recovering `derivedPubkey_i` requires the on-card secret `m_i`. The companion computes `nullifier` for the voucher; the claim and pool-withdraw circuits both recompute it from the same private witness inputs.
 
 ### On-Card Stealth Public Key
 
@@ -512,7 +518,7 @@ derivedPrivkey = (derivedScalar mod (n - 1)) + 1
 derivedPubkey  = derivedPrivkey * G
 ```
 
-`destination = keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]`, recomputed on-chain by the claim contract.
+`destination = keccak256(derivedPubkey_x || derivedPubkey_y)[-20:]`. The companion computes this off-card (`derivedPubkey` is exported by the card; the EOA derivation is a deterministic function of it); the claim circuit re-derives it in-circuit from the private `derivedPubkey` witness and exposes it as the public `destination` input the claim contract reads.
 
 ### Claim Circuit Constraints
 
@@ -521,20 +527,22 @@ derivedPubkey  = derivedPrivkey * G
 | `M_x_hi`, `M_x_lo`, `M_y_hi`, `M_y_lo < 2^128` | Range checks |
 | `M_x = 2^128 * M_x_hi + M_x_lo` over secp256k1 base field | Limb consistency |
 | `M_y = 2^128 * M_y_hi + M_y_lo` over secp256k1 base field | Limb consistency |
-| `derivedPubkey_*_hi`, `derivedPubkey_*_lo < 2^128` | Range checks |
+| `derivedPubkey_*_hi`, `derivedPubkey_*_lo < 2^128` (private witnesses) | Range checks |
 | `derivedPubkey_x = 2^128 * derivedPubkey_x_hi + derivedPubkey_x_lo` over secp256k1 base field | Limb consistency |
 | `derivedPubkey_y = 2^128 * derivedPubkey_y_hi + derivedPubkey_y_lo` over secp256k1 base field | Limb consistency |
 | `roundId_hi`, `roundId_lo`, `chainId_hi`, `chainId_lo < 2^128` | Range checks |
 | `chainId = 2^128 * chainId_hi + chainId_lo` | Limb consistency |
-| `claimContractAddress < 2^160`, `relaySubmitter < 2^160` | Address-typed public inputs |
+| `destination < 2^160`, `claimContractAddress < 2^160`, `relaySubmitter < 2^160` | Address-typed public inputs |
 | `M_packed == Poseidon1(LEAF_DOMAIN_TAG, M_x_hi, M_x_lo, M_y_hi, M_y_lo)` | Cohort leaf hash |
+| `derivedPubkey_packed == Poseidon1(DERIVED_PUBKEY_DOMAIN_TAG, derivedPubkey_x_hi, derivedPubkey_x_lo, derivedPubkey_y_hi, derivedPubkey_y_lo)` | Stealth-pubkey leaf hash |
 | `MerkleVerify(M_packed, merklePath, merklePathDirections, cohortRoot)` | Depth-20 LeanIMT |
 | `ECDSA-Verify(M, H_msg, r, s)` over secp256k1 | secp256k1 ECDSA gadget |
 | `s <= n/2` | Canonical-s |
 | `H_msg == SHA-256(DOMAIN_VOUCHER \|\| roundId \|\| cohortRoot \|\| chainId \|\| M_x \|\| M_y \|\| derivedPubkey_x \|\| derivedPubkey_y \|\| amount \|\| claimContractAddress)` | In-circuit SHA-256 over the 308-byte preimage |
+| `destination == keccak256(derivedPubkey_x \|\| derivedPubkey_y)[-20:]` | In-circuit keccak256 over 64 bytes; binds the public `destination` input to the private `derivedPubkey` witness |
 | `roundId_packed == Poseidon1(roundId_hi, roundId_lo)` | Width-3 fold |
 | `chainId_packed == Poseidon1(chainId_hi, chainId_lo)` | Width-3 fold |
-| `nullifier == Poseidon1(NULL_DOMAIN_TAG, M_packed, roundId_packed, claimContractAddress, chainId_packed)` | Width-5 nullifier |
+| `nullifier == Poseidon1(NULL_DOMAIN_TAG, M_packed, derivedPubkey_packed, roundId_packed, claimContractAddress, chainId_packed)` | Width-6 nullifier |
 | `M`, `derivedPubkey`, `roundId`, `chainId`, `cohortRoot`, `claimContractAddress` shared as single witness or public-input wires across all gadgets | Audit MUST verify wire identity, not equality constraints |
 | `publicInputs.relaySubmitter` bound on-chain to `msg.sender` | Asserted at the claim contract |
 
@@ -543,15 +551,17 @@ derivedPubkey  = derivedPrivkey * G
 | Constraint | Notes |
 |------------|-------|
 | `M_x_hi`, `M_x_lo`, `M_y_hi`, `M_y_lo`, `roundId_hi`, `roundId_lo`, `chainId_hi`, `chainId_lo < 2^128` | Range checks |
+| `derivedPubkey_*_hi`, `derivedPubkey_*_lo < 2^128` (private witnesses) | Range checks |
 | `claimContractAddress < 2^160`, `recipient < 2^160`, `token < 2^160` | Range checks |
 | `amount < 2^128` | Range check |
 | `M_packed == Poseidon1(LEAF_DOMAIN_TAG, M_x_hi, M_x_lo, M_y_hi, M_y_lo)` | Same formula as cohort leaf and claim circuit |
+| `derivedPubkey_packed == Poseidon1(DERIVED_PUBKEY_DOMAIN_TAG, derivedPubkey_x_hi, derivedPubkey_x_lo, derivedPubkey_y_hi, derivedPubkey_y_lo)` | Same formula as claim circuit |
 | `roundId_packed == Poseidon1(roundId_hi, roundId_lo)` | Width-3 fold |
 | `chainId_packed == Poseidon1(chainId_hi, chainId_lo)` | Width-3 fold |
 | `commitment == Poseidon1(COMMITMENT_DOMAIN_TAG, token, amount, M_packed, roundId_packed)` | Pool sub-tree leaf |
 | `MerkleVerify(commitment, merklePath, leaf_index, pool_root)` | Depth-32 LeanIMT |
-| `nullifier == Poseidon1(NULL_DOMAIN_TAG, M_packed, roundId_packed, claimContractAddress, chainId_packed)` | Identical to the claim circuit's nullifier formula |
-| `M`, `roundId`, `chainId`, `claimContractAddress` shared as single witness wires across all gadgets | Audit MUST verify wire identity |
+| `nullifier == Poseidon1(NULL_DOMAIN_TAG, M_packed, derivedPubkey_packed, roundId_packed, claimContractAddress, chainId_packed)` | Identical to the claim circuit's nullifier formula |
+| `M`, `derivedPubkey`, `roundId`, `chainId`, `claimContractAddress` shared as single witness wires across all gadgets | Audit MUST verify wire identity |
 
 ### Smartcard Requirements
 
@@ -565,6 +575,8 @@ derivedPubkey  = derivedPrivkey * G
 | NIST SP 800-88 Clear-level erase on re-provisioning | Single-pass overwrite of `m` under `JCSystem.beginTransaction`. |
 
 The card MUST NOT evaluate Poseidon1 or BN254 arithmetic, MUST NOT compute keccak256, MUST NOT implement RFC 6979, and MUST NOT hold per-claim transient state.
+
+The `SIGN_VOUCHER` APDU's on-card derivation of `derivedPubkey` is load-bearing for both destination correctness *and* nullifier integrity. A tampered card that signed over an attacker-chosen `derivedPubkey` could produce multiple valid claim vouchers for the same `(M, roundId)` with distinct nullifiers, enabling double-spend of the cohort slot. The protocol relies on hardware enforcement here; in deployments where this assumption cannot be made, an in-circuit verification of `derivedPubkey = HMAC(m, ctx)·G` would be required, which is incompatible with the current `m` never leaves the card invariant.
 
 ## Security Model
 
@@ -600,6 +612,7 @@ Out of scope:
 - Forward secrecy of past claim identifiers under card seizure.
 - Defense against full degradation of AVA_VAN.5 chip-platform tamper-resistance or chip-level invasive analysis.
 - Cohort-integrity defense against Registry-operator misbehavior at enrollment time.
+- Tampered-card double-spend within a single `(M, roundId)`: a malicious card could sign over multiple `derivedPubkey` values, producing distinct nullifiers from a single cohort slot. The on-chain accounting deduplicates only on `nullifier`, so the cumulative damage ceiling is **the round's full `balance[claimContract] = cohortSize × perRecipientAmount`**, not one slot's `perRecipientAmount`. Once `nullifiersConsumedCount[roundId]` exceeds `cohortSize`, `funderUnshieldResidual` underflows and residual recovery for that round is permanently DoS'd. Mitigated by the AVA_VAN.5 chip-platform honesty assumption; production deployments would need in-circuit verification of `derivedPubkey = HMAC(m, ctx)·G`, which is incompatible with the current `m` never leaves the card invariant.
 
 ### Guarantees
 
@@ -607,7 +620,7 @@ Out of scope:
 |----------|-----------|
 | Off-ramp unlinkability | Up to the stealth destination, claim events are unlinkable to a specific cohort member beyond membership in `cohortRoot`. K-anonymity at the off-ramp is bounded by unspent deposits matching `(token, perRecipientAmount)` across the calling claim contract's rounds. |
 | Cohort anonymity | Within `cohortRoot`, a claim is unlinkable to a specific cohort member, subject to the limitations table. |
-| Soundness under post-enrollment Registry compromise | Registry holds only `(cardId, M)` per active card. Compromise does not enable voucher forgery, nullifier computation, or destination deanonymization. |
+| Soundness under post-enrollment Registry compromise | Registry holds only `(cardId, M)` per active card. An adversary who compels cohort `M_list` *and nothing else* cannot construct candidate nullifiers, because `derivedPubkey` (a private witness of both circuits) requires the on-card secret `m`. The on-chain `destination` is `keccak256(derivedPubkey_x \|\| derivedPubkey_y)[-20:]`, preimage-resistant under the same adversary. Voucher forgery is independently blocked by the on-card ECDSA over `M`. **This guarantee assumes the funder has not retained the `commitment_i ↔ M_i` table it computed pre-publication and is not colluding with the Registry**; otherwise see the Limitations entry on funder-Registry collusion. |
 | Cross-chain replay resistance | `chainId` is bound into the voucher preimage, the nullifier, the stealth-scalar derivation, and the round header; the claim contract asserts `chainId == block.chainid`. |
 | Nullifier determinism | Two vouchers from the same card for the same `(roundId, claimContractAddress, chainId)` collide. |
 | No proof-stealing front-running | `relaySubmitter` is bound to `msg.sender`. |
@@ -649,6 +662,8 @@ Out of scope:
 | Companion-device sharing | Each shared companion is equivalent to a relay for claims it handles. |
 | Co-location of Registry operator and implementing partner | Conformance-breaking; deployment MUST publish a separation attestation. |
 | Multi-round program-level fingerprinting | Funders MAY rotate identities per round. |
+| Funder-Registry collusion via `commitment_i ↔ M_i` table | Funder pre-computes `commitments[i]` in cohort-position order and submits them via `publishRound`; combined with Registry's `M_i ↔ cardId` mapping, the union learns `cardId ↔ commitment_i`. The pool's `Unshielded` event hides `leafIndex`, so chain-only deanonymization does not follow directly, but a Registry+funder+off-ramp coalition collapses cohort anonymity. Funders MUST treat the cohort-order commitment table as sensitive and either delete it post-publication or hold it under organizational separation from Registry operations. |
+| First-spend `derivedPubkey` disclosure | When the recipient first signs a transaction from `destination`, ECDSA pubkey recovery exposes `derivedPubkey` on chain. An adversary holding cohort `M_list` can then compute `derivedPubkey_packed_X` for the recovered key, recompute the nullifier preimage, and confirm "claim event `e` originated from card_X." This is a one-time linkability event per card per round and is intrinsic to spending from EOA destinations; recipients who require unlinkable spend MUST forward funds through a privacy-preserving wrapper before doing so. |
 
 ### Deployment Gate
 

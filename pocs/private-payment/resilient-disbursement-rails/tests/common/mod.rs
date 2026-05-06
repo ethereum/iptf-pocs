@@ -187,7 +187,7 @@ sol! {
     interface IClaimContract {
         function claim(
             bytes calldata claimProof,
-            uint256[13] calldata claimPublicInputs,
+            uint256[10] calldata claimPublicInputs,
             bytes calldata poolWithdrawProof,
             uint256[5] calldata poolPublicInputs
         ) external;
@@ -1043,7 +1043,7 @@ impl OnChainCohort for SnapshotCohort {
 pub struct ClaimBundle {
     pub claim_proof: Vec<u8>,
     pub pool_proof: Vec<u8>,
-    pub claim_public_inputs: [U256; 13],
+    pub claim_public_inputs: [U256; 10],
     pub pool_public_inputs: [U256; 5],
     pub claim_witness: ClaimWitness,
     pub pool_witness: PoolWithdrawWitness,
@@ -1188,16 +1188,13 @@ pub fn build_claim_with_snapshots<P: ProofBackend>(
 
     // Public-input arrays in the order the claim contract's library
     // expects.
-    let claim_public_inputs: [U256; 13] = [
+    let claim_public_inputs: [U256; 10] = [
         fr_to_u256(claim_witness.round_id_hi),
         fr_to_u256(claim_witness.round_id_lo),
         fr_to_u256(claim_witness.cohort_root),
         fr_to_u256(claim_witness.chain_id_hi),
         fr_to_u256(claim_witness.chain_id_lo),
-        fr_to_u256(claim_witness.derived_pubkey_x_hi),
-        fr_to_u256(claim_witness.derived_pubkey_x_lo),
-        fr_to_u256(claim_witness.derived_pubkey_y_hi),
-        fr_to_u256(claim_witness.derived_pubkey_y_lo),
+        fr_to_u256(claim_witness.destination),
         fr_to_u256(claim_witness.amount),
         fr_to_u256(claim_witness.nullifier),
         fr_to_u256(claim_witness.claim_contract_address),

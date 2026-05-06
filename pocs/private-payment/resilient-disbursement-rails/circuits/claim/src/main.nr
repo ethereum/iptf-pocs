@@ -1,5 +1,6 @@
 use rdr_lib::ecdsa_secp256k1;
 use rdr_lib::hasher;
+use rdr_lib::keccak;
 use rdr_lib::limbs;
 use rdr_lib::merkle;
 use rdr_lib::sha256_voucher;
@@ -16,14 +17,15 @@ fn main(
     cohort_root: pub Field,
     chain_id_hi: pub Field,
     chain_id_lo: pub Field,
-    derived_pubkey_x_hi: pub Field,
-    derived_pubkey_x_lo: pub Field,
-    derived_pubkey_y_hi: pub Field,
-    derived_pubkey_y_lo: pub Field,
+    destination: pub Field,
     amount: pub Field,
     nullifier: pub Field,
     claim_contract_address: pub Field,
     relay_submitter: pub Field,
+    derived_pubkey_x_hi: Field,
+    derived_pubkey_x_lo: Field,
+    derived_pubkey_y_hi: Field,
+    derived_pubkey_y_lo: Field,
     m_x_hi: Field,
     m_x_lo: Field,
     m_y_hi: Field,
@@ -42,10 +44,20 @@ fn main(
     limbs::assert_lt_2_128(m_x_lo);
     limbs::assert_lt_2_128(m_y_hi);
     limbs::assert_lt_2_128(m_y_lo);
+    // derivedPubkey limbs are range-checked < 2^128 each (so the assembled
+    // 32-byte BE values are < 2^256). On-curve and canonical-form (< p_secp)
+    // checks are NOT enforced in-circuit; they are delegated to the on-card
+    // SHA-256 voucher signature, whose preimage commits to derived_x_bytes ||
+    // derived_y_bytes, plus the chip-platform honesty assumption that the
+    // card derives derivedPubkey via standard secp256k1 base-point mul. A
+    // tampered card supplying a non-curve dpk loses funds for that user (the
+    // resulting EOA has no known private key) but does not break system
+    // soundness for other cards.
     limbs::assert_lt_2_128(derived_pubkey_x_hi);
     limbs::assert_lt_2_128(derived_pubkey_x_lo);
     limbs::assert_lt_2_128(derived_pubkey_y_hi);
     limbs::assert_lt_2_128(derived_pubkey_y_lo);
+    limbs::assert_lt_2_160(destination);
     limbs::assert_lt_2_160(claim_contract_address);
     limbs::assert_lt_2_160(relay_submitter);
 
@@ -104,10 +116,31 @@ fn main(
 
     ecdsa_secp256k1::verify_ecdsa(m_x_bytes, m_y_bytes, h_msg, signature_r, signature_s);
 
+    let mut dpk_concat: [u8; 64] = [0; 64];
+    for i in 0..32 {
+        dpk_concat[i] = derived_x_bytes[i];
+    }
+    for i in 0..32 {
+        dpk_concat[32 + i] = derived_y_bytes[i];
+    }
+    let dpk_keccak: [u8; 32] = keccak::keccak256_64(dpk_concat);
+    let mut dest_acc: Field = 0;
+    for i in 0..20 {
+        dest_acc = dest_acc * 256 + dpk_keccak[12 + i] as Field;
+    }
+    assert(destination == dest_acc, "destination mismatch");
+
+    let derived_pubkey_packed = hasher::hash_derived_pubkey_packed(
+        derived_pubkey_x_hi,
+        derived_pubkey_x_lo,
+        derived_pubkey_y_hi,
+        derived_pubkey_y_lo,
+    );
     let round_id_packed = hasher::pack_round_id(round_id_hi, round_id_lo);
     let chain_id_packed = hasher::pack_chain_id(chain_id_hi, chain_id_lo);
     let computed_nullifier = hasher::hash_claim_nullifier(
         m_packed,
+        derived_pubkey_packed,
         round_id_packed,
         claim_contract_address,
         chain_id_packed,

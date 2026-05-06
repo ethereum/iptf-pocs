@@ -5,3 +5,4 @@
 pub global LEAF_DOMAIN_TAG: Field = 1;
 pub global COMMITMENT_DOMAIN_TAG: Field = 2;
 pub global NULL_DOMAIN_TAG: Field = 3;
+pub global DERIVED_PUBKEY_DOMAIN_TAG: Field = 4;

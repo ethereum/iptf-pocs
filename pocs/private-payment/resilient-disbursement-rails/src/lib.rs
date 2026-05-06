@@ -26,6 +26,7 @@ pub mod types;
 pub const DOMAIN_LEAF: &[u8] = b"RDR/leaf/v1";
 pub const DOMAIN_COMMITMENT: &[u8] = b"RDR/commitment/v1";
 pub const DOMAIN_NULLIFIER: &[u8] = b"RDR/null/v1";
+pub const DOMAIN_DERIVED_PUBKEY: &[u8] = b"RDR/dpk/v1";
 pub const DOMAIN_VOUCHER: &[u8] = b"RDR/voucher/v1";
 pub const DOMAIN_HEADER: &[u8] = b"RDR/header/v1";
 pub const DOMAIN_STEALTH: &[u8] = b"RDR/stealth/v1";
@@ -36,6 +37,7 @@ pub const DOMAIN_ROSTER: &[u8] = b"RDR/roster/v1";
 pub const LEAF_DOMAIN_TAG: u64 = 1;
 pub const COMMITMENT_DOMAIN_TAG: u64 = 2;
 pub const NULL_DOMAIN_TAG: u64 = 3;
+pub const DERIVED_PUBKEY_DOMAIN_TAG: u64 = 4;
 
 // Cohort tree depth (matches circuits/claim main and SPEC Cohort Tree).
 pub const COHORT_DEPTH: usize = 20;

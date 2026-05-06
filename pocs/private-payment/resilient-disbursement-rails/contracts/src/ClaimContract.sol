@@ -6,7 +6,7 @@ import {IPool} from "./interfaces/IPool.sol";
 import {ICompositeVerifier} from "./interfaces/ICompositeVerifier.sol";
 import {RoundHeader} from "./RoundFactory.sol";
 
-/// @notice Indexes into the claim circuit's 13 public inputs. Order MUST
+/// @notice Indexes into the claim circuit's 10 public inputs. Order MUST
 ///         match `circuits/claim/src/main.nr` `main(...)` parameter order.
 library ClaimPublicInputs {
     uint256 internal constant ROUND_ID_HI = 0;
@@ -14,15 +14,12 @@ library ClaimPublicInputs {
     uint256 internal constant COHORT_ROOT = 2;
     uint256 internal constant CHAIN_ID_HI = 3;
     uint256 internal constant CHAIN_ID_LO = 4;
-    uint256 internal constant DPK_X_HI = 5;
-    uint256 internal constant DPK_X_LO = 6;
-    uint256 internal constant DPK_Y_HI = 7;
-    uint256 internal constant DPK_Y_LO = 8;
-    uint256 internal constant AMOUNT = 9;
-    uint256 internal constant NULLIFIER = 10;
-    uint256 internal constant CLAIM_CONTRACT_ADDRESS = 11;
-    uint256 internal constant RELAY_SUBMITTER = 12;
-    uint256 internal constant LENGTH = 13;
+    uint256 internal constant DESTINATION = 5;
+    uint256 internal constant AMOUNT = 6;
+    uint256 internal constant NULLIFIER = 7;
+    uint256 internal constant CLAIM_CONTRACT_ADDRESS = 8;
+    uint256 internal constant RELAY_SUBMITTER = 9;
+    uint256 internal constant LENGTH = 10;
 }
 
 /// @notice Indexes into the pool-withdraw circuit's 5 public inputs.
@@ -179,7 +176,7 @@ contract ClaimContract {
     ///         the pool unshield. Sets nullifierConsumed atomically.
     function claim(
         bytes calldata claimProof,
-        uint256[13] calldata claimPublicInputs,
+        uint256[10] calldata claimPublicInputs,
         bytes calldata poolWithdrawProof,
         uint256[5] calldata poolPublicInputs
     ) external {
@@ -197,7 +194,9 @@ contract ClaimContract {
             revert BadRelaySubmitter();
         }
 
-        address destination = _deriveDestination(claimPublicInputs);
+        uint256 destInt = claimPublicInputs[ClaimPublicInputs.DESTINATION];
+        if (destInt >= (1 << 160)) revert LimbOutOfRange();
+        address destination = address(uint160(destInt));
         uint256 nullifier = claimPublicInputs[ClaimPublicInputs.NULLIFIER];
 
         _assertPoolBindings(poolPublicInputs, nullifier, h.perRecipientAmount, destination);
@@ -228,14 +227,14 @@ contract ClaimContract {
         emit Claimed(roundId, nullifier, destination, h.perRecipientAmount, msg.sender);
     }
 
-    function _decodeRoundId(uint256[13] calldata claimPublicInputs) internal pure returns (uint256) {
+    function _decodeRoundId(uint256[10] calldata claimPublicInputs) internal pure returns (uint256) {
         uint256 hi = claimPublicInputs[ClaimPublicInputs.ROUND_ID_HI];
         uint256 lo = claimPublicInputs[ClaimPublicInputs.ROUND_ID_LO];
         if (hi >= (1 << 128) || lo >= (1 << 128)) revert LimbOutOfRange();
         return (hi << 128) | lo;
     }
 
-    function _assertChainId(uint256[13] calldata claimPublicInputs, uint256 headerChainId) internal view {
+    function _assertChainId(uint256[10] calldata claimPublicInputs, uint256 headerChainId) internal view {
         uint256 hi = claimPublicInputs[ClaimPublicInputs.CHAIN_ID_HI];
         uint256 lo = claimPublicInputs[ClaimPublicInputs.CHAIN_ID_LO];
         if (hi >= (1 << 128) || lo >= (1 << 128)) revert LimbOutOfRange();
@@ -243,25 +242,12 @@ contract ClaimContract {
         if (chainId != block.chainid || chainId != headerChainId) revert BadChainId();
     }
 
-    function _assertHeaderBindings(uint256[13] calldata claimPublicInputs, RoundHeader memory h) internal view {
+    function _assertHeaderBindings(uint256[10] calldata claimPublicInputs, RoundHeader memory h) internal view {
         if (claimPublicInputs[ClaimPublicInputs.COHORT_ROOT] != h.cohortRoot) revert BadHeaderBinding();
         if (claimPublicInputs[ClaimPublicInputs.AMOUNT] != h.perRecipientAmount) revert BadHeaderBinding();
         if (claimPublicInputs[ClaimPublicInputs.CLAIM_CONTRACT_ADDRESS] != uint256(uint160(address(this)))) {
             revert BadHeaderBinding();
         }
-    }
-
-    function _deriveDestination(uint256[13] calldata claimPublicInputs) internal pure returns (address) {
-        uint256 xHi = claimPublicInputs[ClaimPublicInputs.DPK_X_HI];
-        uint256 xLo = claimPublicInputs[ClaimPublicInputs.DPK_X_LO];
-        uint256 yHi = claimPublicInputs[ClaimPublicInputs.DPK_Y_HI];
-        uint256 yLo = claimPublicInputs[ClaimPublicInputs.DPK_Y_LO];
-        if (xHi >= (1 << 128) || xLo >= (1 << 128) || yHi >= (1 << 128) || yLo >= (1 << 128)) {
-            revert LimbOutOfRange();
-        }
-        uint256 dpkX = (xHi << 128) | xLo;
-        uint256 dpkY = (yHi << 128) | yLo;
-        return address(uint160(uint256(keccak256(abi.encodePacked(dpkX, dpkY)))));
     }
 
     function _assertPoolBindings(
@@ -277,13 +263,13 @@ contract ClaimContract {
         if (!pool.isKnownRoot(address(this), poolPublicInputs[PoolPublicInputs.POOL_ROOT])) revert BadPoolBinding();
     }
 
-    function _claimPublicInputsAsBytes32(uint256[13] calldata claimPublicInputs)
+    function _claimPublicInputsAsBytes32(uint256[10] calldata claimPublicInputs)
         internal
         pure
         returns (bytes32[] memory pi)
     {
-        pi = new bytes32[](13);
-        for (uint256 i = 0; i < 13; i++) {
+        pi = new bytes32[](10);
+        for (uint256 i = 0; i < 10; i++) {
             pi[i] = bytes32(claimPublicInputs[i]);
         }
     }

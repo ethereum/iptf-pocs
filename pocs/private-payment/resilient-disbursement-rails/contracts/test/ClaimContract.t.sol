@@ -82,30 +82,25 @@ contract ClaimContractTest is Test {
     }
 
     /// @dev Build a valid claim PI array for the given relay.
-    function _claimPI(address relaySubmitter) internal view returns (uint256[13] memory pi) {
+    function _claimPI(address relaySubmitter) internal view returns (uint256[10] memory pi) {
         pi[ClaimPublicInputs.ROUND_ID_HI] = ROUND_ID >> 128;
         pi[ClaimPublicInputs.ROUND_ID_LO] = ROUND_ID & ((uint256(1) << 128) - 1);
         pi[ClaimPublicInputs.COHORT_ROOT] = COHORT_ROOT;
         pi[ClaimPublicInputs.CHAIN_ID_HI] = block.chainid >> 128;
         pi[ClaimPublicInputs.CHAIN_ID_LO] = block.chainid & ((uint256(1) << 128) - 1);
-        pi[ClaimPublicInputs.DPK_X_HI] = 0xA1A1;
-        pi[ClaimPublicInputs.DPK_X_LO] = 0xB2B2;
-        pi[ClaimPublicInputs.DPK_Y_HI] = 0xC3C3;
-        pi[ClaimPublicInputs.DPK_Y_LO] = 0xD4D4;
+        pi[ClaimPublicInputs.DESTINATION] = uint256(uint160(destinationAddr));
         pi[ClaimPublicInputs.AMOUNT] = PER_RECIPIENT_AMOUNT;
         pi[ClaimPublicInputs.NULLIFIER] = 0x515151;
         pi[ClaimPublicInputs.CLAIM_CONTRACT_ADDRESS] = uint256(uint160(address(claimContract)));
         pi[ClaimPublicInputs.RELAY_SUBMITTER] = uint256(uint160(relaySubmitter));
     }
 
-    function _expectedDestination(uint256[13] memory pi) internal pure returns (address) {
-        uint256 x = (pi[ClaimPublicInputs.DPK_X_HI] << 128) | pi[ClaimPublicInputs.DPK_X_LO];
-        uint256 y = (pi[ClaimPublicInputs.DPK_Y_HI] << 128) | pi[ClaimPublicInputs.DPK_Y_LO];
-        return address(uint160(uint256(keccak256(abi.encodePacked(x, y)))));
+    function _expectedDestination(uint256[10] memory pi) internal pure returns (address) {
+        return address(uint160(pi[ClaimPublicInputs.DESTINATION]));
     }
 
     /// @dev Build a pool PI consistent with the given claim PI.
-    function _poolPI(uint256[13] memory claimPI) internal view returns (uint256[5] memory pi) {
+    function _poolPI(uint256[10] memory claimPI) internal view returns (uint256[5] memory pi) {
         address dest = _expectedDestination(claimPI);
         pi[PoolPublicInputs.POOL_ROOT] = pool.subTreeRoot(address(claimContract));
         pi[PoolPublicInputs.CLAIM_NULLIFIER] = claimPI[ClaimPublicInputs.NULLIFIER];
@@ -115,7 +110,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_happyPath() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
         address dest = _expectedDestination(cpi);
 
@@ -130,7 +125,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsBadCohortRoot() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         cpi[ClaimPublicInputs.COHORT_ROOT] = 0xBADBAD;
         uint256[5] memory ppi = _poolPI(cpi);
 
@@ -140,7 +135,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsBadAmount() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         cpi[ClaimPublicInputs.AMOUNT] = PER_RECIPIENT_AMOUNT + 1;
         uint256[5] memory ppi = _poolPI(cpi);
 
@@ -150,7 +145,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsBadClaimContractAddress() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         cpi[ClaimPublicInputs.CLAIM_CONTRACT_ADDRESS] = uint256(uint160(address(0xBADBAD)));
         uint256[5] memory ppi = _poolPI(cpi);
 
@@ -160,7 +155,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsBadChainId() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         cpi[ClaimPublicInputs.CHAIN_ID_LO] = (block.chainid & ((uint256(1) << 128) - 1)) + 1;
         uint256[5] memory ppi = _poolPI(cpi);
 
@@ -170,7 +165,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsBadRelaySubmitter() public {
-        uint256[13] memory cpi = _claimPI(address(0xDEADDEAD));
+        uint256[10] memory cpi = _claimPI(address(0xDEADDEAD));
         uint256[5] memory ppi = _poolPI(cpi);
 
         vm.prank(relay);
@@ -179,7 +174,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsCrossProofNullifierMismatch() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
         ppi[PoolPublicInputs.CLAIM_NULLIFIER] = 0xDEADDEAD; // differ
 
@@ -189,7 +184,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsCrossProofAmountMismatch() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
         ppi[PoolPublicInputs.AMOUNT] = PER_RECIPIENT_AMOUNT + 1;
 
@@ -199,7 +194,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsCrossProofTokenMismatch() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
         ppi[PoolPublicInputs.TOKEN] = uint256(uint160(address(0xBADBAD)));
 
@@ -209,7 +204,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsCrossProofRecipientMismatch() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
         ppi[PoolPublicInputs.RECIPIENT] = uint256(uint160(address(0xBADBAD)));
 
@@ -219,7 +214,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsPoolRootUnknown() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
         ppi[PoolPublicInputs.POOL_ROOT] = 0xDEADBEEF;
 
@@ -229,7 +224,7 @@ contract ClaimContractTest is Test {
     }
 
     function test_claim_revertsDoubleSpend() public {
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
 
         vm.prank(relay);
@@ -243,7 +238,7 @@ contract ClaimContractTest is Test {
     function test_claim_revertsInvalidClaimProof() public {
         verifier.setClaimResult(false);
 
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
 
         vm.prank(relay);
@@ -254,7 +249,7 @@ contract ClaimContractTest is Test {
     function test_claim_revertsInvalidPoolProof() public {
         verifier.setPoolWithdrawResult(false);
 
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
 
         vm.prank(relay);
@@ -268,7 +263,7 @@ contract ClaimContractTest is Test {
 
     function test_claim_revertsClosedRound() public {
         vm.warp(uint256(CLOSE_TIME));
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
 
         vm.prank(relay);
@@ -302,7 +297,7 @@ contract ClaimContractTest is Test {
 
     function test_residual_partialClaimsRecoversCorrectAmount() public {
         // Claim once.
-        uint256[13] memory cpi = _claimPI(relay);
+        uint256[10] memory cpi = _claimPI(relay);
         uint256[5] memory ppi = _poolPI(cpi);
         vm.prank(relay);
         claimContract.claim(hex"", cpi, hex"", ppi);

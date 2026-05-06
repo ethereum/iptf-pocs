@@ -39,6 +39,7 @@ use crate::{
     poseidon::{
         fr_from_be_bytes,
         hash_claim_nullifier,
+        hash_derived_pubkey_packed,
         hash_m_packed,
         pack_chain_id,
         pack_round_id,
@@ -197,12 +198,19 @@ impl<S: Smartcard> Companion<S> {
         let destination = destination_from_derived_pubkey(&derived_pub);
 
         // claim_nullifier = Poseidon(NULL_DOMAIN_TAG, M_packed,
-        // roundId_packed, claim_contract, chainId_packed).
+        // derivedPubkey_packed, roundId_packed, claim_contract,
+        // chainId_packed).
         let m_x_hi = fr_from_be_bytes(&m_pub.x[..16]);
         let m_x_lo = fr_from_be_bytes(&m_pub.x[16..32]);
         let m_y_hi = fr_from_be_bytes(&m_pub.y[..16]);
         let m_y_lo = fr_from_be_bytes(&m_pub.y[16..32]);
         let m_packed = hash_m_packed(m_x_hi, m_x_lo, m_y_hi, m_y_lo);
+        let derived_pubkey_packed = hash_derived_pubkey_packed(
+            fr_from_be_bytes(&derived_pub.x[..16]),
+            fr_from_be_bytes(&derived_pub.x[16..32]),
+            fr_from_be_bytes(&derived_pub.y[..16]),
+            fr_from_be_bytes(&derived_pub.y[16..32]),
+        );
         let r_packed = pack_round_id(
             fr_from_be_bytes(&header.round_id[..16]),
             fr_from_be_bytes(&header.round_id[16..32]),
@@ -216,8 +224,13 @@ impl<S: Smartcard> Companion<S> {
             padded[12..].copy_from_slice(&header.claim_contract_address);
             fr_from_be_bytes(&padded)
         };
-        let nullifier_fr =
-            hash_claim_nullifier(m_packed, r_packed, claim_contract_fr, c_packed);
+        let nullifier_fr = hash_claim_nullifier(
+            m_packed,
+            derived_pubkey_packed,
+            r_packed,
+            claim_contract_fr,
+            c_packed,
+        );
         let claim_nullifier: Bytes32 = {
             use ark_ff::{
                 BigInteger,
