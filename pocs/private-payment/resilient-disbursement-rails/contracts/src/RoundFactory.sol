@@ -152,14 +152,12 @@ contract RoundFactory {
     }
 
     function _computeHHeader(RoundHeader calldata header) internal pure returns (bytes32) {
-        // firstPoolLeafIndex is NOT included; it's not part of the
-        // funder-signed header.
-        bytes memory body = abi.encode(
+        bytes memory body = abi.encodePacked(
             header.roundId,
             header.cohortVersion,
             header.cohortRoot,
             header.perRecipientAmount,
-            header.cohortSize,
+            uint64(header.cohortSize),
             header.token,
             header.closeTime,
             header.claimContractAddress,
