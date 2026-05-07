@@ -1,6 +1,7 @@
 ---
 title: "Private Payment Requirements"
-use_case: "https://github.com/ethereum/iptf-map/blob/master/use-cases/private-payments.md"
+use_cases: 
+  - "https://github.com/ethereum/iptf-map/blob/master/use-cases/private-payments.md"
 approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-payments.md"
 ---
 

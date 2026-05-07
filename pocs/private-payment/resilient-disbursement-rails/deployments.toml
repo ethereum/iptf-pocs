@@ -1,0 +1,32 @@
+[31337]
+endpoint_url = "http://localhost:8545"
+
+[31337.bool]
+use_mock_verifier = "${USE_MOCK_VERIFIER}"
+
+[31337.address]
+governance = "${GOVERNANCE}"
+operator_key = "${OPERATOR_KEY}"
+funder_residual_destination = "${FUNDER_RESIDUAL_DESTINATION}"
+funder_multisig_address = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
+registry_address = "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318"
+shielded_pool_address = "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e"
+claim_contract_address = "0x610178dA211FEF7D417bC0e6FeD39F05609AD788"
+round_factory_address = "0xA51c1fc2f0D1a1b8494Ed1FE312d7C3a78Ed91C0"
+composite_verifier_address = "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6"
+claim_verifier_address = "0x0165878A594ca255338adfa4d48449f69242Eb8F"
+withdraw_verifier_address = "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853"
+mock_token_address = "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
+
+[11155111]
+endpoint_url = "${SEPOLIA_RPC_URL}"
+
+[11155111.bool]
+use_mock_verifier = "${USE_MOCK_VERIFIER}"
+
+[11155111.address]
+governance = "${GOVERNANCE}"
+operator_key = "${OPERATOR_KEY}"
+funder_residual_destination = "${FUNDER_RESIDUAL_DESTINATION}"
+claim_verifier_address = "${CLAIM_VERIFIER_ADDRESS}"
+withdraw_verifier_address = "${WITHDRAW_VERIFIER_ADDRESS}"

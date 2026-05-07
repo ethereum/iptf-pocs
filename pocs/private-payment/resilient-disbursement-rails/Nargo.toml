@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "circuits/lib",
+    "circuits/claim",
+    "circuits/withdraw",
+]
+default-member = "circuits/claim"

@@ -1,6 +1,7 @@
 ---
 title: "Private Bond Requirements"
-use_case: "https://github.com/ethereum/iptf-map/blob/master/use-cases/use-case-private-bonds.md"
+use_cases: 
+  - "https://github.com/ethereum/iptf-map/blob/master/use-cases/use-case-private-bonds.md"
 approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-bonds.md"
 ---
 

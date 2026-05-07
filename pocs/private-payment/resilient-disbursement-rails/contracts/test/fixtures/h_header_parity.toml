@@ -1,0 +1,14 @@
+# H_header parity vector. Asserted by both Rust and Solidity.
+
+expected_h_header = "0xa18cdb75348383cb0305302ecc5eeaf4136652d7eaf35ecd3ce4cd78a82d5f6b"
+
+[header]
+round_id = "0x4242424242424242424242424242424242424242424242424242424242424242"
+cohort_version = 1
+cohort_root = "0xabababababababababababababababababababababababababababababababab"
+per_recipient_amount = "0x00000000000000000000000000000000000000000000000000000000000f4240"
+cohort_size = 2
+token = "0xcccccccccccccccccccccccccccccccccccccccc"
+close_time = 1700000000
+claim_contract_address = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+chain_id = "0x0000000000000000000000000000000000000000000000000000000000aa36a7"
