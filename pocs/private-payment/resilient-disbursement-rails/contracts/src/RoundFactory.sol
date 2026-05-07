@@ -151,7 +151,7 @@ contract RoundFactory {
         _emitRoundPublished(header, firstPoolLeafIndex, hHeader);
     }
 
-    function _computeHHeader(RoundHeader calldata header) internal pure returns (bytes32) {
+    function _computeHHeader(RoundHeader calldata header) public pure returns (bytes32) {
         bytes memory body = abi.encodePacked(
             header.roundId,
             header.cohortVersion,
