@@ -17,6 +17,8 @@ pocs/
       README.md
     [approach-2]/
       ...
+libs/
+  [library-name]/       # Standalone libraries
 docs/
   CONTRIBUTING.md       # PR guidelines
 CHANGELOG.md            # Repository-wide change history
@@ -28,11 +30,17 @@ Each PoC is independent—own language and tooling. No shared dependencies betwe
 
 | Name | Privacy Primitive | Approaches | Status | Writeup |
 |------|-------------------|------------|--------|---------|
-| [private-payment](./pocs/private-payment/) | Confidential stablecoin transfers | Shielded Pool (Noir), Plasma (Intmax2) | Complete | [Shielded Pool](https://iptf.ethereum.org/2026/02/19/building-private-transfers-on-ethereum/), [Plasma](https://iptf.ethereum.org/2026/02/26/private-stablecoins-with-plasma/) |
+| [private-payment](./pocs/private-payment/) | Confidential stablecoin transfers | Shielded Pool (Noir), Plasma (Intmax2), Resilient Disbursement Rails | Complete | [Shielded Pool](https://iptf.ethereum.org/2026/02/19/building-private-transfers-on-ethereum/), [Plasma](https://iptf.ethereum.org/2026/02/26/private-stablecoins-with-plasma/) |
 | [private-bond](./pocs/private-bond/) | Confidential bond transfers | Custom UTXO (Noir), Privacy L2 (Aztec), FHE (Zama) | Complete | [Part 1 — Custom UTXO](https://iptf.ethereum.org/2026/01/21/building-private-bonds-on-ethereum/), [Part 2 — Aztec](https://iptf.ethereum.org/2026/02/05/private-bonds-on-privacy-l2s/), [Part 3 — FHE](https://iptf.ethereum.org/2026/02/12/private-bonds-with-fhe/) |
 | [private-trade-settlement](./pocs/private-trade-settlement/) | Confidential atomic DvP | TEE Swap | Complete | [Part 1](https://iptf.ethereum.org/2026/03/05/private-crosschain-atomic-swap-part-1/), [Part 2](https://iptf.ethereum.org/2026/03/18/private-crosschain-atomic-swap-part-2/) |
 | [private-identity](./pocs/private-identity/) | Anonymous credentials | Resilient (vOPRF) | Complete | [Resilient Plural Identity](https://iptf.ethereum.org/2026/04/14/resilient-plural-identity/) |
 | [diy-validium](./pocs/diy-validium/) | Confidential institutional payments | Validium (RISC Zero) | Complete | [DIY Validium](https://iptf.ethereum.org/2026/03/18/diy-validium/) |
+
+## Libraries
+
+| Name | Description |
+|------|-------------|
+| [binius-mayo](./libs/binius-mayo/) | Binius64 zk-circuit proving a MAYO-2 post-quantum signature verifies under a hidden public key |
 
 ## Contributing
 
