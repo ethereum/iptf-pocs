@@ -1,11 +1,11 @@
 ---
 title: "Shielded Pool: PIR + Epoch Nullifiers Extension"
 status: Draft
-version: 0.2.0
+version: 0.1.0
 authors: []
 created: 2026-05-19
-parent_spec: "../../SPEC.md"
-parent_requirements: "../../../REQUIREMENTS.md"
+iptf_use_case: "https://github.com/ethereum/iptf-map/blob/master/use-cases/private-stablecoins.md"
+iptf_approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/approach-private-payments.md"
 ---
 
 # Shielded Pool: PIR + Epoch Nullifiers Extension
