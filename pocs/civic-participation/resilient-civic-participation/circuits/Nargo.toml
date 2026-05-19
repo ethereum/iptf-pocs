@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "lib",
+    "signer",
+    "batch",
+    "resolution",
+]
+default-member = "signer"
