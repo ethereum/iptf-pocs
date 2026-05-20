@@ -366,8 +366,8 @@ Normative and background:
 - Polygon Miden, "Epoch-based nullifier database": <https://github.com/0xMiden/miden-vm/discussions/356>
 - Aztec, "Global State Epochs": <https://forum.aztec.network/t/global-state-epochs/2704>
 - A. Tomescu, "Notes on scaling nullifier sets": <https://alinush.github.io/nullifiers>
-- Parent: [`../../SPEC.md`](../../SPEC.md)
-- Parent: [`../../../REQUIREMENTS.md`](../../../REQUIREMENTS.md)
+- Parent SPEC: [`../shielded-pool/SPEC.md`](../shielded-pool/SPEC.md)
+- Parent REQUIREMENTS: [`../REQUIREMENTS.md`](../REQUIREMENTS.md)
 
 Reference instantiation (non-normative):
 
