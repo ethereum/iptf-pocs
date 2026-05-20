@@ -38,7 +38,7 @@ Rejected alternatives:
 |-------------|-----------------|
 | Operator-stored signed lists with KYC | Operator state becomes a compelled-disclosure surface; outcome guarantees are lost when the operator goes offline. |
 | ZK with issuer-online revocation | Outcome verifiability depends on continued issuer cooperation; an adversarial issuer blocks participation. |
-| Static identity commitment under one long-lived secret | Device compromise at `T_audit` reveals every past signing identifier under one static-commitment opening. |
+| Static identity commitment under one long-lived secret | Device compromise at `T_compromise` reveals every past signing identifier under one static-commitment opening. |
 | Per-signature on-chain transactions | Per-signature gas cost exceeds the budget for petitions at the scale of national or supranational civic instruments. |
 
 ## Protocol Design
@@ -75,7 +75,7 @@ The Registry MUST enforce the current `state` at every entry point.
 1. Signer MUST sample `s_0` from a CSPRNG with at least 254 bits of entropy.
 2. Signer MUST derive `(v_i, s_{i+1})` for `i in [0, 2^24)` by inductive sponge expansion.
 3. Signer MUST build a depth-24 Poseidon1 Merkle tree over `{v_i}`; the root is `chain_root`.
-4. Signer MUST compute `attr_hash = Poseidon1(DOMAIN_ATTR, attr_0, ..., attr_{n-1}, chain_root, attr_version)` and submit it with the RI enrollment proof; RI appends a leaf under `attr_hash`.
+4. Signer MUST compute `attr_hash = Poseidon1(DOMAIN_ATTR, attr_0, ..., attr_{n-1}, chain_root, attr_version, identity_secret)` and submit it with the RI enrollment proof; RI appends a leaf under `attr_hash`. `identity_secret` is an independent CSPRNG-sampled per-signer secret.
 5. Signer MUST discard `s_1, ..., s_{2^24 - 1}` and intermediate Merkle nodes, and MUST retain `(s_curr = s_0, t = 0, caterpillar, chain_root, attr_version)` per [Off-Chain Signer State](#off-chain-signer-state).
 
 #### Petition Registration
@@ -84,13 +84,13 @@ The Registry MUST enforce the current `state` at every entry point.
 2. Registry MUST structurally validate the predicate and class-binding clause, MUST recompute and assert `predicate_hash`, MUST derive `petition_id`, MUST assign `slot = S` then increment `S`, MUST snapshot `alpha_at_registration`, and MUST assert `B >= alpha_at_registration * N_expected * predicate_op_count`.
 3. Registry MUST initialise `running_root`, `identity_tag_set_root`, `leaf_count`, `next_batch_index` and MUST emit `PetitionRegistered`.
 
-The signing window MUST satisfy `close_at_block - registration_block <= 11.5 days * BLOCKS_PER_DAY`. Organizer MUST select an `R` that has been published on RI for at least 30 days.
+The signing window MUST satisfy `close_at_block - registration_block <= 11.5 days * BLOCKS_PER_DAY`. Organizer MUST select an `R` that has been published on RI for at least 30 days. Each `class_thresholds[i]` MUST be at least 1; a zero threshold would collapse the resolution SNARK's per-class predicate to `true` regardless of participation and would zero the bounty floor.
 
 #### Per-Signature Generation
 
 1. Signer MUST read `(slot, R, predicate_def, salt, class_index)` for petition `X` and MUST advance the chain locally from `t` to `slot(X)`, setting `s_curr <- s_{slot(X)}`.
 2. `(v_slot, _) = Poseidon1Sponge.absorb(DOMAIN_FSRT_PRG, s_slot).squeeze(2)`; `class_tag = attr[class_index]`.
-3. `nullifier = Poseidon1(DOMAIN_NULLIFIER, v_slot, petition_id, class_index, class_tag)`; `identity_tag = Poseidon1(DOMAIN_IDTAG, v_slot, petition_id)`.
+3. `nullifier = Poseidon1(DOMAIN_NULLIFIER, v_slot, petition_id, class_index, class_tag, identity_secret)`; `identity_tag = Poseidon1(DOMAIN_IDTAG, v_slot, petition_id)`.
 4. Signer MUST build the signer SNARK and MUST submit it with `(nullifier, identity_tag, class_tag)` to a relayer.
 5. After L1 finality of the carrying batch, signer MUST overwrite `s_curr` past `s_slot`, advance the caterpillar frontier, and set `t <- slot + 1`. The signer MUST journal this transition to fsync'd storage before the signing counts as complete.
 
@@ -103,8 +103,8 @@ The signing window MUST satisfy `close_at_block - registration_block <= 11.5 day
 
 #### Dispute
 
-1. Disputant submits `dispute(petition_id, batch_index, position_i, violation_type, opening_proofs, evidence)`.
-2. Registry MUST validate openings via the `0x0A` precompile against `batch_versioned_hash`, MUST apply the violation predicate, MUST set the BatchRecord state to `Repudiated`, MUST advance `next_batch_index` to `batch_index`, MUST roll back `running_root`, `identity_tag_set_root`, and `leaf_count` to the values held by the immediately preceding active batch (or the initial empty-IMT state if no such predecessor exists), and MUST emit `BatchRepudiated`.
+1. Disputant submits `dispute(petition_id, batch_index, position_i, position_j, violation_type, opening_proofs)`. `position_j` is `None` for violation `0x01` and `Some(j)` for `0x02` and `0x03`. The record content at each position MUST be derived by the Registry from `opening_proofs` rather than submitted separately.
+2. Registry MUST validate openings via the `0x0A` precompile against `batch_versioned_hash`, MUST derive the record content for `position_i` (and `position_j` where applicable) from the openings, MUST apply the violation predicate against that derived content, MUST set the BatchRecord state at `batch_index` to `Repudiated` together with every BatchRecord at index `> batch_index` whose state is still `Active` (those records' `prior_running_root` is no longer canonical), MUST advance `next_batch_index` to `batch_index`, MUST roll back `running_root`, `identity_tag_set_root`, and `leaf_count` to the values held by the immediately preceding active batch (or the initial empty-IMT state if no such predecessor exists), and MUST emit `BatchRepudiated`.
 
 Violation types:
 
@@ -120,7 +120,7 @@ Violation types:
 2. For each `c in class_set`, `count[c] = |{leaf in L : class_tag(leaf) = c}|`; `b_per_class[i] = (count[class_set[i]] >= class_thresholds[i])`; `b = AND_i b_per_class[i]`.
 3. Resolver MUST build and submit the resolution SNARK; Registry MUST validate and emit `PetitionResolved` and `BountyPaid`. First valid submission claims the bounty.
 
-After `close_at_block + 14 days` with no valid resolution, any party MAY call `markUnresolved(petition_id)`. The Registry MUST refund the bounty (less a gas rebate to the caller) to the Organizer, MUST replace `running_root` with the tombstone marker, MUST transition the petition state to `Unresolved`, and MUST emit `PetitionUnresolved`.
+After `close_at_block + 14 days` with no valid resolution, any party MAY call `markUnresolved(petition_id)`. The Registry MUST refund the bounty (less a gas rebate to the caller, capped at 1% of the total bounty so a caller cannot starve the Organizer of their refund) to the Organizer, MUST replace `running_root` with the tombstone marker, MUST transition the petition state to `Unresolved`, and MUST emit `PetitionUnresolved`. This call is only permitted when the petition's state is `DisputeWindow`; the 14-day timer makes any earlier state unreachable.
 
 ### Data Structures
 
@@ -151,7 +151,7 @@ op           := op_code u8                       // 0x20=PUSH_TUPLE, 0x21=AND,
                                                  //   zero otherwise
 ```
 
-Serialised length `1 + tuple_count * 35 + 1 + op_count * 2`, capped at 1024 bytes. In the signer SNARK, `canonical_predicate_def` is absorbed as 34 BN254 scalars: 31-byte big-endian segments, final segment zero-padded, a one-byte length marker as the first segment's high byte, each segment reduced modulo the BN254 scalar field order.
+Serialised length `1 + tuple_count * 35 + 1 + op_count * 2`, capped at 1024 bytes. In the signer SNARK, `canonical_predicate_def` is absorbed as 34 BN254 scalars: 31-byte big-endian segments, final segment zero-padded, a two-byte big-endian length marker occupying segment 0's first two content bytes (leaving 29 content bytes for predicate bytes in segment 0 and 31 in segments 1..34), each segment reduced modulo the BN254 scalar field order. The two-byte length marker eliminates the modular-256 collision space a one-byte marker would admit at the 1024-byte upper bound.
 
 #### Petition Record
 
@@ -274,9 +274,23 @@ Events (`petition_id` indexed in every event except `AlphaUpdated`, which has no
 
 ### Domain Separators
 
-For each tag `X` in `{nullifier, identity_tag, leaf, fsrt_prg, predicate, attr_hash, batch_snark, petition_id, resolution_snark}`, `DOMAIN_X = Poseidon1(encode("RCP/" || X || "/v1"), 0, 0, 0)`.
+The protocol uses small distinct BN254 scalar constants for Poseidon1-based domain separation:
 
-`encode: ASCII string -> BN254 scalar` takes strings of length `<= 31`, left-pads with `0x00` to 31 bytes, interprets big-endian, reduces modulo the BN254 scalar field order. Implementations MUST embed the pinned constants at compile time.
+| Tag | Value |
+|---|---|
+| `DOMAIN_NULLIFIER` | `1` |
+| `DOMAIN_IDTAG` | `2` |
+| `DOMAIN_LEAF` | `3` |
+| `DOMAIN_FSRT_PRG` | `4` |
+| `DOMAIN_PRED` | `5` |
+| `DOMAIN_ATTR` | `6` |
+| `DOMAIN_BATCH_SNARK` | `7` |
+| `DOMAIN_PETITION` | `8` |
+| `DOMAIN_RESOLUTION_SNARK` | `9` |
+
+The `keccak256`-based `petition_id` derivation (see [Global Registry State](#global-registry-state)) uses a distinct 32-byte tag `DOMAIN_PETITION_ID = keccak256("RCP/petition_id/v1")` to provide cryptographic separation in the Keccak hash function context where small-integer prefixes would otherwise collide with naturally-occurring input bytes.
+
+Implementations MUST embed these constants at compile time. The Noir circuits (`circuits/lib/src/domain.nr`), the Rust crate (`src/poseidon.rs`), and the on-chain registry (`contracts/src/PetitionRegistry.sol`) MUST agree byte-for-byte on every constant.
 
 ### FSRT Chain
 
@@ -288,17 +302,17 @@ UltraHonk; zero-knowledge.
 
 **Public inputs (ordered):** `R`, `petition_id`, `predicate_hash`, `class_index`, `class_tag`, `slot`, `nullifier`, `identity_tag`.
 
-**Private inputs:** `identity_secret`, `attr_vector`, `attr_version`, `chain_root`, RI Merkle path to the `attr_hash` leaf in `R`, `s_slot`, Merkle path from `v_slot` to `chain_root`, predicate-evaluation stack trace, `canonical_predicate_def`, `salt`.
+**Private inputs:** `identity_secret`, `attr_vector`, `attr_version`, `chain_root`, RI Merkle path to the `attr_hash` leaf in `R`, `s_slot`, Merkle path from `v_slot` to `chain_root`, predicate-evaluation stack trace (`op_codes`, `op_operands`, `op_count`, `tuple_*`, `tuple_count`), `salt`. The signer SNARK reconstructs `canonical_predicate_def` from the witnessed predicate program and hashes it, so it is not supplied as a separate input.
 
 **Circuit constraints:**
 
-1. `attr_hash = Poseidon1(DOMAIN_ATTR, attr_0, ..., attr_{n-1}, chain_root, attr_version)` opens the leaf at the provided RI Merkle path to `R`.
+1. `attr_hash = Poseidon1(DOMAIN_ATTR, attr_0, ..., attr_{n-1}, chain_root, attr_version, identity_secret)` opens the leaf at the provided RI Merkle path to `R`. `identity_secret` is bound into the RI leaf so an attacker who learns `s_0` alone cannot enroll under the same RI leaf as the victim.
 2. `predicate_hash = Poseidon1(DOMAIN_PRED, canonical_predicate_def, petition_id, salt)`.
 3. `attr_vector` satisfies `canonical_predicate_def` under postfix evaluation.
 4. `attr[class_index] == class_tag` holds at the top level outside any OR sub-expression.
 5. `(v_slot, _) = Poseidon1Sponge.absorb(DOMAIN_FSRT_PRG, s_slot).squeeze(2)`.
 6. `v_slot` opens at index `slot` in `chain_root` under the provided Merkle path; `chain_root` equals the value bound through `attr_hash`.
-7. `nullifier = Poseidon1(DOMAIN_NULLIFIER, v_slot, petition_id, class_index, class_tag)`.
+7. `nullifier = Poseidon1(DOMAIN_NULLIFIER, v_slot, petition_id, class_index, class_tag, identity_secret)`. Combined with `identity_secret`'s presence in `attr_hash`, this enforces "one signature per RI leaf per petition" even when `s_0` is compromised in isolation.
 8. `identity_tag = Poseidon1(DOMAIN_IDTAG, v_slot, petition_id)`.
 
 ### Batch SNARK
@@ -357,12 +371,12 @@ Out of scope: network transport anonymity beyond what Tor or an equivalent provi
 
 ### Guarantees
 
-- **Per-petition forward secrecy.** An adversary holding audit-time runtime state, `identity_secret`, `attr_vector`, the RI Merkle path, and the full blob and L1 archives recovers `v_{k'}`, `s_{k'}`, or any value computationally non-trivial in `v_{k'}` (including the slot-`k'` nullifier and identity tag) for any slot `k' < t` with advantage at most `(t - k') * eps_sponge`, under the Poseidon1-sponge PRG assumption.
+- **Per-petition forward secrecy.** An adversary holding post-signing runtime state, `identity_secret`, `attr_vector`, the RI Merkle path, and the full blob and L1 archives recovers `v_{k'}`, `s_{k'}`, or any value computationally non-trivial in `v_{k'}` (including the slot-`k'` nullifier and identity tag) for any slot `k' < t` with advantage at most `(t - k') * eps_sponge`, under the Poseidon1-sponge PRG assumption.
 - **Signer-level unlinkability.** For petitions `X1`, `X2` and records `r_1 in batch_{X1}`, `r_2 in batch_{X2}`, the adversary's advantage in deciding "same signer" exceeds `1/k - negl` only when it holds at least one of `v_{slot(X1)}` or `v_{slot(X2)}`, where `k` is the cardinality of Signers in `R` whose `attr_vector` satisfies both predicates and matches each petition's `class_tag`.
 - **One signature per RI leaf per petition.** For petition `X` and RI leaf `L_RI`, at most one record in `running_root` derives from `L_RI` after batching and dispute resolution.
 - **Outcome verifiability.** A verifier holding L1 chain state, the SRS identified by `srs_hash`, and the Poseidon1 parameter set re-verifies the resolution SNARK, confirming `b` and `b_per_class`.
 - **In-window dispute soundness.** A batch's contribution to `running_root` is removed only when the disputant produces valid KZG openings against `batch_versioned_hash` and evidence satisfying one of the enumerated violation predicates.
-- **Domain separation.** Reuse across petitions or deployments is rejected: `petition_id` derivation binds `chain_id` and `registry_address`, and each signer SNARK exposes `(petition_id, slot, class_tag, nullifier, identity_tag)` as public inputs.
+- **Domain separation.** Reuse across petitions is rejected because `petition_id` derivation binds `chain_id` and `registry_address` (so two deployments produce distinct `petition_id`s for the same organizer inputs), and each signer SNARK exposes `(petition_id, slot, class_tag, nullifier, identity_tag)` as public inputs. The Poseidon1 domain constants ([Domain Separators](#domain-separators)) are small integers chosen to be pairwise distinct within this protocol; they do not provide cross-protocol separation on their own, and applications combining RCP with other Poseidon1-based protocols on the same field MUST rely on the `petition_id` binding for separation.
 
 ### Observability
 
@@ -375,17 +389,6 @@ Out of scope: network transport anonymity beyond what Tor or an equivalent provi
 | Anonymous-transport peer (Tor or equivalent) | Entry peer: signer network origin only. Exit peer: signer SNARK and tuple delivered to the relayer. |
 | Disputant, Resolver | Public blob contents (within retention window or from voluntary archive) |
 | Ethereum observer | Batch SNARK public inputs; resolution SNARK public inputs; petition record fields |
-
-### Limitations and Shortcuts (PoC Scope)
-
-| Concern | Mitigation / Production Path |
-|---------|------------------------------|
-| Forward-secrecy bound assumes ideal storage erasure | Hardware-backed secure storage (Secure Enclave, TPM, HSM) for `s_curr`, `t`, `attr_version`, and the caterpillar frontier. |
-| Network-layer correlation at the relayer | Signer transport over Tor; submission paths SHOULD NOT use a transport-layer identifier (Tor circuit, VPN session) stable across petitions. |
-| Multi-device signing under one RI identity | Each device runs a fresh enrollment with a distinct `chain_root` and a new `attr_hash` leaf under an incremented `attr_version`. Signer wallets MUST refuse to export `s_curr`, `caterpillar`, or `t`. |
-| State-level builder censorship | FOCIL (EIP-7805); builder-pool diversity and direct-L1 submission. |
-| Predicate breadth and anonymity-set sizing | Deployment policy SHOULD enforce a minimum match count (e.g., `k >= 100`). |
-| Blob retention beyond 4096 epochs | Resolvers SHOULD archive blob payloads for petitions they intend to resolve. |
 
 ## Terminology
 
