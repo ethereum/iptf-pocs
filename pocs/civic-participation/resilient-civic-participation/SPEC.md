@@ -349,6 +349,7 @@ Adversary capabilities:
 - Compelled key disclosure or device compromise of a signer, yielding `(identity_secret, attr_vector, RI Merkle path, s_curr, t, caterpillar, chain_root)` before or after the ratchet for slot `s_slot`.
 - Cross-petition correlation against any observable, including predicate-match intersections.
 - Sybil enrolment of multiple RI identities.
+- Absence of an honest disputant; published batches may go unchallenged for the duration of the dispute window.
 
 Honest-party assumptions: Poseidon1 sponge security and UltraHonk soundness; EIP-4844 blob commitment binding; L1 censorship-resistant inclusion and finality; permissionless Relayer entry such that Signers can resubmit on Relayer-side censorship; Sybil resistance from RI.
 
