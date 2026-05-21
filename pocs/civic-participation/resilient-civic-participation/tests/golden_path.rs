@@ -467,12 +467,15 @@ async fn golden_path_anvil_real() {
     assert_eq!(count, 1, "exactly one batch must be published");
     eprintln!("  batchCount = {}", count);
 
-    // Advance past `closeAtBlock + COOLDOWN_BLOCKS` so the petition is
-    // in `DisputeWindow` (the only state from which `resolve` is valid).
-    // COOLDOWN_BLOCKS = 600 in PetitionRegistry.sol.
-    eprintln!("=== [11/13] Advance chain into DisputeWindow ===");
+    // Advance past `closeAtBlock + RESOLUTION_DEADLINE_BLOCKS` so the
+    // petition is in `DisputeWindow` AND the resolution deadline has
+    // elapsed. After SPEC line 65 / line 121, `resolve` is gated on
+    // `block.number >= closeAtBlock + RESOLUTION_DEADLINE_BLOCKS` to
+    // prevent races against in-flight disputes.
+    // RESOLUTION_DEADLINE_BLOCKS = 100_800 in PetitionRegistry.sol.
+    eprintln!("=== [11/13] Advance chain past resolution deadline ===");
     let now = dep.provider.get_block_number().await.unwrap();
-    let target = close_at_block + 600 + 1;
+    let target = close_at_block + 100_800;
     let to_mine = target.saturating_sub(now);
     eprintln!(
         "  current block: {} | target: {} | mining {} blocks",

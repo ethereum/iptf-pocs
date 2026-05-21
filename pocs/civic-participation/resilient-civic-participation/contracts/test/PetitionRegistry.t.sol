@@ -412,7 +412,7 @@ contract PetitionRegistryTest is Test {
     function test_Resolve_Succeeds() public {
         (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
         _publishBatch(petitionId, p);
-        vm.roll(p.closeAtBlock + COOLDOWN_BLOCKS + 1);
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS);
 
         IPetitionRegistry.ResolutionPublicInputs memory pi = _resolutionPi(true);
         uint256 callerPre = token.balanceOf(resolver_);
@@ -442,6 +442,17 @@ contract PetitionRegistryTest is Test {
         registry.resolve(petitionId, pi, hex"01");
     }
 
+    function test_Resolve_RevertsBeforeResolutionDeadline() public {
+        (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
+        _publishBatch(petitionId, p);
+        // In DisputeWindow but before the resolution deadline.
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS - 1);
+        IPetitionRegistry.ResolutionPublicInputs memory pi = _resolutionPi(true);
+        vm.prank(resolver_);
+        vm.expectRevert(PetitionRegistry.TooEarly.selector);
+        registry.resolve(petitionId, pi, hex"01");
+    }
+
     /// CRIT-1 regression: after the cleanup, runningRoot is sourced from
     /// rec.* and the caller cannot substitute it. Any staleness in the
     /// verifier's view of running_root surfaces from the verifier as
@@ -451,7 +462,7 @@ contract PetitionRegistryTest is Test {
     function test_Resolve_RevertsOnBPerClassLengthMismatch() public {
         (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
         _publishBatch(petitionId, p);
-        vm.roll(p.closeAtBlock + COOLDOWN_BLOCKS + 1);
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS);
         // Registered class_set has length 2; submit a length-3 outcome vector.
         bool[] memory bpc = new bool[](3);
         bpc[0] = true;
@@ -467,7 +478,7 @@ contract PetitionRegistryTest is Test {
     function test_Resolve_RevertsOnProofRejected() public {
         (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
         _publishBatch(petitionId, p);
-        vm.roll(p.closeAtBlock + COOLDOWN_BLOCKS + 1);
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS);
         resolutionVerifier.setResult(false);
         IPetitionRegistry.ResolutionPublicInputs memory pi = _resolutionPi(true);
         vm.prank(resolver_);
@@ -478,7 +489,7 @@ contract PetitionRegistryTest is Test {
     function test_Resolve_RevertsOnSecondResolve() public {
         (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
         _publishBatch(petitionId, p);
-        vm.roll(p.closeAtBlock + COOLDOWN_BLOCKS + 1);
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS);
         IPetitionRegistry.ResolutionPublicInputs memory pi = _resolutionPi(true);
         vm.prank(resolver_);
         registry.resolve(petitionId, pi, hex"01");

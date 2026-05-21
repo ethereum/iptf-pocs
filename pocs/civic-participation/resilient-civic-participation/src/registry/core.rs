@@ -754,6 +754,14 @@ where
         if state != PetitionState::DisputeWindow {
             return Err(RegistryError::BadState(state, "resolve"));
         }
+        let now = self.now();
+        let close_at_block = self.petition(petition_id)?.record.close_at_block;
+        let deadline = close_at_block
+            .checked_add(RESOLUTION_DEADLINE_BLOCKS)
+            .ok_or(RegistryError::BadState(state, "resolve"))?;
+        if now < deadline {
+            return Err(RegistryError::BadState(state, "resolve"));
+        }
         // Verify before taking a mut borrow.
         self.proof_backend
             .verify_resolution_proof(&submission.proof_bytes, &submission.public_inputs)

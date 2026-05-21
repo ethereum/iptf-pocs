@@ -12,15 +12,17 @@ iptf_approach: "https://github.com/ethereum/iptf-map/blob/master/approaches/appr
 
 ## Problem Statement
 
-Civic petitions need signers to prove a stated eligibility criterion without revealing their identity or other petitions they have signed. The outcome must remain verifiable from a durable record after the hosting platform goes offline. Sybil resistance comes from an external credential layer.
+Civic petitions need signers to prove a stated eligibility criterion without revealing their identity or other petitions they have signed. The outcome must remain verifiable from L1 plus blob payloads during EIP-4844 retention, or from a voluntary blob archive after retention. Sybil resistance comes from an external credential layer.
 
-A credentialed petition system, composed with the ResilientIdentity (RI) credential layer, anchors per-petition state in an on-chain Indexed Merkle Tree (IMT) and publishes per-signature data on EIP-4844 blob carriers. After the dispute window closes, one resolution SNARK settles the outcome from chain state alone. Each signer maintains a Forward-Secure Ratchet Tree (FSRT) chain that advances past each signed slot, overwriting prior seed material.
+A credentialed petition system, composed with the ResilientIdentity (RI) credential layer, anchors per-petition state in an on-chain Indexed Merkle Tree (IMT) and publishes per-signature data on EIP-4844 blob carriers. After the dispute window closes, one resolution SNARK settles the outcome over the on-chain record and the blob payloads of active batches. Each signer maintains a Forward-Secure Ratchet Tree (FSRT) chain that advances past each signed slot, overwriting prior seed material.
+
+This specification covers petition-style threshold-per-class outcomes: one signature per signer, per-class threshold tallying with regulated visibility. Single-choice, ranked, weighted, and event-count-bounded outcome shapes listed in the umbrella `REQUIREMENTS.md` are out of scope for this approach.
 
 ### Constraints
 
-- **Privacy.** Cross-process and within-process unlinkability across the public record. Signer identity stays hidden, and no attribute value beyond the predicate's boolean outcome is exposed.
-- **Regulatory.** Outcome publicly verifiable from durable record. Per-class threshold breakdowns come from the predicate's class-binding clause and the Resolver's class-counted outcome bits.
-- **Operational.** After enrollment, signers generate proofs from local state and public on-chain/RI data, without further RI issuer interaction. Outcome reconstructible from chain state once the dispute window closes.
+- **Privacy.** Cross-process and within-process unlinkability across the public record. Signer identity stays hidden. The per-record `class_tag` is public outcome metadata that supports per-class threshold accounting and regulator visibility; no other attribute value is exposed.
+- **Regulatory.** Outcome publicly verifiable from L1 plus blob payloads (or a voluntary blob archive once retention expires). Per-class threshold breakdowns come from the predicate's class-binding clause and the Resolver's class-counted outcome bits.
+- **Operational.** After enrollment, signers generate proofs from local state and public on-chain/RI data, without further RI issuer interaction. Outcome reconstructible from L1 plus blob payloads during EIP-4844 retention, or from a voluntary blob archive once the dispute window closes.
 - **Trust.** RI provides Sybil resistance. Only signers hold FSRT seed material. The signer's submission path assumes at least one reachable honest relay.
 
 ### System Overview
@@ -63,7 +65,7 @@ Rejected alternatives:
 | `SigningOpen` | `SigningClosed` | first transaction at block `>= close_at_block` |
 | `SigningClosed` | `Cooldown` | atomic with `SigningClosed` entry |
 | `Cooldown` | `DisputeWindow` | first transaction at block `>= close_at_block + 2h` |
-| `DisputeWindow` | `Resolved` | valid resolution SNARK submission |
+| `DisputeWindow` | `Resolved` | valid resolution SNARK submission at block `>= close_at_block + 14 days` |
 | `DisputeWindow` | `Unresolved` | `markUnresolved(petition_id)` at block `>= close_at_block + 14 days`; replaces `running_root` with the tombstone marker |
 
 The Registry MUST enforce the current `state` at every entry point.
@@ -94,6 +96,8 @@ The signing window MUST satisfy `close_at_block - registration_block <= 11.5 day
 4. Signer MUST build the signer SNARK and MUST submit it with `(nullifier, identity_tag, class_tag)` to a relayer.
 5. After L1 finality of the carrying batch, signer MUST overwrite `s_curr` past `s_slot`, advance the caterpillar frontier, and set `t <- slot + 1`. The signer MUST journal this transition to fsync'd storage before the signing counts as complete.
 
+`class_tag` is exposed as a public input on the signer SNARK and is published per-record in the blob payload. This is intentional public outcome metadata. The cost is reflected in the signer-level unlinkability bound (see [Guarantees](#guarantees)), where `k` is restricted to RI signers whose `attr[class_index]` matches each petition's published `class_tag`.
+
 #### Batch Publication
 
 1. Relayer MUST collect signer SNARKs targeting `(petition_id, R, predicate_hash, class_index, slot)` and extract `(nullifier_i, identity_tag_i, class_tag_i)` per position.
@@ -104,7 +108,7 @@ The signing window MUST satisfy `close_at_block - registration_block <= 11.5 day
 #### Dispute
 
 1. Disputant submits `dispute(petition_id, batch_index, position_i, position_j, violation_type, opening_proofs)`. `position_j` is `None` for violation `0x01` and `Some(j)` for `0x02` and `0x03`. The record content at each position MUST be derived by the Registry from `opening_proofs` rather than submitted separately.
-2. Registry MUST validate openings via the `0x0A` precompile against `batch_versioned_hash`, MUST derive the record content for `position_i` (and `position_j` where applicable) from the openings, MUST apply the violation predicate against that derived content, MUST set the BatchRecord state at `batch_index` to `Repudiated` together with every BatchRecord at index `> batch_index` whose state is still `Active` (those records' `prior_running_root` is no longer canonical), MUST advance `next_batch_index` to `batch_index`, MUST roll back `running_root`, `identity_tag_set_root`, and `leaf_count` to the values held by the immediately preceding active batch (or the initial empty-IMT state if no such predecessor exists), and MUST emit `BatchRepudiated`.
+2. Registry MUST validate openings via the `0x0A` precompile against `batch_versioned_hash`, MUST derive the record content for `position_i` (and `position_j` where applicable) from the openings, MUST apply the violation predicate against that derived content, MUST set the BatchRecord state at `batch_index` to `Repudiated`, MUST set every BatchRecord at index `> batch_index` whose state is `Active` to `Repudiated` (those records' `prior_running_root` is no longer canonical), MUST advance `next_batch_index` to `batch_index`, MUST roll back `running_root`, `identity_tag_set_root`, and `leaf_count` to the values held by the immediately preceding active batch (or the initial empty-IMT state if no such predecessor exists), and MUST emit `BatchRepudiated`.
 
 Violation types:
 
@@ -118,7 +122,9 @@ Violation types:
 
 1. Resolver MUST read `(running_root, leaf_count, R, predicate_hash, class_set, class_thresholds, class_index)` and MUST reconstruct `L = {leaf_1, ..., leaf_{leaf_count}}` from blobs of active batches.
 2. For each `c in class_set`, `count[c] = |{leaf in L : class_tag(leaf) = c}|`; `b_per_class[i] = (count[class_set[i]] >= class_thresholds[i])`; `b = AND_i b_per_class[i]`.
-3. Resolver MUST build and submit the resolution SNARK; Registry MUST validate and emit `PetitionResolved` and `BountyPaid`. First valid submission claims the bounty.
+3. At block `>= close_at_block + 14 days`, Resolver MUST submit the resolution SNARK; Registry MUST reject earlier submissions. Registry MUST validate the proof and MUST emit `PetitionResolved` and `BountyPaid`. First valid submission claims the bounty.
+
+For batches whose `submitted_at_block` precedes resolution by more than 4096 epochs, the EIP-4844 blob is no longer retained on the consensus layer and Resolver MUST obtain its payload from a voluntary blob archive. The batch SNARK commitments on L1 still bind blob contents to `batch_versioned_hash`, so any archive copy is verifiable against the on-chain record.
 
 After `close_at_block + 14 days` with no valid resolution, any party MAY call `markUnresolved(petition_id)`. The Registry MUST refund the bounty (less a gas rebate to the caller, capped at 1% of the total bounty so a caller cannot starve the Organizer of their refund) to the Organizer, MUST replace `running_root` with the tombstone marker, MUST transition the petition state to `Unresolved`, and MUST emit `PetitionUnresolved`. This call is only permitted when the petition's state is `DisputeWindow`; the 14-day timer makes any earlier state unreachable.
 
@@ -213,7 +219,13 @@ GlobalState:
 
 Minimum-bounty calibration: `N_expected = 10 * sum(class_thresholds)`; `B_min = alpha * N_expected * predicate_op_count`. The Registry MUST keep `alpha_min <= alpha <= alpha_max`; updates bind petitions registered after the update.
 
-Petition identifier: `petition_id = keccak256(DOMAIN_PETITION, chain_id, registry_address, organizer, S_at_registration, predicate_hash_pre_id, close_at_block)`, where `predicate_hash_pre_id` sets `petition_id = 0`; `predicate_hash` is recomputed and stored once `petition_id` is assigned. The tombstone marker is the BN254 scalar `0x0000...0001`.
+Petition identifier derivation proceeds in three steps:
+
+1. `predicate_hash_pre_id = Poseidon1(DOMAIN_PRED, canonical_predicate_def, 0, salt)`, computed with the literal scalar `0` as the placeholder `petition_id`.
+2. `petition_id = keccak256(DOMAIN_PETITION, chain_id, registry_address, organizer, S_at_registration, predicate_hash_pre_id, close_at_block)`.
+3. The final `predicate_hash = Poseidon1(DOMAIN_PRED, canonical_predicate_def, petition_id, salt)` is recomputed with the now-known `petition_id` and stored on the petition record.
+
+The tombstone marker is the BN254 scalar `0x0000...0001`.
 
 #### Blob Payload
 
@@ -334,6 +346,8 @@ UltraHonk; recursive. `BATCH_SIZE_MAX = 100`.
 7. `new_leaf_count = prior_leaf_count + batch_size`.
 8. `batch_versioned_hash` opens at canonical evaluation points to BLS12-381 field elements decoding under [Blob Payload](#blob-payload) to `(nullifier_i, identity_tag_i, class_tag_i)` for `i in [0, batch_size)`; positions in `[batch_size, BATCH_SIZE_MAX)` decode to `(0, 0, 0)`. Cross-field binding: each in-circuit BN254 scalar has a big-endian 32-byte decomposition, byte-range-checked, equal to the corresponding BLS12-381 field element.
 
+**Blob binding mechanism.** The binding between the BN254 batch SNARK and the BLS12-381 KZG commitment in `batch_versioned_hash` is split across two trust domains. Inside the circuit, constraint 8 establishes byte-level equality between BN254 record scalars and the `bls_fields` public-input array of BLS12-381 field elements. On L1, during `publishBatch`, the Registry calls the `0x0A` KZG point-evaluation precompile once per `bls_fields` entry against `batch_versioned_hash` at canonical evaluation points, closing the binding from the BLS12-381 commitment side. No BLS12-381 KZG verification happens inside the SNARK; the curve crossing is resolved by exposing the BLS12-381 field elements as public inputs and verifying them against the blob commitment on-chain.
+
 ### Resolution SNARK
 
 UltraHonk; zero-knowledge.
@@ -373,7 +387,7 @@ Out of scope: network transport anonymity beyond what Tor or an equivalent provi
 ### Guarantees
 
 - **Per-petition forward secrecy.** An adversary holding post-signing runtime state, `identity_secret`, `attr_vector`, the RI Merkle path, and the full blob and L1 archives recovers `v_{k'}`, `s_{k'}`, or any value computationally non-trivial in `v_{k'}` (including the slot-`k'` nullifier and identity tag) for any slot `k' < t` with advantage at most `(t - k') * eps_sponge`, under the Poseidon1-sponge PRG assumption.
-- **Signer-level unlinkability.** For petitions `X1`, `X2` and records `r_1 in batch_{X1}`, `r_2 in batch_{X2}`, the adversary's advantage in deciding "same signer" exceeds `1/k - negl` only when it holds at least one of `v_{slot(X1)}` or `v_{slot(X2)}`, where `k` is the cardinality of Signers in `R` whose `attr_vector` satisfies both predicates and matches each petition's `class_tag`.
+- **Signer-level unlinkability.** For petitions `X1`, `X2` and records `r_1 in batch_{X1}`, `r_2 in batch_{X2}`, the adversary's advantage in deciding "same signer" exceeds `1/k - negl` only when it holds at least one of `v_{slot(X1)}` or `v_{slot(X2)}`. `k` is the cardinality of Signers in `R` whose `attr_vector` satisfies both predicates and whose `attr[class_index]` matches each petition's published `class_tag`. The public per-record `class_tag` is what restricts `k` to class-matched signers rather than all signers matching both predicates.
 - **One signature per RI leaf per petition.** For petition `X` and RI leaf `L_RI`, at most one record in `running_root` derives from `L_RI` after batching and dispute resolution.
 - **Outcome verifiability.** A verifier holding L1 chain state, the SRS identified by `srs_hash`, and the Poseidon1 parameter set re-verifies the resolution SNARK, confirming `b` and `b_per_class`.
 - **In-window dispute soundness.** A batch's contribution to `running_root` is removed only when the disputant produces valid KZG openings against `batch_versioned_hash` and evidence satisfying one of the enumerated violation predicates.

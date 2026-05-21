@@ -644,6 +644,7 @@ contract PetitionRegistry is IPetitionRegistry {
         PetitionRecord storage rec = petitions[petitionId];
         _advanceStateOnRead(rec);
         if (rec.state != PetitionState.DisputeWindow) revert InvalidState();
+        if (block.number < uint256(rec.closeAtBlock) + RESOLUTION_DEADLINE_BLOCKS) revert TooEarly();
         if (rec.bPerClass.length != 0) revert AlreadyResolved();
 
         if (!resolutionVerifier.verify(resolutionProof, _resolutionPublicInputs(rec, pi))) revert ProofRejected();
