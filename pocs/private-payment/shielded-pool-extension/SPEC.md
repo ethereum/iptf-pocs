@@ -16,9 +16,9 @@ The parent shielded-pool design leaves two concerns unaddressed.
 
 State-read privacy. Before spending, the wallet fetches the input note's Merkle path from on-chain state. That RPC read reveals the queried leaf index, which under KYC links to a real identity. The parent `REQUIREMENTS.md` flags this; the parent SPEC does not specify how the wallet performs the read.
 
-Nullifier-set bloat. The on-chain nullifier set grows linearly with history and is never pruned, shrinking the set of entities able to host it.
+Nullifier-set bloat. The on-chain nullifier set grows linearly with history and is never pruned. At Visa-scale throughput (~150 M tx/day, 32 B per nullifier) this is ~5 GB/day in raw nullifier bytes alone, before tree overhead. Beyond the multi-terabyte range the set of entities able to host it shrinks to a few well-resourced providers; see Bowe and Miers (ePrint 2025/2031) for fuller analysis.
 
-This extension addresses both. PIR over the pre-spend tree reads closes the state-read leak. Epoch-based nullifiers bound the active on-chain set: past epochs are anchored by one Merkle root each, with tree content hosted by the same off-chain state-replica server that answers PIR queries.
+This extension addresses both. PIR over the pre-spend tree reads hides which leaf the wallet queried from the serving node, breaking the leaf-index-to-identity link. Epoch-based nullifiers bound the active on-chain set: past epochs are anchored by one Merkle root each, with tree content hosted by the same off-chain state-replica server that answers PIR queries.
 
 A per-note recursive chain proof (IVC) keeps per-spend work bounded: the wallet extends it one step per rollover, and the spend circuit recursively verifies one chain proof instead of inlining `k` non-membership checks. The commitment binds `epoch_created` so the verifier can enforce that the chain covers the note's full lifetime. Deposit and attestation flows are otherwise unchanged.
 
@@ -32,9 +32,9 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 ## Proof System Requirements
 
-This extension is proof-system agnostic. Required capabilities: an EVM-verifiable outer artifact (spend proofs verified on-chain in O(1) gas), in-circuit recursive verification of the system's own proofs, the ability to bind a verifying key as a circuit value, zero-knowledge for spend proofs (chain-update proofs need not be zk), and support for branching the recursive verify on a base case (either via circuit-level conditionals or via a sentinel proof).
+This extension is proof-system agnostic. Required capabilities: an EVM-verifiable outer artifact with a succinct on-chain verifier (cost depends only on public-input length, not on circuit size), in-circuit recursive verification of the system's own proofs, the ability to bind a verifying key as a circuit value, zero-knowledge for spend proofs (chain-update proofs need not be zk), and support for branching the recursive verify on a base case (via circuit-level conditionals or a sentinel proof).
 
-Notation: `assert verify(vk, proof, public_inputs)` denotes the in-circuit recursive-verify primitive. `FixedVK` is the chain-update circuit's verifying key, fixed at deployment.
+Notation: `assert recursive_verify(inner_vk, inner_statement, inner_proof)` denotes the in-circuit primitive asserting that `inner_proof` is a valid proof of `inner_statement` under `inner_vk`. All three are witnesses to the outer circuit; the outer circuit MAY re-expose any of them as its own public inputs depending on what the consuming verifier (on-chain contract or outer recursion layer) must bind to. `FixedVK` is the chain-update circuit's verifying key, fixed at deployment.
 
 Reference instantiation (non-normative): Noir (`std::verify_proof`) with the Aztec `bb_proof_verification` library on UltraHonk, using `noir-recursive-no-zk` for chain-update artifacts and `evm` for the outer spend artifact. Halo2, Plonky2/3, Nova-family folding, Risc0, and SP1 are also candidates.
 
@@ -150,6 +150,8 @@ The active-epoch nullifier set is tracked by both a LeanIMT (for its root, froze
 
 On `rolloverEpoch()`: read the active-tree root, write to `frozenNullifierRoots[currentEpoch]`, reset the active tree, increment `currentEpoch`, emit `EpochRollover(uint64 epoch, bytes32 root)`.
 
+Epoch cadence. The protocol does not impose an epoch duration; one epoch is whatever period elapses between two `rolloverEpoch()` calls. The PoC targets one rollover per month. Production deployments SHOULD pin a fixed cadence (e.g. one rollover every `N` blocks, or one per calendar period) so wallets and replicas can plan capacity. Coarse cadence directly bounds `k`, which sets both the per-spend on-chain accumulator hashing cost and the maximum chain-update work a wallet pays after an offline period.
+
 On every `transfer` / `withdraw`: read each input note's `epoch_created` from public inputs, revert if `accumulator != expectedChainAccumulator(epoch_created)`, insert `η_{currentEpoch}` into the active-epoch tree and `activeNullifiers[currentEpoch]`.
 
 ```solidity
@@ -178,6 +180,39 @@ One server replicates public on-chain state and exposes a PIR endpoint. Hosted d
 The contract retains only frozen-tree roots, so the server reconstructs each frozen tree once from event logs and offers it as a shared service.
 
 The server is untrusted for correctness. Returned nodes are reassembled client-side into a root and compared against the light-client-verified on-chain root; both circuits re-check the same reconstructions.
+
+Root-fetch scheduling. Wallets MUST issue `eth_getProof` for `commitment_root` and any newly-emitted `frozenNullifierRoots[e]` on a fixed schedule, independent of intent to spend: poll `commitment_root` every `T` blocks and pull `frozenNullifierRoots[e]` immediately on observing each `EpochRollover(e)` event. The RPC therefore sees a uniform stream of queries shared by every active wallet, and cannot link a fetch to an imminent spend. Privacy reduces to k-anonymity over the active user base; the only metadata that remains is "this client is a ShieldedPool user," which is already public for anyone who has ever deposited or withdrawn.
+
+Light-client check (pseudocode). Reconciliation walks the two-level MPT from the consensus-verified header down to the contract's storage slot:
+
+```
+// Inputs: contract address C, storage slot s, expected value v.
+header                       = LightClient.latest_finalized_header()  // verified vs consensus
+{ accountProof, storageProof,
+  storageHash, value }       = rpc.eth_getProof(C, [s], header.block_number)
+
+// Level 1: header.state_root commits to all accounts.
+//   Verify C's account leaf and extract its storageHash.
+assert verify_mpt(
+    root  = header.state_root,
+    key   = keccak256(C),
+    leaf  = rlp({nonce, balance, storageHash, codeHash}),
+    proof = accountProof,
+)
+
+// Level 2: storageHash commits to all storage slots of C.
+//   For mapping slot: slot = keccak256(abi.encode(mappingKey, baseSlot)).
+assert verify_mpt(
+    root  = storageHash,
+    key   = keccak256(s),
+    leaf  = rlp(value),
+    proof = storageProof,
+)
+
+assert value == v
+```
+
+Run once per `commitment_root` consumed at spend time, and once per `frozenNullifierRoots[e]` consumed during chain extension.
 
 Frozen trees are append-only-then-static, so PIR preprocessing is paid once per epoch. The commitment tree grows continuously; preprocessing amortization is out of scope.
 
@@ -235,6 +270,8 @@ After deposit, the wallet generates the genesis chain proof via the chain-update
 
 Inner artifact, consumed recursively by other chain-update proofs and by the spend circuit. Used for both extension and genesis.
 
+Kept separate from the spend circuit because (a) chain-update proofs are consumed only recursively and need not be zero-knowledge or EVM-verifiable, while spend proofs are both; (b) the two have different public-input shapes; (c) keeping the recursion-frequent artifact small reduces wallet proving time across the typical update sequence. An implementation MAY merge them into one circuit with a mode flag, at the cost of paying ZK and EVM-target overhead on every chain update.
+
 Public inputs (the `ChainProof`):
 
 - `commitment: Field`
@@ -260,11 +297,11 @@ Let `e_prev = prior_chain.public_inputs.epoch_validated_through`.
    - No recursive verify, no non-membership check.
 
 2. Inductive branch (`is_base_case == false`):
-   - `assert verify(prior_chain.vk, prior_chain.proof, prior_chain.public_inputs)`
+   - `assert recursive_verify(prior_chain.vk, prior_chain.public_inputs, prior_chain.proof)`
    - `prior_chain.vk == FixedVK` (the chain-update circuit's own VK)
    - `prior_chain.public_inputs.commitment == commitment`
    - `prior_chain.public_inputs.epoch_created == epoch_created`
-   - `epoch_validated_through == e_prev + 1`
+   - `epoch_validated_through == e_prev + 1` (advances by one rollover; see "Epoch Cadence" below for what one rollover represents)
    - `accumulator == poseidon2(prior_chain.public_inputs.accumulator, frozen_root_next)`
    - `η = poseidon(commitment, spending_key, e_prev)`
    - Sorted-low-leaf check: `low_leaf < η < low_leaf_next_value`, and the supplied Merkle path with `low_leaf` at `leaf_index` reconstructs to `frozen_root_next`.
@@ -284,7 +321,7 @@ New private inputs (per input note): `chain_proof.{vk, proof, public_inputs}`.
 
 New constraints (per input note):
 
-1. `assert verify(chain_proof.vk, chain_proof.proof, chain_proof.public_inputs)`
+1. `assert recursive_verify(chain_proof.vk, chain_proof.public_inputs, chain_proof.proof)`
 2. `chain_proof.vk == FixedVK`
 3. `chain_proof.public_inputs.commitment == commitment_in`
 4. `chain_proof.public_inputs.epoch_created == epoch_created_in`
@@ -326,7 +363,6 @@ The parent threat model (public observer, malicious relayer, compromised viewing
 
 | Limitation | Impact | Production Mitigation |
 |---|---|---|
-| No correlated-query defense | Sequential PIR sessions from the same wallet/IP link via network metadata | Mixnet, Tor, or per-block batching |
 | Chain catch-up cost on offline wallets | A wallet offline for `k` epochs pays `O(k)` sequential chain-update proofs and `O(k)` PIR queries before spending | Tachyon-style shared accumulator |
 | Per-spend `O(k)` on-chain accumulator hashing | `expectedChainAccumulator` costs `O(currentEpoch - epoch_created)` SLOADs and Poseidon hashes | On-chain Merkle of frozen roots, or shared accumulator |
 | Wallet maintains a chain proof per held note | Per-note state plus incremental proofs at every rollover | Shared accumulator removes per-note state |
