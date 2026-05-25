@@ -69,6 +69,10 @@ pub enum RegistryError {
     DisputeUnknownBatch(u32),
     #[error("dispute references already-repudiated batch_index {0}")]
     DisputeBatchAlreadyRepudiated(u32),
+    #[error(
+        "dispute window closed once resolution opens at close_at_block + RESOLUTION_DEADLINE_BLOCKS"
+    )]
+    DisputeWindowClosed,
     #[error("imt error: {0}")]
     Imt(#[from] ImtError),
     #[error("blob error: {0}")]

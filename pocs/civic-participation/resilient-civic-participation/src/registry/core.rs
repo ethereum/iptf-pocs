@@ -12,6 +12,7 @@ use crate::{
     BATCH_SIZE_MAX,
     COOLDOWN_BLOCKS,
     FSRT_SLOT_COUNT,
+    MARK_UNRESOLVED_GRACE_BLOCKS,
     MIN_R_AGE_BLOCKS,
     RESOLUTION_DEADLINE_BLOCKS,
     blob::compute_batch_versioned_hash,
@@ -606,6 +607,13 @@ where
         if state != PetitionState::DisputeWindow {
             return Err(RegistryError::BadState(state, "dispute"));
         }
+        let close_at_block = self.petition(&dispute.petition_id)?.record.close_at_block;
+        let dispute_close = close_at_block
+            .checked_add(RESOLUTION_DEADLINE_BLOCKS)
+            .ok_or(RegistryError::BadState(state, "dispute"))?;
+        if self.now() >= dispute_close {
+            return Err(RegistryError::DisputeWindowClosed);
+        }
         // Pre-fetch `batch_versioned_hash` without a mut borrow so verification runs uncontended.
         let vh = {
             let entry = self.petition(&dispute.petition_id)?;
@@ -829,6 +837,7 @@ where
             .record
             .close_at_block
             .checked_add(RESOLUTION_DEADLINE_BLOCKS)
+            .and_then(|d| d.checked_add(MARK_UNRESOLVED_GRACE_BLOCKS))
             .ok_or(RegistryError::BadState(state, "mark_unresolved"))?;
         if now < deadline {
             return Err(RegistryError::BadState(state, "mark_unresolved"));

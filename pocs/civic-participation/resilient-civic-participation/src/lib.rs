@@ -45,6 +45,11 @@ pub const BLOCKS_PER_DAY: u64 = 24 * 60 * 60 / 12;
 pub const MAX_SIGNING_WINDOW_BLOCKS: u64 = 11 * BLOCKS_PER_DAY + BLOCKS_PER_DAY / 2;
 pub const COOLDOWN_BLOCKS: u64 = 2 * 60 * 60 / 12;
 pub const RESOLUTION_DEADLINE_BLOCKS: u64 = 14 * BLOCKS_PER_DAY;
+/// 1-hour grace after `RESOLUTION_DEADLINE_BLOCKS` during which only `resolve`
+/// is callable; `mark_unresolved` becomes callable at
+/// `close_at_block + RESOLUTION_DEADLINE_BLOCKS + MARK_UNRESOLVED_GRACE_BLOCKS`.
+/// Must match `MARK_UNRESOLVED_GRACE_BLOCKS` in `PetitionRegistry.sol`.
+pub const MARK_UNRESOLVED_GRACE_BLOCKS: u64 = 300;
 pub const MIN_R_AGE_BLOCKS: u64 = 30 * BLOCKS_PER_DAY;
 pub const IMT_DEPTH: usize = 24;
 pub const RESOLUTION_CLASS_MAX: usize = 16;
