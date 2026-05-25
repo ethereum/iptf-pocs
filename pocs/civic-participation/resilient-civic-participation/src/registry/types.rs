@@ -113,5 +113,4 @@ pub struct PetitionStateView {
     pub running_root: Bytes32,
     pub identity_tag_set_root: Bytes32,
     pub leaf_count: u64,
-    pub next_batch_index: u32,
 }

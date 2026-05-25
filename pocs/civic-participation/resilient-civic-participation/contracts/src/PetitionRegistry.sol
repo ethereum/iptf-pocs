@@ -38,7 +38,6 @@ contract PetitionRegistry is IPetitionRegistry {
         bytes32 runningRoot;
         bytes32 identityTagSetRoot;
         uint64 leafCount;
-        uint32 nextBatchIndex;
         bool b;
         bool[] bPerClass;
         PetitionState state;
@@ -77,6 +76,11 @@ contract PetitionRegistry is IPetitionRegistry {
     uint64 public constant COOLDOWN_BLOCKS = 600;
     /// 12-second block assumption. 14 days.
     uint64 public constant RESOLUTION_DEADLINE_BLOCKS = 100_800;
+    /// 12-second block assumption. 1 hour. Gives a Resolver exclusive
+    /// access to the bounty starting at `closeAtBlock + RESOLUTION_DEADLINE_BLOCKS`
+    /// before `markUnresolved` becomes callable, removing the same-block
+    /// race between `resolve` and `markUnresolved`.
+    uint64 public constant MARK_UNRESOLVED_GRACE_BLOCKS = 300;
     /// 12-second block assumption. 11.5 days.
     uint64 public constant MAX_SIGNING_WINDOW_BLOCKS = 82_800;
     uint32 public constant BATCH_SIZE_MAX = 6;
@@ -114,6 +118,7 @@ contract PetitionRegistry is IPetitionRegistry {
     error BlobHashMismatch();
     error AlreadyResolved();
     error TooEarly();
+    error DisputeWindowClosed();
     error AlphaOutOfBounds();
     error PaymentFailed();
     error ViolationFalse();
@@ -154,11 +159,19 @@ contract PetitionRegistry is IPetitionRegistry {
 
     constructor(InitArgs memory args) {
         // Reject zero-address and EOA verifiers/token.
-        if (address(args.batchVerifier) == address(0)) revert VerifierAddressInvalid();
-        if (address(args.resolutionVerifier) == address(0)) revert VerifierAddressInvalid();
+        if (address(args.batchVerifier) == address(0)) {
+            revert VerifierAddressInvalid();
+        }
+        if (address(args.resolutionVerifier) == address(0)) {
+            revert VerifierAddressInvalid();
+        }
         if (args.bountyToken == address(0)) revert VerifierAddressInvalid();
-        if (address(args.batchVerifier).code.length == 0) revert VerifierAddressInvalid();
-        if (address(args.resolutionVerifier).code.length == 0) revert VerifierAddressInvalid();
+        if (address(args.batchVerifier).code.length == 0) {
+            revert VerifierAddressInvalid();
+        }
+        if (address(args.resolutionVerifier).code.length == 0) {
+            revert VerifierAddressInvalid();
+        }
         if (args.bountyToken.code.length == 0) revert VerifierAddressInvalid();
 
         batchVerifier = args.batchVerifier;
@@ -230,15 +243,21 @@ contract PetitionRegistry is IPetitionRegistry {
 
     function _validateParams(PetitionParams calldata params) internal view {
         if (params.closeAtBlock <= block.number) revert InvalidPetition();
-        if (params.closeAtBlock - block.number > MAX_SIGNING_WINDOW_BLOCKS) revert SigningWindowTooLong();
+        if (params.closeAtBlock - block.number > MAX_SIGNING_WINDOW_BLOCKS) {
+            revert SigningWindowTooLong();
+        }
         if (params.classIndex >= attrCount) revert InvalidPetition();
 
         uint256 n = params.classSet.length;
-        if (n == 0 || n != params.classThresholds.length) revert ClassSetInvalid();
+        if (n == 0 || n != params.classThresholds.length) {
+            revert ClassSetInvalid();
+        }
         // Bound class_set size at the resolution circuit's CLASS_MAX.
         if (n > 16) revert ClassSetInvalid();
         for (uint256 i = 1; i < n; i++) {
-            if (params.classSet[i] <= params.classSet[i - 1]) revert ClassSetInvalid();
+            if (params.classSet[i] <= params.classSet[i - 1]) {
+                revert ClassSetInvalid();
+            }
         }
         uint256 sumThresholds = 0;
         for (uint256 i = 0; i < n; i++) {
@@ -533,7 +552,9 @@ contract PetitionRegistry is IPetitionRegistry {
         bytes calldata kzgProofs
     ) external {
         _preflightBatch(pi);
-        if (!batchVerifier.verify(batchProof, _batchPublicInputs(pi))) revert ProofRejected();
+        if (!batchVerifier.verify(batchProof, _batchPublicInputs(pi))) {
+            revert ProofRejected();
+        }
         _verifyConstraint8Openings(pi, kzgCommitment, kzgProofs);
         _commitBatch(pi);
     }
@@ -542,29 +563,75 @@ contract PetitionRegistry is IPetitionRegistry {
     // so the canonical eval point at index `k` is `omega^{br(k, 12)}`
     // where `omega` is the primitive 4096th root of unity in BLS12-381
     function _kzgEvalPoint(uint256 k) internal pure returns (bytes32) {
-        if (k == 0) return bytes32(uint256(0x0000000000000000000000000000000000000000000000000000000000000001));
-        if (k == 1) return bytes32(uint256(0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000000));
-        if (k == 2) return bytes32(uint256(0x00000000000000008d51ccce760304d0ec030002760300000001000000000000));
-        if (k == 3) return bytes32(uint256(0x73eda753299d7d47a5e80b39939ed33467baa40089fb5bfefffeffff00000001));
-        if (k == 4) return bytes32(uint256(0x345766f603fa66e78c0625cd70d77ce2b38b21c28713b7007228fd3397743f7a));
-        if (k == 5) return bytes32(uint256(0x3f96405d25a31660a733b23a98ca5b22a032824078eaa4fe8dd702cb688bc087));
-        if (k == 6) return bytes32(uint256(0x1333b22e5ce11044babc5affca86bf658e74903694b04fd86037fe81ae99502e));
-        if (k == 7) return bytes32(uint256(0x60b9f524ccbc6d03787d7d083f1b189fc54913cc6b4e0c269fc8017d5166afd3));
-        if (k == 8) return bytes32(uint256(0x20b1ce9140267af9dd1c0af834cec32c17beb312f20b6f7653ea61d87742bcce));
-        if (k == 9) return bytes32(uint256(0x533bd8c1e977024e561dcd0fd4d314d93bfef0f00df2ec88ac159e2688bd4333));
-        if (k == 10) return bytes32(uint256(0x4f2c596e753e4fcc6e92a9c460afca4a1ef4e672ebc1e1bb95df4b360411fe73));
-        if (k == 11) return bytes32(uint256(0x24c14de4b45f2d7bc4a72e43a8f20dbb34c8bd90143c7a436a20b4c8fbee018e));
-        if (k == 12) return bytes32(uint256(0x1edc919ec91f38ac5ccd4631f16edba4967a6b6cfb0faca4807b811a823f728d));
-        if (k == 13) return bytes32(uint256(0x551115b4607e449bd66c91d61832fc60bd43389604eeaf5a7f847ee47dc08d74));
-        if (k == 14) return bytes32(uint256(0x38c7f2dd7e0c63fccabf643eda8951f257bc96af334c36bca1abb31fb37786b9));
-        if (k == 15) return bytes32(uint256(0x3b25b475ab91194b687a73c92f188612fc010d53ccb225425e544cdf4c887948));
-        if (k == 16) return bytes32(uint256(0x50e0903a157988bab4bcd40e22f55448bf6e88fb4c38fb8a360c60997369df4e));
-        if (k == 17) return bytes32(uint256(0x230d17191423f48d7e7d03f9e6ac83bc944f1b07b3c56074c9f39f658c9620b3));
-        if (k == 18) return bytes32(uint256(0x65f6c5837cb5fca206050b5832d1099726bc7f62d13a6e1c3ec50c9031a36ca3));
-        if (k == 19) return bytes32(uint256(0x0df6e1cface780a62d34ccafd6d0ce6e2d0124a02ec3ede2c13af36ece5c935e));
-        if (k == 20) return bytes32(uint256(0x2c7e0457c83a7d9c5aea51f540eb0c04963dc46688b5e11768cc0c58459f155b));
-        if (k == 21) return bytes32(uint256(0x476fa2fb6162ffabd84f8612c8b6cc00bd7fdf9c77487ae79733f3a6ba60eaa6));
-        if (k == 22) return bytes32(uint256(0x5303da18a9d30564a8f0cfd2438f018c01e943612401899720d4ed194fccfeb9));
+        if (k == 0) {
+            return bytes32(uint256(0x0000000000000000000000000000000000000000000000000000000000000001));
+        }
+        if (k == 1) {
+            return bytes32(uint256(0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000000));
+        }
+        if (k == 2) {
+            return bytes32(uint256(0x00000000000000008d51ccce760304d0ec030002760300000001000000000000));
+        }
+        if (k == 3) {
+            return bytes32(uint256(0x73eda753299d7d47a5e80b39939ed33467baa40089fb5bfefffeffff00000001));
+        }
+        if (k == 4) {
+            return bytes32(uint256(0x345766f603fa66e78c0625cd70d77ce2b38b21c28713b7007228fd3397743f7a));
+        }
+        if (k == 5) {
+            return bytes32(uint256(0x3f96405d25a31660a733b23a98ca5b22a032824078eaa4fe8dd702cb688bc087));
+        }
+        if (k == 6) {
+            return bytes32(uint256(0x1333b22e5ce11044babc5affca86bf658e74903694b04fd86037fe81ae99502e));
+        }
+        if (k == 7) {
+            return bytes32(uint256(0x60b9f524ccbc6d03787d7d083f1b189fc54913cc6b4e0c269fc8017d5166afd3));
+        }
+        if (k == 8) {
+            return bytes32(uint256(0x20b1ce9140267af9dd1c0af834cec32c17beb312f20b6f7653ea61d87742bcce));
+        }
+        if (k == 9) {
+            return bytes32(uint256(0x533bd8c1e977024e561dcd0fd4d314d93bfef0f00df2ec88ac159e2688bd4333));
+        }
+        if (k == 10) {
+            return bytes32(uint256(0x4f2c596e753e4fcc6e92a9c460afca4a1ef4e672ebc1e1bb95df4b360411fe73));
+        }
+        if (k == 11) {
+            return bytes32(uint256(0x24c14de4b45f2d7bc4a72e43a8f20dbb34c8bd90143c7a436a20b4c8fbee018e));
+        }
+        if (k == 12) {
+            return bytes32(uint256(0x1edc919ec91f38ac5ccd4631f16edba4967a6b6cfb0faca4807b811a823f728d));
+        }
+        if (k == 13) {
+            return bytes32(uint256(0x551115b4607e449bd66c91d61832fc60bd43389604eeaf5a7f847ee47dc08d74));
+        }
+        if (k == 14) {
+            return bytes32(uint256(0x38c7f2dd7e0c63fccabf643eda8951f257bc96af334c36bca1abb31fb37786b9));
+        }
+        if (k == 15) {
+            return bytes32(uint256(0x3b25b475ab91194b687a73c92f188612fc010d53ccb225425e544cdf4c887948));
+        }
+        if (k == 16) {
+            return bytes32(uint256(0x50e0903a157988bab4bcd40e22f55448bf6e88fb4c38fb8a360c60997369df4e));
+        }
+        if (k == 17) {
+            return bytes32(uint256(0x230d17191423f48d7e7d03f9e6ac83bc944f1b07b3c56074c9f39f658c9620b3));
+        }
+        if (k == 18) {
+            return bytes32(uint256(0x65f6c5837cb5fca206050b5832d1099726bc7f62d13a6e1c3ec50c9031a36ca3));
+        }
+        if (k == 19) {
+            return bytes32(uint256(0x0df6e1cface780a62d34ccafd6d0ce6e2d0124a02ec3ede2c13af36ece5c935e));
+        }
+        if (k == 20) {
+            return bytes32(uint256(0x2c7e0457c83a7d9c5aea51f540eb0c04963dc46688b5e11768cc0c58459f155b));
+        }
+        if (k == 21) {
+            return bytes32(uint256(0x476fa2fb6162ffabd84f8612c8b6cc00bd7fdf9c77487ae79733f3a6ba60eaa6));
+        }
+        if (k == 22) {
+            return bytes32(uint256(0x5303da18a9d30564a8f0cfd2438f018c01e943612401899720d4ed194fccfeb9));
+        }
         return bytes32(uint256(0x20e9cd3a7fca77e38a490835c612d67951d460a1dbfcd267df2b12e5b0330148));
     }
 
@@ -590,16 +657,24 @@ contract PetitionRegistry is IPetitionRegistry {
         // batch circuit additionally enforces `batch_size == BATCH_SIZE_MAX`
         // (see circuits/batch/src/main.nr); production removes the circuit-side
         // equality and accepts the full SPEC range here.
-        if (pi.batchSize == 0 || pi.batchSize > BATCH_SIZE_MAX) revert BatchSizeOutOfRange();
-        if (pi.newLeafCount != pi.priorLeafCount + pi.batchSize) revert InvalidBatch();
-        if (pi.signerVkHash != pinnedSignerVkHash) revert SignerVkHashMismatch();
+        if (pi.batchSize == 0 || pi.batchSize > BATCH_SIZE_MAX) {
+            revert BatchSizeOutOfRange();
+        }
+        if (pi.newLeafCount != pi.priorLeafCount + pi.batchSize) {
+            revert InvalidBatch();
+        }
+        if (pi.signerVkHash != pinnedSignerVkHash) {
+            revert SignerVkHashMismatch();
+        }
         _checkPriorState(rec, pi);
         if (blobhash(0) != pi.batchVersionedHash) revert BlobHashMismatch();
     }
 
     function _checkPriorState(PetitionRecord storage rec, BatchPublicInputs calldata pi) internal view {
         if (rec.runningRoot != pi.priorRunningRoot) revert PriorStateMismatch();
-        if (rec.identityTagSetRoot != pi.priorIdentityTagSetRoot) revert PriorStateMismatch();
+        if (rec.identityTagSetRoot != pi.priorIdentityTagSetRoot) {
+            revert PriorStateMismatch();
+        }
         if (rec.leafCount != pi.priorLeafCount) revert PriorStateMismatch();
         if (rec.rRoot != pi.rRoot) revert PriorStateMismatch();
         if (rec.predicateHash != pi.predicateHash) revert PriorStateMismatch();
@@ -609,7 +684,7 @@ contract PetitionRegistry is IPetitionRegistry {
 
     function _commitBatch(BatchPublicInputs calldata pi) internal {
         PetitionRecord storage rec = petitions[pi.petitionId];
-        uint32 batchIndex = rec.nextBatchIndex;
+        uint32 batchIndex = uint32(batches[pi.petitionId].length);
         batches[pi.petitionId].push(
             BatchRecord({
                 batchVersionedHash: pi.batchVersionedHash,
@@ -627,7 +702,6 @@ contract PetitionRegistry is IPetitionRegistry {
         rec.runningRoot = pi.newRunningRoot;
         rec.identityTagSetRoot = pi.newIdentityTagSetRoot;
         rec.leafCount = pi.newLeafCount;
-        rec.nextBatchIndex = batchIndex + 1;
         emit BatchPublished(
             pi.petitionId,
             batchIndex,
@@ -671,7 +745,9 @@ contract PetitionRegistry is IPetitionRegistry {
         PetitionRecord storage rec = petitions[petitionId];
         _advanceStateOnRead(rec);
         if (rec.state != PetitionState.DisputeWindow) revert InvalidState();
-        if (block.number < uint256(rec.closeAtBlock) + RESOLUTION_DEADLINE_BLOCKS) revert TooEarly();
+        if (block.number < uint256(rec.closeAtBlock) + RESOLUTION_DEADLINE_BLOCKS + MARK_UNRESOLVED_GRACE_BLOCKS) {
+            revert TooEarly();
+        }
 
         uint256 rebateCap = (rec.bounty * uint256(GAS_REBATE_BPS)) / 10_000;
         uint256 estimatedGasCost = MARK_UNRESOLVED_GAS_ESTIMATE * tx.gasprice;
@@ -715,7 +791,9 @@ contract PetitionRegistry is IPetitionRegistry {
         DisputeParams memory dp = DisputeParams(petitionId, batchIndex, positionI, positionJ, violationType);
         _preflightDispute(dp, kzgCommitment);
         _verifyOpenings(dp, kzgCommitment, openingsBlob, proofsBlob);
-        if (!_applyViolationPredicate(dp, openingsBlob)) revert ViolationFalse();
+        if (!_applyViolationPredicate(dp, openingsBlob)) {
+            revert ViolationFalse();
+        }
         _cascadeRepudiation(dp);
     }
 
@@ -724,7 +802,15 @@ contract PetitionRegistry is IPetitionRegistry {
         _advanceStateOnRead(rec);
         // SPEC line 107: dispute only during DisputeWindow.
         if (rec.state != PetitionState.DisputeWindow) revert InvalidState();
-        if (dp.batchIndex >= batches[dp.petitionId].length) revert InvalidBatch();
+        // Dispute window upper bound: disputes close when resolution opens
+        // so a late dispute cannot invalidate a Resolver's prior-state
+        // binding mid-flight.
+        if (block.number >= uint256(rec.closeAtBlock) + RESOLUTION_DEADLINE_BLOCKS) {
+            revert DisputeWindowClosed();
+        }
+        if (dp.batchIndex >= batches[dp.petitionId].length) {
+            revert InvalidBatch();
+        }
         BatchRecord storage bat = batches[dp.petitionId][dp.batchIndex];
         if (bat.state != BatchState.Active) revert InvalidBatch();
         if (kzgCommitment.length != 48) revert InvalidBatch();
@@ -742,7 +828,9 @@ contract PetitionRegistry is IPetitionRegistry {
 
         bytes32 sha = sha256(kzgCommitment);
         bytes32 reconstructedVh = (sha & ~bytes32(uint256(0xff) << 248)) | bytes32(uint256(0x01) << 248);
-        if (reconstructedVh != bat.batchVersionedHash) revert BlobHashMismatch();
+        if (reconstructedVh != bat.batchVersionedHash) {
+            revert BlobHashMismatch();
+        }
     }
 
     /// y-only openings; z is derived from positions inside the contract.
@@ -823,14 +911,15 @@ contract PetitionRegistry is IPetitionRegistry {
         rec.runningRoot = newRunning;
         rec.identityTagSetRoot = newIdtag;
         rec.leafCount = newLeafCount;
-        rec.nextBatchIndex = dp.batchIndex;
         emit BatchRepudiated(dp.petitionId, dp.batchIndex, newRunning, newIdtag, newLeafCount);
     }
 
     // ---------- Governance ----------
 
     function updateAlpha(uint64 newAlpha) external onlyGovernance {
-        if (newAlpha < alphaMin || newAlpha > alphaMax) revert AlphaOutOfBounds();
+        if (newAlpha < alphaMin || newAlpha > alphaMax) {
+            revert AlphaOutOfBounds();
+        }
         emit AlphaUpdated(alpha, newAlpha);
         alpha = newAlpha;
     }
@@ -994,12 +1083,16 @@ contract PetitionRegistry is IPetitionRegistry {
 
     function _safeTransfer(address token, address to, uint256 amount) internal {
         (bool ok, bytes memory ret) = token.call(abi.encodeWithSignature("transfer(address,uint256)", to, amount));
-        if (!ok || (ret.length != 0 && !abi.decode(ret, (bool)))) revert PaymentFailed();
+        if (!ok || (ret.length != 0 && !abi.decode(ret, (bool)))) {
+            revert PaymentFailed();
+        }
     }
 
     function _safeTransferFrom(address token, address from, address to, uint256 amount) internal {
         (bool ok, bytes memory ret) =
             token.call(abi.encodeWithSignature("transferFrom(address,address,uint256)", from, to, amount));
-        if (!ok || (ret.length != 0 && !abi.decode(ret, (bool)))) revert PaymentFailed();
+        if (!ok || (ret.length != 0 && !abi.decode(ret, (bool)))) {
+            revert PaymentFailed();
+        }
     }
 }

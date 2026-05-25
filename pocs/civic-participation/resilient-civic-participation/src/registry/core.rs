@@ -192,7 +192,6 @@ where
             running_root: entry.record.running_root,
             identity_tag_set_root: entry.record.identity_tag_set_root,
             leaf_count: entry.record.leaf_count,
-            next_batch_index: entry.record.next_batch_index,
         })
     }
 
@@ -384,7 +383,6 @@ where
             running_root: self.empty_imt_root,
             identity_tag_set_root: self.empty_imt_root,
             leaf_count: 0,
-            next_batch_index: 0,
             resolution_proof: Vec::new(),
             b: false,
             b_per_class: Vec::new(),
@@ -563,15 +561,14 @@ where
         entry.identity_tag_imt = scratch_identity_tag_imt;
         let new_rr_be = claimed_new_rr_be;
         let new_idt_be = claimed_new_idt_be;
-        let batch_index = entry.record.next_batch_index;
+        let batch_index = u32::try_from(entry.batches.len()).map_err(|_| {
+            RegistryError::BadBatchProof(ProofError::Verification(
+                "batch index overflow".into(),
+            ))
+        })?;
         entry.record.running_root = new_rr_be;
         entry.record.identity_tag_set_root = new_idt_be;
         entry.record.leaf_count = new_lc_u;
-        entry.record.next_batch_index = batch_index.checked_add(1).ok_or_else(|| {
-            RegistryError::BadBatchProof(ProofError::Verification(
-                "next_batch_index overflow".into(),
-            ))
-        })?;
 
         entry.batches.push(InternalBatch {
             record: BatchRecord {
@@ -730,7 +727,6 @@ where
         entry.record.running_root = rb_rr;
         entry.record.identity_tag_set_root = rb_idt;
         entry.record.leaf_count = rb_lc;
-        entry.record.next_batch_index = dispute.batch_index;
         entry.running_imt = scratch_running_imt;
         entry.identity_tag_imt = scratch_identity_tag_imt;
 

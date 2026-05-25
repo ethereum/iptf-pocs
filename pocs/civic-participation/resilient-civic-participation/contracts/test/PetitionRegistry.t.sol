@@ -31,6 +31,7 @@ contract PetitionRegistryTest is Test {
     uint64 internal constant BATCH_SIZE_MAX = 6;
     uint64 internal constant COOLDOWN_BLOCKS = 600;
     uint64 internal constant RESOLUTION_DEADLINE_BLOCKS = 100_800;
+    uint64 internal constant MARK_UNRESOLVED_GRACE_BLOCKS = 300;
     uint64 internal constant MAX_SIGNING_WINDOW_BLOCKS = 82_800;
 
     function setUp() public {
@@ -502,7 +503,7 @@ contract PetitionRegistryTest is Test {
     function test_MarkUnresolved_Succeeds() public {
         (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
         _publishBatch(petitionId, p);
-        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS + 1);
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS + MARK_UNRESOLVED_GRACE_BLOCKS);
 
         uint256 organizerPre = token.balanceOf(organizer);
         uint256 callerPre = token.balanceOf(resolver_);
@@ -543,6 +544,106 @@ contract PetitionRegistryTest is Test {
         vm.prank(resolver_);
         vm.expectRevert(PetitionRegistry.InvalidState.selector);
         registry.markUnresolved(petitionId);
+    }
+
+    function test_MarkUnresolved_RevertsInGraceWindow() public {
+        (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
+        _publishBatch(petitionId, p);
+
+        // At the resolution deadline: resolve opens, markUnresolved is
+        // still gated for the duration of the grace window.
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS);
+        vm.prank(resolver_);
+        vm.expectRevert(PetitionRegistry.TooEarly.selector);
+        registry.markUnresolved(petitionId);
+
+        // Resolve succeeds at the same block, confirming Resolvers get
+        // exclusive access during the grace window.
+        IPetitionRegistry.ResolutionPublicInputs memory rpi = _resolutionPi(true);
+        vm.prank(resolver_);
+        registry.resolve(petitionId, rpi, hex"01");
+    }
+
+    function test_MarkUnresolved_RevertsOneBlockBeforeGraceEnds() public {
+        (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
+        _publishBatch(petitionId, p);
+
+        // Last block where markUnresolved is still gated.
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS + MARK_UNRESOLVED_GRACE_BLOCKS - 1);
+        vm.prank(resolver_);
+        vm.expectRevert(PetitionRegistry.TooEarly.selector);
+        registry.markUnresolved(petitionId);
+    }
+
+    function test_Dispute_CascadesAndPreservesStorageLength() public {
+        (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
+        (bytes memory kzgCommit, bytes memory openings, bytes memory proofs) = _publishDisputableBatch(petitionId, p);
+
+        vm.roll(p.closeAtBlock + COOLDOWN_BLOCKS);
+
+        vm.expectEmit(true, true, false, true, address(registry));
+        emit IPetitionRegistry.BatchRepudiated(petitionId, 0, EMPTY_IMT_ROOT, EMPTY_IMT_ROOT, 0);
+
+        registry.dispute(petitionId, 0, 0, 0, 0x01, kzgCommit, openings, proofs);
+
+        // Storage length preserved; the repudiated batch stays at its
+        // original position. State rolls back to the empty-IMT baseline
+        // because there is no predecessor.
+        assertEq(registry.getBatchCount(petitionId), 1, "storage truncated after dispute");
+        PetitionRegistry.BatchRecord memory bat = registry.getBatch(petitionId, 0);
+        assertEq(uint8(bat.state), uint8(IPetitionRegistry.BatchState.Repudiated), "state != Repudiated");
+        PetitionRegistry.PetitionRecord memory rec = registry.getPetition(petitionId);
+        assertEq(rec.runningRoot, EMPTY_IMT_ROOT, "runningRoot not rolled back");
+        assertEq(rec.leafCount, 0, "leafCount not rolled back");
+    }
+
+    function test_Dispute_SucceedsAtUpperBoundMinusOne() public {
+        (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
+        (bytes memory kzgCommit, bytes memory openings, bytes memory proofs) = _publishDisputableBatch(petitionId, p);
+
+        // Last block where dispute is valid.
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS - 1);
+        registry.dispute(petitionId, 0, 0, 0, 0x01, kzgCommit, openings, proofs);
+
+        PetitionRegistry.BatchRecord memory bat = registry.getBatch(petitionId, 0);
+        assertEq(uint8(bat.state), uint8(IPetitionRegistry.BatchState.Repudiated), "state != Repudiated");
+    }
+
+    function test_Dispute_RevertsAtUpperBound() public {
+        (bytes32 petitionId, IPetitionRegistry.PetitionParams memory p) = _registerDefault();
+        (bytes memory kzgCommit, bytes memory openings, bytes memory proofs) = _publishDisputableBatch(petitionId, p);
+
+        // First block where dispute is closed; resolve opens at the same block.
+        vm.roll(p.closeAtBlock + RESOLUTION_DEADLINE_BLOCKS);
+        vm.expectRevert(PetitionRegistry.DisputeWindowClosed.selector);
+        registry.dispute(petitionId, 0, 0, 0, 0x01, kzgCommit, openings, proofs);
+    }
+
+    /// Helper. Publishes one batch with a vh derived from sha256(kzgCommit)
+    /// so a follow-up dispute against batch 0 can pass the reconstructedVh
+    /// check. Returns the kzgCommit, all-zero openings, and all-zero proofs
+    /// shaped for a 0x01 (class-tag-out-of-set) dispute where the decoded
+    /// class_tag is 0 (not in classSet [826, 840]).
+    function _publishDisputableBatch(bytes32 petitionId, IPetitionRegistry.PetitionParams memory p)
+        internal
+        returns (bytes memory kzgCommit, bytes memory openings, bytes memory proofs)
+    {
+        kzgCommit = new bytes(48);
+        bytes32 vhBase = sha256(kzgCommit);
+        bytes32 vh = (vhBase & ~bytes32(uint256(0xff) << 248)) | bytes32(uint256(0x01) << 248);
+
+        bytes32 newRoot = bytes32(uint256(0xabc1));
+        bytes32 newIdtag = bytes32(uint256(0xabc2));
+        bytes32[] memory blobs = new bytes32[](1);
+        blobs[0] = vh;
+        vm.blobhashes(blobs);
+
+        IPetitionRegistry.BatchPublicInputs memory pi = _batchPi(petitionId, p, newRoot, newIdtag, vh);
+        vm.prank(relayer);
+        registry.publishBatch(pi, hex"00", new bytes(48), new bytes(48 * 24));
+
+        openings = new bytes(4 * 32);
+        proofs = new bytes(4 * 48);
     }
 
     function test_UpdateAlpha_Succeeds() public {

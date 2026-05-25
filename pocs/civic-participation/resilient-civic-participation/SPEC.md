@@ -66,7 +66,7 @@ Rejected alternatives:
 | `SigningClosed` | `Cooldown` | atomic with `SigningClosed` entry |
 | `Cooldown` | `DisputeWindow` | first transaction at block `>= close_at_block + 2h` |
 | `DisputeWindow` | `Resolved` | valid resolution SNARK submission at block `>= close_at_block + 14 days` |
-| `DisputeWindow` | `Unresolved` | `markUnresolved(petition_id)` at block `>= close_at_block + 14 days`; replaces `running_root` with the tombstone marker |
+| `DisputeWindow` | `Unresolved` | `markUnresolved(petition_id)` at block `>= close_at_block + 14 days + 1 hour grace`; replaces `running_root` with the tombstone marker |
 
 The Registry MUST enforce the current `state` at every entry point.
 
@@ -84,7 +84,7 @@ The Registry MUST enforce the current `state` at every entry point.
 
 1. Organizer constructs `(R, predicate_def, salt, class_set, class_thresholds, class_index, close_at_block)` and calls `register(petition_data, B)`.
 2. Registry MUST structurally validate the predicate and class-binding clause, MUST recompute and assert `predicate_hash`, MUST derive `petition_id`, MUST assign `slot = S` then increment `S`, MUST snapshot `alpha_at_registration`, and MUST assert `B >= alpha_at_registration * N_expected * predicate_op_count`.
-3. Registry MUST initialise `running_root`, `identity_tag_set_root`, `leaf_count`, `next_batch_index` and MUST emit `PetitionRegistered`.
+3. Registry MUST initialise `running_root`, `identity_tag_set_root`, `leaf_count` and MUST emit `PetitionRegistered`.
 
 The signing window MUST satisfy `close_at_block - registration_block <= 11.5 days * BLOCKS_PER_DAY`. Organizer MUST select an `R` that has been published on RI for at least 30 days. Each `class_thresholds[i]` MUST be at least 1; a zero threshold would collapse the resolution SNARK's per-class predicate to `true` regardless of participation and would zero the bounty floor.
 
@@ -107,8 +107,10 @@ The signing window MUST satisfy `close_at_block - registration_block <= 11.5 day
 
 #### Dispute
 
-1. Disputant submits `dispute(petition_id, batch_index, position_i, position_j, violation_type, opening_proofs)`. `position_j` is `None` for violation `0x01` and `Some(j)` for `0x02` and `0x03`. The record content at each position MUST be derived by the Registry from `opening_proofs` rather than submitted separately.
-2. Registry MUST validate openings via the `0x0A` precompile against `batch_versioned_hash`, MUST derive the record content for `position_i` (and `position_j` where applicable) from the openings, MUST apply the violation predicate against that derived content, MUST set the BatchRecord state at `batch_index` to `Repudiated`, MUST set every BatchRecord at index `> batch_index` whose state is `Active` to `Repudiated` (those records' `prior_running_root` is no longer canonical), MUST advance `next_batch_index` to `batch_index`, MUST roll back `running_root`, `identity_tag_set_root`, and `leaf_count` to the values held by the immediately preceding active batch (or the initial empty-IMT state if no such predecessor exists), and MUST emit `BatchRepudiated`.
+1. Disputant submits `dispute(petition_id, batch_index, position_i, position_j, violation_type, opening_proofs)` at block `< close_at_block + 14 days`. `position_j` is `None` for violation `0x01` and `Some(j)` for `0x02` and `0x03`. The record content at each position MUST be derived by the Registry from `opening_proofs` rather than submitted separately. Registry MUST reject dispute submissions at block `>= close_at_block + 14 days`; the dispute window upper bound matches the block at which `resolve` opens, so a late dispute cannot invalidate a Resolver's prior-state binding mid-flight.
+2. Registry MUST validate openings via the `0x0A` precompile against `batch_versioned_hash`, MUST derive the record content for `position_i` (and `position_j` where applicable) from the openings, MUST apply the violation predicate against that derived content, MUST set the BatchRecord state at `batch_index` to `Repudiated`, MUST set every BatchRecord at index `> batch_index` whose state is `Active` to `Repudiated` (those records' `prior_running_root` is no longer canonical), MUST roll back `running_root`, `identity_tag_set_root`, and `leaf_count` to the values held by the immediately preceding active batch (or the initial empty-IMT state if no such predecessor exists), and MUST emit `BatchRepudiated`.
+
+`batch_index` in `BatchPublished` events and in subsequent `dispute` calls is the storage position of the BatchRecord. Storage positions are assigned monotonically by append and never decrease, even across rollbacks. Repudiated BatchRecords remain at their original storage positions and are rejected by the `Active`-state precondition on `dispute`.
 
 Violation types:
 
@@ -126,7 +128,7 @@ Violation types:
 
 For batches whose `submitted_at_block` precedes resolution by more than 4096 epochs, the EIP-4844 blob is no longer retained on the consensus layer and Resolver MUST obtain its payload from a voluntary blob archive. The batch SNARK commitments on L1 still bind blob contents to `batch_versioned_hash`, so any archive copy is verifiable against the on-chain record.
 
-After `close_at_block + 14 days` with no valid resolution, any party MAY call `markUnresolved(petition_id)`. The Registry MUST refund the bounty (less a gas rebate to the caller, capped at 1% of the total bounty so a caller cannot starve the Organizer of their refund) to the Organizer, MUST replace `running_root` with the tombstone marker, MUST transition the petition state to `Unresolved`, and MUST emit `PetitionUnresolved`. This call is only permitted when the petition's state is `DisputeWindow`; the 14-day timer makes any earlier state unreachable.
+After `close_at_block + 14 days + 1 hour` with no valid resolution, any party MAY call `markUnresolved(petition_id)`. The Registry MUST refund the bounty (less a gas rebate to the caller, capped at 1% of the total bounty so a caller cannot starve the Organizer of their refund) to the Organizer, MUST replace `running_root` with the tombstone marker, MUST transition the petition state to `Unresolved`, and MUST emit `PetitionUnresolved`. This call is only permitted when the petition's state is `DisputeWindow`; the 14-day timer makes any earlier state unreachable. The 1-hour grace after the resolution deadline gives a Resolver exclusive access to the bounty so a `markUnresolved` caller cannot tombstone the petition in the same block where a valid resolution first becomes possible.
 
 ### Data Structures
 
@@ -179,7 +181,6 @@ PetitionRecord:
     running_root           bytes32
     identity_tag_set_root  bytes32
     leaf_count             uint64
-    next_batch_index       uint32
     resolution_proof       bytes
     b                      bool
     b_per_class            bool[]

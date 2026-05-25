@@ -158,7 +158,6 @@ pub struct PetitionRecord {
     pub running_root: Bytes32,
     pub identity_tag_set_root: Bytes32,
     pub leaf_count: u64,
-    pub next_batch_index: u32,
     pub resolution_proof: Vec<u8>,
     pub b: bool,
     pub b_per_class: Vec<bool>,
