@@ -140,8 +140,9 @@ At spend time the contract recomputes the expected accumulator from `frozenNulli
 uint64  public currentEpoch;
 mapping(uint64 => bytes32) public frozenNullifierRoots;
 // Active-epoch nullifier set is an indexed Merkle tree; the contract holds
-// only the current root, advanced by each spend and reset on rollover.
+// only the current root and a leaf counter, advanced by each spend and reset on rollover.
 bytes32 public activeNullifierRoot;
+uint64  public activeLeafCount;   // next free slot = canonical append index
 bytes32 public constant EMPTY_IMT_ROOT = /* root of an empty indexed Merkle tree, fixed at deployment */;
 
 /// PoC: owner-only. Production: decentralized trigger.
@@ -151,13 +152,15 @@ function rolloverEpoch() external onlyOwner;
 function expectedChainAccumulator(uint64 epochCreated) external view returns (bytes32);
 ```
 
-The active-epoch nullifier set is an indexed Merkle tree: leaves are sorted by value and each leaf carries a `(next_value, next_index)` pointer to the next-larger leaf. Absence of η is proven with a `low_leaf` where `low_leaf.value < η < low_leaf.next_value`; insertion of η updates the predecessor's pointer and adds the new leaf. The spend circuit performs this insertion in-circuit (see Spend Circuit diff), so the contract sees only `(pre_active_root, post_active_root)` and accepts the transition by verifying the spend proof. A valid sorted-low-leaf insertion is itself a non-membership proof of η in the prior tree, so no separate `activeNullifiers` mapping or uniqueness check is needed. On-chain active-tree state is a single `bytes32`; per-leaf state is held off-chain and reconstructible from event logs.
+The active-epoch nullifier set is an indexed Merkle tree: leaves are sorted by value and each leaf carries a `(next_value, next_index)` pointer to the next-larger leaf. Absence of η is proven with a `low_leaf` where `low_leaf.value < η < low_leaf.next_value`. Inserting η mutates two leaves: the predecessor (its `next_value`/`next_index` repoint to η) and a freshly written leaf at the next free slot. The spend circuit performs the insertion in-circuit (see Spend Circuit diff), so the contract sees only `(pre_active_root, post_active_root)` plus the leaf count and accepts the transition by verifying the spend proof. A valid sorted-low-leaf insertion is itself a non-membership proof of η in the prior tree, so no separate `activeNullifiers` mapping or uniqueness check is needed. On-chain active-tree state is one `bytes32` and one counter; per-leaf state is held off-chain and reconstructible from event logs.
 
-On `rolloverEpoch()`: `frozenNullifierRoots[currentEpoch] = activeNullifierRoot`, then `activeNullifierRoot = EMPTY_IMT_ROOT`, then `currentEpoch += 1`, emit `EpochRollover(uint64 epoch, bytes32 root)`.
+Canonical append. New leaves are placed at sequential indices starting from `activeLeafCount`, so the post-root is a deterministic function of the inserted-nullifier sequence. A replica replaying the emitted nullifiers in block-then-input order reproduces the identical tree and root. The circuit enforces both the sequential index and that the target slot was empty, so a spend cannot overwrite an existing nullifier leaf.
+
+On `rolloverEpoch()`: `frozenNullifierRoots[currentEpoch] = activeNullifierRoot`, then `activeNullifierRoot = EMPTY_IMT_ROOT`, `activeLeafCount = 0`, `currentEpoch += 1`, emit `EpochRollover(uint64 epoch, bytes32 root)`.
 
 Epoch cadence. The protocol does not impose an epoch duration; one epoch is whatever period elapses between two `rolloverEpoch()` calls. The PoC targets one rollover per month. Production deployments SHOULD pin a fixed cadence (e.g. one rollover every `N` blocks, or one per calendar period) so wallets and replicas can plan capacity. Coarse cadence directly bounds `k`, which sets both the per-spend on-chain accumulator hashing cost and the maximum chain-update work a wallet pays after an offline period.
 
-On every `transfer` / `withdraw`: read each input note's `epoch_created` from public inputs, revert if `accumulator != expectedChainAccumulator(epoch_created)`, revert if `pre_active_root != activeNullifierRoot`, then set `activeNullifierRoot = post_active_root`. The spend proof internally chains `k` sorted-low-leaf insertions (one per input nullifier) from `pre_active_root` to `post_active_root`; a repeated η across two inputs of the same tx fails the second insertion because the low-leaf check would no longer be strict.
+On every `transfer` / `withdraw`: read each input note's `epoch_created` from public inputs, revert if `accumulator != expectedChainAccumulator(epoch_created)`, revert if `pre_active_root != activeNullifierRoot` or `pre_leaf_count != activeLeafCount`, then set `activeNullifierRoot = post_active_root` and `activeLeafCount += k`. The spend proof internally chains `k` sorted-low-leaf insertions (one per input nullifier) from `pre_active_root` to `post_active_root`, appending at indices `pre_leaf_count .. pre_leaf_count + k - 1`; a repeated η across two inputs of the same tx fails the second insertion because the low-leaf check would no longer be strict.
 
 ```solidity
 function expectedChainAccumulator(uint64 epochCreated) public view returns (bytes32) {
@@ -251,8 +254,8 @@ On note creation (via `Deposit` or as a `Transfer` output), the owner generates 
 2. PIR-fetch `log(N)` sibling nodes per input commitment, reconstruct the root, and assert equality with the light-client-verified `commitment_root`.
 3. For each input note's `η_{currentEpoch}`, locate the predecessor leaf-index in the wallet's local sorted index of the current epoch's active tree and PIR-fetch the predecessor leaf and its sibling path. This is the only private nullifier query, since `η_{currentEpoch}` becomes the on-chain spend artifact. The wallet then composes `k` sorted-low-leaf insertion witnesses into a chain advancing from `pre_active_root` (the on-chain current root) to `post_active_root`.
 4. Run the spend circuit with per-input chain proofs, commitment-tree membership witnesses, the chained active-tree insertion witnesses, spending key, and output note data (`epoch_created = currentEpoch`).
-5. Submit via relayer with the proof and public inputs: per-input `(commitment, epoch_created, accumulator)` triples plus the global `(pre_active_root, post_active_root, current_epoch)`.
-6. Contract verifies the proof, checks `accumulator == expectedChainAccumulator(epoch_created)` per input and `pre_active_root == activeNullifierRoot`, sets `activeNullifierRoot = post_active_root`, inserts output commitments, emits `Transfer`.
+5. Submit via relayer with the proof and public inputs: per-input `(nullifier_active, epoch_created, accumulator)` triples plus the global `(pre_active_root, post_active_root, pre_leaf_count, current_epoch)`. Input commitments stay private.
+6. Contract verifies the proof, checks `accumulator == expectedChainAccumulator(epoch_created)` per input and `pre_active_root == activeNullifierRoot`, sets `activeNullifierRoot = post_active_root`, inserts output commitments, emits `Transfer` carrying the per-input `nullifier_active` values so replicas can rebuild the active indexed tree.
 
 PIR is used only for the commitment read (step 2) and the current-epoch low-leaf lookup (step 3); phantom-epoch witnesses (step 1) are served in clear. The server is never trusted for roots: every returned node is re-checked in-circuit against the light-client root.
 
@@ -296,6 +299,7 @@ Private inputs:
 - `prior_chain.{vk, proof, public_inputs}`: recursive witness; ignored when `is_base_case == true`.
 - `frozen_root_next: Field`: equal to `frozenNullifierRoots[prior_chain.public_inputs.epoch_validated_through]`.
 - `spending_key: Field`
+- `token, amount, salt: Field`: the input note's remaining commitment preimage (`commitment` and `epoch_created` are already public inputs).
 - `non_membership.{low_leaf, low_leaf_next_value, path, indices, leaf_index}`: sorted-low-leaf witness against `frozen_root_next`.
 
 Constraints:
@@ -314,6 +318,7 @@ Let `e_prev = prior_chain.public_inputs.epoch_validated_through`.
    - `prior_chain.public_inputs.epoch_created == epoch_created`
    - `epoch_validated_through == e_prev + 1` (advances by one rollover; see "Epoch Cadence" below for what one rollover represents)
    - `accumulator == poseidon2(prior_chain.public_inputs.accumulator, frozen_root_next)`
+   - Key binding: `owner_pubkey == poseidon(spending_key)` and `commitment == poseidon(token, amount, owner_pubkey, salt, epoch_created)`. The public `commitment` thus pins `spending_key` to the note's real owner key, so the nullifier below is the one that would actually have been published if the note were spent in `e_prev`. Without this, a prover could supply a fabricated `spending_key`, derive a phantom η that is trivially absent, and pass non-membership while the real nullifier sits in the frozen tree.
    - `η = poseidon(commitment, spending_key, e_prev)`
    - Sorted-low-leaf check: `low_leaf < η < low_leaf_next_value`, and the supplied Merkle path with `low_leaf` at `leaf_index` reconstructs to `frozen_root_next`.
 
@@ -325,13 +330,16 @@ Outer artifact, verified on-chain. MUST be zero-knowledge.
 
 New public inputs:
 
-- Per input note `i`: `commitment_in_i: Field`, `epoch_created_in_i: u64`, `chain_accumulator_in_i: Field`.
-- Global: `current_epoch: u64`, `pre_active_root: Field`, `post_active_root: Field`.
+- Per input note `i`: `nullifier_active_i: Field`, `epoch_created_in_i: u64`, `chain_accumulator_in_i: Field`.
+- Global: `current_epoch: u64`, `pre_active_root: Field`, `post_active_root: Field`, `pre_leaf_count: u64` (in addition to the parent's output commitments and `commitment_root`).
+
+`nullifier_active_i` is public and emitted in the `Transfer` / `Withdraw` event so replicas can rebuild the active indexed tree from the event log. `commitment_in_i` is kept private (below) for unlinkability, matching the parent: only the nullifier becomes the public spend artifact, never the input commitment.
 
 New private inputs:
 
+- Per input note `i`: `commitment_in_i: Field`, proven a member of the commitment tree against `commitment_root`.
 - Per input note `i`: `chain_proof_i.{vk, proof, public_inputs}`.
-- Per input note `i`: `active_insertion_i.{low_leaf, low_leaf_index, low_leaf_path, new_leaf_index}`, the sorted-low-leaf insertion witness against the active nullifier tree.
+- Per input note `i`: `active_insertion_i.{low_leaf, low_leaf_index, low_leaf_path, new_leaf_path}`, the indexed-tree insertion witness. `low_leaf_path` authenticates the predecessor at `low_leaf_index`; `new_leaf_path` authenticates the (empty) append slot. The append index is not a free input: it is fixed to `pre_leaf_count + (i - 1)` by the constraints below.
 
 New constraints (per input note `i`):
 
@@ -341,28 +349,26 @@ New constraints (per input note `i`):
 4. `chain_proof_i.public_inputs.epoch_created == epoch_created_in_i`
 5. `chain_proof_i.public_inputs.accumulator == chain_accumulator_in_i`
 6. `chain_proof_i.public_inputs.epoch_validated_through == current_epoch` (for a fresh note this holds via the base case).
-7. `nullifier_active_i = poseidon(commitment_in_i, spending_key, current_epoch)` (replaces parent's `poseidon2(commitment, spending_key)`).
+7. `nullifier_active_i == poseidon(commitment_in_i, spending_key, current_epoch)` (replaces parent's `poseidon2(commitment, spending_key)`); the result is the public input of the same name and is emitted in the event.
 
 New constraint (per output note `j`):
 
 8. `commitment_out_j == poseidon(token_out_j, amount_out_j, owner_out_j, salt_out_j, current_epoch)` (outputs minted with `epoch_created == current_epoch`).
 
-Active-tree insertion chain (single pass threading the root through all `k` input nullifiers):
+Active-tree insertion chain (single pass threading the root through all `k` input nullifiers). Let `r_0 = pre_active_root`. For each input `i = 1..k`, with canonical append index `new_leaf_index = pre_leaf_count + (i - 1)`:
 
-Let `r_0 = pre_active_root`. For each input `i = 1..k`:
+1. Predecessor membership and non-membership: `low_leaf` at `low_leaf_index` with `low_leaf_path` reconstructs to `r_{i-1}`, and `low_leaf.value < nullifier_active_i < low_leaf.next_value`.
+2. Mutate predecessor: `low_leaf_updated = (value = low_leaf.value, next_value = nullifier_active_i, next_index = new_leaf_index)`. Recompute the intermediate root `r'` from `r_{i-1}` along `low_leaf_path`.
+3. Empty-slot check: `new_leaf_path` proves the slot at `new_leaf_index` holds the empty leaf in `r'`. This prevents overwriting an existing nullifier leaf.
+4. Write new leaf: `new_leaf = (value = nullifier_active_i, next_value = low_leaf.next_value, next_index = low_leaf.next_index)` at `new_leaf_index`. Recompute `r_i` from `r'` along `new_leaf_path`.
 
-- Sorted-low-leaf non-membership: `active_insertion_i.low_leaf.value < nullifier_active_i < active_insertion_i.low_leaf.next_value`, and `low_leaf` at `low_leaf_index` with `low_leaf_path` reconstructs to `r_{i-1}`.
-- Pointer update of the predecessor: `low_leaf_updated = (value = low_leaf.value, next_value = nullifier_active_i, next_index = new_leaf_index)`.
-- New leaf insertion: `new_leaf = (value = nullifier_active_i, next_value = low_leaf.next_value, next_index = low_leaf.next_index)` placed at `new_leaf_index`.
-- `r_i =` root recomputed from `r_{i-1}` with both leaf updates applied along the supplied path.
+Final constraints: `r_k == post_active_root` and the append range is exactly `[pre_leaf_count, pre_leaf_count + k - 1]` (the contract sets `activeLeafCount += k`).
 
-Final constraint: `r_k == post_active_root`.
-
-Double-spend prevention follows: any prior occurrence of `nullifier_active_i` in the active tree (from a past spend, or from an earlier input in the same tx) breaks the strict `low_leaf.value < nullifier_active_i < low_leaf.next_value` inequality and makes the proof unsatisfiable.
+Two leaves change per insertion (predecessor and new slot), so each step carries two paths and is applied in sequence: the predecessor mutation produces `r'`, and the new-leaf write is proven against `r'`, since the two positions may share internal nodes. Double-spend prevention follows from step 1: any prior occurrence of `nullifier_active_i` in the active tree (from a past spend, or an earlier input in the same tx) breaks the strict `low_leaf.value < nullifier_active_i < low_leaf.next_value` inequality and makes the proof unsatisfiable.
 
 Input commitment reconstruction (changed from parent): each input note's commitment is reconstructed inside the circuit as `commitment_in_i == poseidon(token_in_i, amount_in_i, owner_in_i, salt_in_i, epoch_created_in_i)`, gaining `epoch_created_in_i` over the parent's four-field preimage, and the commitment-tree membership witness is verified against this reconstructed value. The membership-proof shape (Merkle path against `commitment_root`) is unchanged; only the leaf preimage differs. Value preservation and token consistency are unchanged from the parent SPEC.
 
-Contract-side public-input checks: `chain_accumulator_in_i == expectedChainAccumulator(epoch_created_in_i)` per input, `current_epoch == self.currentEpoch`, `pre_active_root == self.activeNullifierRoot`. On success: `self.activeNullifierRoot = post_active_root`.
+Contract-side public-input checks: `chain_accumulator_in_i == expectedChainAccumulator(epoch_created_in_i)` per input, `current_epoch == self.currentEpoch`, `pre_active_root == self.activeNullifierRoot`, `pre_leaf_count == self.activeLeafCount`. On success: `self.activeNullifierRoot = post_active_root` and `self.activeLeafCount += k`.
 
 ---
 
@@ -375,7 +381,7 @@ Contract-side public-input checks: `chain_accumulator_in_i == expectedChainAccum
 | Malicious PIR / state-replica server | Sees query traffic; MAY serve incorrect nodes | InsPIRe single-server malicious-server model for privacy; every returned node is re-checked against a light-client-verified root inside a circuit |
 | Oblivious-sync server profiling a wallet | Receives phantom nullifiers `η_e` in clear; MAY profile a wallet's note ages and portfolio size, and across colluding servers link the same note across providers | Phantoms have no on-chain footprint, so the public spend stays unlinkable to these queries; the leak is per-wallet metadata to the serving party only. PoC accepts this; production SHOULD use oblivious nullifier derivation and synchronization (Bowe and Miers 2025/2031) so the service stays oblivious. See Limitations. |
 | Untrusted RPC for root reads | MAY misreport `commitment_root` or `frozenNullifierRoots[e]` | Roots MUST be read through a light client verifying storage proofs against consensus |
-| Malicious wallet attempting cross-epoch double-spend | Holds spending key; MAY spend the same note in two epochs or forge a chain against fabricated roots | `epoch_created` bound into commitment; spend circuit enforces `chain.epoch_validated_through == current_epoch`; contract enforces `accumulator == expectedChainAccumulator(epoch_created)`; chain VK constrained to `FixedVK` |
+| Malicious wallet attempting cross-epoch double-spend | Holds spending key; MAY spend the same note in two epochs, forge a chain against fabricated roots, or build the chain under a fabricated spending key | `epoch_created` bound into commitment; spend circuit enforces `chain.epoch_validated_through == current_epoch`; contract enforces `accumulator == expectedChainAccumulator(epoch_created)`; chain VK constrained to `FixedVK`; chain-update circuit binds `spending_key` to the public `commitment` via `owner_pubkey == poseidon(spending_key)`, so phantom non-membership cannot be proven under a fake key |
 | Network observer | Sees IP, timing, size of PIR sessions | Out of scope; production SHOULD use Tor or batched windows |
 
 The parent threat model (public observer, malicious relayer, compromised viewing key, malicious compliance authority) is unchanged.
