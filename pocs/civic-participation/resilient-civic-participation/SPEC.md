@@ -94,7 +94,7 @@ The signing window MUST satisfy `close_at_block - registration_block <= 11.5 day
 2. `(v_slot, _) = Poseidon1Sponge.absorb(DOMAIN_FSRT_PRG, s_slot).squeeze(2)`; `class_tag = attr[class_index]`.
 3. `nullifier = Poseidon1(DOMAIN_NULLIFIER, v_slot, petition_id, class_index, class_tag, identity_secret)`; `identity_tag = Poseidon1(DOMAIN_IDTAG, v_slot, petition_id)`.
 4. Signer MUST build the signer SNARK and MUST submit it with `(nullifier, identity_tag, class_tag)` to a relayer.
-5. After L1 finality of the carrying batch, signer MUST overwrite `s_curr` past `s_slot`, advance the caterpillar frontier, and set `t <- slot + 1`. The signer MUST journal this transition to fsync'd storage before the signing counts as complete.
+5. After L1 finality of the carrying batch, signer MUST advance the caterpillar frontier and set `t <- slot + 1`, and MAY advance `s_curr` past `s_slot` for use in signing other petitions. Signer MUST retain `s_slot` and the Merkle path from `v_slot` to `chain_root` in `pending_retention` (see [Off-Chain Signer State](#off-chain-signer-state)) until block `close_at_block + 14 days`; at or after that block, the carrying batch is no longer rollbackable and the signer MUST overwrite the retained `s_slot` and Merkle path. Retention is required because a later in-window dispute against an earlier batch cascades into repudiation of every subsequent active batch (see [Dispute](#dispute)), and the signer needs `s_slot` plus the Merkle path to rebuild the signer SNARK for resubmission. Worst-case retention is bounded by 11.5 days (maximum signing window) + 14 days (dispute window) = 25.5 days from signing. The signer MUST journal each transition to fsync'd storage before the corresponding signing counts as complete.
 
 `class_tag` is exposed as a public input on the signer SNARK and is published per-record in the blob payload. This is intentional public outcome metadata. The cost is reflected in the signer-level unlinkability bound (see [Guarantees](#guarantees)), where `k` is restricted to RI signers whose `attr[class_index]` matches each petition's published `class_tag`.
 
@@ -246,7 +246,7 @@ Cross-field binding: Batch SNARK constraint 8. Blob retention: 4096 epochs (EIP-
 
 #### Off-Chain Signer State
 
-A signer MUST maintain the following local state (840B total):
+A signer MUST maintain the following local state (840B fixed plus ~812B per in-flight petition in `pending_retention`):
 
 | Field | Size | Role |
 |-------|------|------|
@@ -255,6 +255,7 @@ A signer MUST maintain the following local state (840B total):
 | `caterpillar` | 768B | Right-sibling frontier toward leaf `t` |
 | `chain_root` | 32B | Bound in `attr_hash` |
 | `attr_version` | 4B | Bound in `attr_hash` |
+| `pending_retention` | ~812B per entry | Per in-flight petition: `(petition_id, slot, s_slot, merkle_path_to_chain_root[24], retain_until_block)`; each entry held until `retain_until_block = close_at_block + 14 days` then overwritten |
 
 `caterpillar` stores 24 BN254 scalars (32-byte big-endian); empty levels hold the empty-subtree Poseidon1 hash; frontier update is `O(log N)` per chain advance [Szydlo]. `attr_version` starts at `0` and increments on each re-enrollment posting a new `attr_hash` leaf.
 
@@ -307,7 +308,7 @@ Implementations MUST embed these constants at compile time. The Noir circuits (`
 
 ### FSRT Chain
 
-Depth-24 Poseidon1 Merkle tree over `N = 2^24` per-slot values from `(v_i, s_{i+1}) = Poseidon1Sponge.absorb(DOMAIN_FSRT_PRG, s_i).squeeze(2)` for `i in [0, N)`. `chain_root` binds into `attr_hash` at RI enrollment. After each finalised signing at slot `k`, the signer MUST, in order, derive `(_, s_{k+1}) = Poseidon1Sponge.absorb(DOMAIN_FSRT_PRG, s_k).squeeze(2)`, set `s_curr <- s_{k+1}` (overwriting `s_k` in place), call `caterpillar.advance(k)`, and set `t <- k + 1`; the transition MUST be journaled to fsync'd storage before it counts as final. `t` is monotone; the global slot counter `S` is bounded by `N - 1 = 2^24 - 1`.
+Depth-24 Poseidon1 Merkle tree over `N = 2^24` per-slot values from `(v_i, s_{i+1}) = Poseidon1Sponge.absorb(DOMAIN_FSRT_PRG, s_i).squeeze(2)` for `i in [0, N)`. `chain_root` binds into `attr_hash` at RI enrollment. After each finalised signing at slot `k` for petition `X`, the signer MUST, in order: copy `(s_k, merkle_path_k_to_chain_root)` into `pending_retention` with retain-until block `close_at_block(X) + 14 days`; derive `(_, s_{k+1}) = Poseidon1Sponge.absorb(DOMAIN_FSRT_PRG, s_k).squeeze(2)`; set `s_curr <- s_{k+1}` (overwriting `s_k` in the main chain head while leaving the retained copy intact); call `caterpillar.advance(k)`; and set `t <- k + 1`. The transition MUST be journaled to fsync'd storage before it counts as final. At or after `close_at_block(X) + 14 days`, the signer MUST overwrite the retained `(s_k, merkle_path)` entry. `t` is monotone; the global slot counter `S` is bounded by `N - 1 = 2^24 - 1`.
 
 ### Signer SNARK
 
@@ -376,18 +377,18 @@ Adversary capabilities:
 
 - Passive observation of L1 indefinitely, the blob carrier during the EIP-4844 retention window, and any voluntary blob archive thereafter.
 - Compelled key disclosure of any non-signer party (Organizer, Relayer, Resolver, Disputant, archiver).
-- Compelled key disclosure or device compromise of a signer, yielding `(identity_secret, attr_vector, RI Merkle path, s_curr, t, caterpillar, chain_root)` before or after the ratchet for slot `s_slot`.
+- Compelled key disclosure or device compromise of a signer, yielding `(identity_secret, attr_vector, RI Merkle path, s_curr, t, caterpillar, chain_root, pending_retention)` before or after the ratchet for slot `s_slot`.
 - Cross-petition correlation against any observable, including predicate-match intersections.
 - Sybil enrolment of multiple RI identities.
 - Absence of an honest disputant; published batches may go unchallenged for the duration of the dispute window.
 
 Honest-party assumptions: Poseidon1 sponge security and UltraHonk soundness; EIP-4844 blob commitment binding; L1 censorship-resistant inclusion and finality; permissionless Relayer entry such that Signers can resubmit on Relayer-side censorship; Sybil resistance from RI.
 
-Out of scope: network transport anonymity beyond what Tor or an equivalent provides; real-time device compromise before the chain advances past `s_slot`; forensic recovery of overwritten storage on commodity media without `TRIM`.
+Out of scope: network transport anonymity beyond what Tor or an equivalent provides; real-time device compromise during the `pending_retention` window for `s_slot`; forensic recovery of overwritten storage on commodity media without `TRIM`.
 
 ### Guarantees
 
-- **Per-petition forward secrecy.** An adversary holding post-signing runtime state, `identity_secret`, `attr_vector`, the RI Merkle path, and the full blob and L1 archives recovers `v_{k'}`, `s_{k'}`, or any value computationally non-trivial in `v_{k'}` (including the slot-`k'` nullifier and identity tag) for any slot `k' < t` with advantage at most `(t - k') * eps_sponge`, under the Poseidon1-sponge PRG assumption.
+- **Per-petition forward secrecy.** An adversary holding post-signing runtime state, `identity_secret`, `attr_vector`, the RI Merkle path, `pending_retention`, and the full blob and L1 archives recovers `v_{k'}`, `s_{k'}`, or any value computationally non-trivial in `v_{k'}` (including the slot-`k'` nullifier and identity tag) for any slot `k' < t` whose `pending_retention` entry has already been overwritten with advantage at most `(t - k') * eps_sponge`, under the Poseidon1-sponge PRG assumption. Slots with live `pending_retention` entries are recovered directly from that buffer.
 - **Signer-level unlinkability.** For petitions `X1`, `X2` and records `r_1 in batch_{X1}`, `r_2 in batch_{X2}`, the adversary's advantage in deciding "same signer" exceeds `1/k - negl` only when it holds at least one of `v_{slot(X1)}` or `v_{slot(X2)}`. `k` is the cardinality of Signers in `R` whose `attr_vector` satisfies both predicates and whose `attr[class_index]` matches each petition's published `class_tag`. The public per-record `class_tag` is what restricts `k` to class-matched signers rather than all signers matching both predicates.
 - **One signature per RI leaf per petition.** For petition `X` and RI leaf `L_RI`, at most one record in `running_root` derives from `L_RI` after batching and dispute resolution.
 - **Outcome verifiability.** A verifier holding L1 chain state, the SRS identified by `srs_hash`, and the Poseidon1 parameter set re-verifies the resolution SNARK, confirming `b` and `b_per_class`.
