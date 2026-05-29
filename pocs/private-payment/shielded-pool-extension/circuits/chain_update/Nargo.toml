@@ -2,7 +2,8 @@
 name = "chain_update"
 type = "bin"
 authors = [""]
-compiler_version = ">=0.36.0"
+compiler_version = ">=1.0.0"
 
 [dependencies]
-poseidon = { tag = "v0.1.1", git = "https://github.com/noir-lang/poseidon" }
+poseidon = { tag = "v0.3.0", git = "https://github.com/noir-lang/poseidon" }
+bb_proof_verification = { git = "https://github.com/AztecProtocol/aztec-packages/", tag = "v5.0.0-nightly.20260324", directory = "barretenberg/noir/bb_proof_verification" }
