@@ -9,9 +9,10 @@ import {LeanIMT, LeanIMTData} from "@zk-kit/packages/lean-imt/contracts/LeanIMT.
 /// @title ShieldedPoolExt
 /// @notice Privacy-preserving payment pool extended with epoch-based nullifiers
 ///         and PIR-served reads (research prototype). See ../../SPEC.md.
-/// @dev Slice 1.1 scope: deposits only. `currentEpoch` is fixed at 0; epoch
-///      rollover, frozen nullifier roots, and the two-proof spend path
-///      (wallet spend proof + relayer insertion proof) arrive in later slices.
+/// @dev Current scope: deposits + epoch rollover. `currentEpoch` advances via
+///      `rolloverEpoch()`, freezing each epoch's active-nullifier root. The
+///      two-proof spend path (wallet spend proof + relayer insertion proof) that
+///      advances `activeNullifierRoot`/`activeLeafCount` arrives in a later slice.
 contract ShieldedPoolExt {
     using SafeERC20 for IERC20;
     using LeanIMT for LeanIMTData;
@@ -43,10 +44,30 @@ contract ShieldedPoolExt {
     address public owner;
 
     /// @notice Current epoch, bound into each deposited note's commitment as
-    ///         `epoch_created`. Advanced by `rolloverEpoch()` (added later).
+    ///         `epoch_created`. Advanced by `rolloverEpoch()`.
     uint64 public currentEpoch;
 
+    /// @notice Frozen active-nullifier-tree root per past epoch `e`.
+    mapping(uint64 => bytes32) public frozenNullifierRoots;
+
+    /// @notice Root of the current epoch's active nullifier tree. Advanced by the
+    ///         spend path (later slice); reset to `emptyImtRoot` on rollover.
+    bytes32 public activeNullifierRoot;
+
+    /// @notice Next free leaf index in the active nullifier tree (canonical append
+    ///         index). Starts at 1: index 0 is the indexed tree's genesis leaf
+    ///         (the bootstrap low-leaf for sorted-low-leaf insertion), so real
+    ///         nullifiers append from index 1. NB: the SPEC's rolloverEpoch
+    ///         pseudocode resets this to 0; the genesis-leaf bootstrap makes 1 the
+    ///         correct value (reconciliation flagged in review).
+    uint64 public activeLeafCount;
+
+    /// @notice Root of an empty active nullifier tree (genesis-leaf-only tree).
+    ///         The SPEC's `EMPTY_IMT_ROOT`; fixed at deployment.
+    bytes32 public immutable emptyImtRoot;
+
     event Deposit(bytes32 indexed commitment, address indexed token, uint256 amount, bytes encryptedNote);
+    event EpochRollover(uint64 indexed epoch, bytes32 root);
     event TokenAdded(address indexed token);
     event TokenRemoved(address indexed token);
     event DepositVerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
@@ -69,9 +90,12 @@ contract ShieldedPoolExt {
         if (msg.sender != owner) revert OnlyOwner();
     }
 
-    constructor(address _depositVerifier) {
+    constructor(address _depositVerifier, bytes32 _emptyImtRoot) {
         if (_depositVerifier == address(0)) revert ZeroAddress();
         depositVerifier = IVerifier(_depositVerifier);
+        emptyImtRoot = _emptyImtRoot;
+        activeNullifierRoot = _emptyImtRoot;
+        activeLeafCount = 1; // index 0 is the indexed tree's genesis leaf
         owner = msg.sender;
         emit OwnershipTransferred(address(0), msg.sender);
     }
@@ -117,6 +141,22 @@ contract ShieldedPoolExt {
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
         emit Deposit(commitment, token, amount, encryptedNote);
+    }
+
+    /// @notice Roll over to the next epoch: freeze the current active-nullifier
+    ///         root and reset the active tree. PoC: owner-only; production would
+    ///         use a decentralized trigger.
+    /// @dev Emits `EpochRollover(frozenEpoch, frozenRoot)`.
+    function rolloverEpoch() external onlyOwner {
+        uint64 frozenEpoch = currentEpoch;
+        bytes32 frozenRoot = activeNullifierRoot;
+
+        frozenNullifierRoots[frozenEpoch] = frozenRoot;
+        activeNullifierRoot = emptyImtRoot;
+        activeLeafCount = 1;
+        currentEpoch = frozenEpoch + 1;
+
+        emit EpochRollover(frozenEpoch, frozenRoot);
     }
 
     /// @notice Add a supported token.
