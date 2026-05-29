@@ -74,6 +74,12 @@ chmod +x scripts/generate-verifiers.sh
 - Parent SPEC: [`../shielded-pool/SPEC.md`](../shielded-pool/SPEC.md)
 - Parent REQUIREMENTS: [`../REQUIREMENTS.md`](../REQUIREMENTS.md)
 
+## Implementation shortcuts
+
+[SPEC.md](./SPEC.md) describes the full protocol, including the parent's KYC attestation registry and flows (unchanged by this extension). Where this PoC's implementation deliberately diverges from the spec, it is noted here:
+
+- **KYC attestation is not enforced in the deposit circuit.** The deposit proves only commitment well-formedness and the `epoch_created` binding; it does not verify attestation membership. This is an implementation-scope choice — attestation is orthogonal to the PIR + epoch-nullifier mechanisms this extension demonstrates, and is fully exercised in the parent [shielded-pool](../shielded-pool/) PoC.
+
 ## Security disclaimer
 
-Research prototype, not production-ready. Cryptographic assumptions and known shortcuts are documented in [SPEC.md](./SPEC.md).
+Research prototype, not production-ready. Cryptographic assumptions are documented in [SPEC.md](./SPEC.md); implementation shortcuts are listed above.

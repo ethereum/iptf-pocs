@@ -155,4 +155,36 @@ mod tests {
             poseidon5(token, amount, owner, salt, e1)
         );
     }
+
+    // Cross-implementation vectors. These MUST equal the Noir
+    // `poseidon::bn254::hash_n` outputs for the same inputs, or off-chain
+    // commitments/nullifiers diverge from the in-circuit reconstruction. The
+    // deposit circuit pins POSEIDON5_12345 against Noir
+    // (`test_poseidon5_matches_rust`); the chain-update/spend circuits pin
+    // POSEIDON3_123 likewise. If a vector here changes (e.g. a poseidon lib
+    // bump), the matching Noir test MUST be updated in lockstep.
+    const POSEIDON3_123: &str =
+        "0x0e7732d89e6939c0ff03d5e58dab6302f3230e269dc5b968f725df34ab36d732";
+    const POSEIDON5_12345: &str =
+        "0x0dab9449e4a1398a15224c0b15a49d598b2174d305a316c918125f8feeb123c0";
+
+    fn small(n: u64) -> B256 {
+        B256::from(alloy::primitives::U256::from(n))
+    }
+
+    #[test]
+    fn test_poseidon3_known_vector() {
+        assert_eq!(
+            poseidon3(small(1), small(2), small(3)),
+            POSEIDON3_123.parse::<B256>().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_poseidon5_known_vector() {
+        assert_eq!(
+            poseidon5(small(1), small(2), small(3), small(4), small(5)),
+            POSEIDON5_12345.parse::<B256>().unwrap()
+        );
+    }
 }
