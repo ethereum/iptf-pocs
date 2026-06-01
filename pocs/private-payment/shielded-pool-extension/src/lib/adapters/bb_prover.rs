@@ -21,6 +21,8 @@ use ark_bn254::Fr;
 use ark_ff::PrimeField;
 use serde::Serialize;
 
+use crate::domain::indexed_merkle::InsertionWitness;
+
 /// UltraHonk VK length in field elements (bb 5.0-nightly).
 pub const ULTRA_VK_LENGTH_IN_FIELDS: usize = 115;
 /// UltraHonk ZK recursive-proof length in field elements.
@@ -159,6 +161,63 @@ pub struct EvmProof {
     pub public_inputs: Vec<u8>,
 }
 
+/// `Prover.toml` shape for the deposit circuit (field names match its `main`).
+#[derive(Serialize)]
+pub struct DepositInput {
+    pub commitment: String,
+    pub token: String,
+    pub amount: String,
+    pub current_epoch_at_deposit: u64,
+    pub owner_pubkey: String,
+    pub salt: String,
+}
+
+/// `Prover.toml` shape for the insertion circuit (k = N_INSERTS). Build it from a
+/// relayer insertion via [`InsertionToml::from_witnesses`].
+#[derive(Serialize)]
+pub struct InsertionToml {
+    pub pre_active_root: String,
+    pub post_active_root: String,
+    pub pre_leaf_count: u32,
+    pub nullifiers: Vec<String>,
+    pub low_value: Vec<String>,
+    pub low_next_value: Vec<String>,
+    pub low_next_index: Vec<String>,
+    pub low_path_bits: Vec<Vec<bool>>,
+    pub low_siblings: Vec<Vec<String>>,
+    pub new_siblings: Vec<Vec<String>>,
+}
+
+impl InsertionToml {
+    /// Map a relayer insertion (pre/post roots, leaf count, the ordered nullifier
+    /// list, and the per-insertion [`InsertionWitness`]es) to the insertion
+    /// circuit's `Prover.toml`. The circuit derives each new-leaf slot from
+    /// `pre_leaf_count + i`, so only the predecessor index is supplied — as its
+    /// little-endian path bits.
+    pub fn from_witnesses(
+        pre_active_root: B256,
+        post_active_root: B256,
+        pre_leaf_count: u64,
+        nullifiers: &[B256],
+        witnesses: &[InsertionWitness],
+    ) -> Self {
+        let bits = |index: u64| (0..32).map(|i| (index >> i) & 1 == 1).collect::<Vec<bool>>();
+        let fields = |xs: &[B256]| xs.iter().map(|x| field_to_decimal(*x)).collect::<Vec<String>>();
+        Self {
+            pre_active_root: field_to_decimal(pre_active_root),
+            post_active_root: field_to_decimal(post_active_root),
+            pre_leaf_count: pre_leaf_count as u32,
+            nullifiers: nullifiers.iter().map(|n| field_to_decimal(*n)).collect(),
+            low_value: witnesses.iter().map(|w| field_to_decimal(w.low_leaf.value)).collect(),
+            low_next_value: witnesses.iter().map(|w| field_to_decimal(w.low_leaf.next_value)).collect(),
+            low_next_index: witnesses.iter().map(|w| w.low_leaf.next_index.to_string()).collect(),
+            low_path_bits: witnesses.iter().map(|w| bits(w.low_leaf_index)).collect(),
+            low_siblings: witnesses.iter().map(|w| fields(&w.low_leaf_siblings)).collect(),
+            new_siblings: witnesses.iter().map(|w| fields(&w.new_leaf_siblings)).collect(),
+        }
+    }
+}
+
 /// Shells `nargo` + `bb` to produce chain-update (recursive) proofs.
 pub struct BbProver {
     /// Extension root (the Noir workspace root; `target/` and `circuits/` live here).
@@ -288,23 +347,23 @@ impl BbProver {
         })
     }
 
-    fn transfer_circuit_json(&self) -> PathBuf {
-        self.project_root.join("target").join("transfer.json")
+    fn evm_circuit_json(&self, package: &str) -> PathBuf {
+        self.project_root.join("target").join(format!("{package}.json"))
     }
 
-    fn transfer_circuit_dir(&self) -> PathBuf {
-        self.project_root.join("circuits").join("transfer")
+    fn evm_circuit_dir(&self, package: &str) -> PathBuf {
+        self.project_root.join("circuits").join(package)
     }
 
-    fn transfer_artifact_dir(&self) -> PathBuf {
-        self.transfer_circuit_dir().join("target")
+    fn evm_artifact_dir(&self, package: &str) -> PathBuf {
+        self.evm_circuit_dir(package).join("target")
     }
 
-    /// Compile the transfer circuit and write its EVM-target (keccak) VK — the
-    /// same VK `scripts/generate-verifiers.sh` turns into `TransferVerifier.sol`.
-    pub fn write_transfer_vk(&self) -> Result<(), BbError> {
+    /// Compile `package` and write its EVM-target (keccak) VK — the same VK
+    /// `scripts/generate-verifiers.sh` turns into the Solidity verifier.
+    pub fn write_evm_vk(&self, package: &str) -> Result<(), BbError> {
         let compile = Command::new("nargo")
-            .args(["compile", "--package", "transfer"])
+            .args(["compile", "--package", package])
             .current_dir(&self.project_root)
             .output()?;
         if !compile.status.success() {
@@ -314,14 +373,14 @@ impl BbProver {
             ));
         }
 
-        std::fs::create_dir_all(self.transfer_artifact_dir())?;
+        std::fs::create_dir_all(self.evm_artifact_dir(package))?;
         let out = Command::new("bb")
             .args([
                 "write_vk",
                 "-b",
-                self.transfer_circuit_json().to_str().unwrap(),
+                self.evm_circuit_json(package).to_str().unwrap(),
                 "-o",
-                self.transfer_artifact_dir().to_str().unwrap(),
+                self.evm_artifact_dir(package).to_str().unwrap(),
                 "-t",
                 "evm",
             ])
@@ -335,17 +394,17 @@ impl BbProver {
         Ok(())
     }
 
-    /// Prove the transfer spend circuit (EVM target). The in-circuit recursive
-    /// verify of each input's chain proof runs during `nargo execute`, so a
-    /// successful return is itself evidence the chain proofs recursively verified
-    /// under an EVM-targeted outer proof. Requires [`Self::write_transfer_vk`] first.
-    pub fn prove_transfer(&self, input: &TransferInput) -> Result<EvmProof, BbError> {
-        let toml = toml::to_string(input).expect("serialize transfer input");
-        std::fs::write(self.transfer_circuit_dir().join("Prover.toml"), toml)?;
+    /// Prove `package` (EVM target) from its `Prover.toml`-shaped `input`. Any
+    /// in-circuit recursive verify (e.g. the transfer circuit's chain-proof
+    /// verify) runs during `nargo execute`, so a successful return implies it
+    /// verified. Requires [`Self::write_evm_vk`] for `package` first.
+    pub fn prove_evm<T: Serialize>(&self, package: &str, input: &T) -> Result<EvmProof, BbError> {
+        let toml = toml::to_string(input).expect("serialize prover input");
+        std::fs::write(self.evm_circuit_dir(package).join("Prover.toml"), toml)?;
 
         let exec = Command::new("nargo")
             .args(["execute", "witness"])
-            .current_dir(self.transfer_circuit_dir())
+            .current_dir(self.evm_circuit_dir(package))
             .output()?;
         if !exec.status.success() {
             return Err(BbError::Nargo(
@@ -358,13 +417,13 @@ impl BbProver {
             .args([
                 "prove",
                 "-b",
-                self.transfer_circuit_json().to_str().unwrap(),
+                self.evm_circuit_json(package).to_str().unwrap(),
                 "-w",
                 self.workspace_witness().to_str().unwrap(),
                 "-k",
-                self.transfer_artifact_dir().join("vk").to_str().unwrap(),
+                self.evm_artifact_dir(package).join("vk").to_str().unwrap(),
                 "-o",
-                self.transfer_artifact_dir().to_str().unwrap(),
+                self.evm_artifact_dir(package).to_str().unwrap(),
                 "-t",
                 "evm",
             ])
@@ -377,15 +436,15 @@ impl BbProver {
         }
 
         Ok(EvmProof {
-            proof: std::fs::read(self.transfer_artifact_dir().join("proof"))?,
-            public_inputs: std::fs::read(self.transfer_artifact_dir().join("public_inputs"))?,
+            proof: std::fs::read(self.evm_artifact_dir(package).join("proof"))?,
+            public_inputs: std::fs::read(self.evm_artifact_dir(package).join("public_inputs"))?,
         })
     }
 
-    /// Verify the last transfer proof (EVM target) against its VK via `bb verify`,
-    /// reading the `vk` / `proof` / `public_inputs` left in the artifact dir.
-    pub fn verify_transfer_evm(&self) -> Result<bool, BbError> {
-        let dir = self.transfer_artifact_dir();
+    /// Verify `package`'s last EVM proof against its VK via `bb verify`, reading
+    /// the `vk` / `proof` / `public_inputs` left in its artifact dir.
+    pub fn verify_evm(&self, package: &str) -> Result<bool, BbError> {
+        let dir = self.evm_artifact_dir(package);
         let out = Command::new("bb")
             .args([
                 "verify",
@@ -400,6 +459,22 @@ impl BbProver {
             ])
             .output()?;
         Ok(out.status.success())
+    }
+
+    /// Compile + write the transfer circuit's EVM VK.
+    pub fn write_transfer_vk(&self) -> Result<(), BbError> {
+        self.write_evm_vk("transfer")
+    }
+
+    /// Prove the transfer spend circuit (EVM target; recursively verifies each
+    /// input's chain proof). See [`Self::prove_evm`].
+    pub fn prove_transfer(&self, input: &TransferInput) -> Result<EvmProof, BbError> {
+        self.prove_evm("transfer", input)
+    }
+
+    /// Verify the last transfer proof (EVM target).
+    pub fn verify_transfer_evm(&self) -> Result<bool, BbError> {
+        self.verify_evm("transfer")
     }
 }
 
@@ -641,5 +716,55 @@ mod tests {
         let proof = prover.prove_transfer(&input).expect("prove transfer (recursive)");
         assert_eq!(proof.public_inputs.len(), TRANSFER_PUB_LEN * 32, "11 public inputs");
         assert!(prover.verify_transfer_evm().expect("verify"), "transfer proof must verify");
+    }
+
+    /// The (non-recursive) deposit proof generates and verifies under `-t evm`.
+    #[test]
+    #[ignore = "shells nargo+bb; proves the deposit circuit (-t evm)"]
+    fn deposit_proof_verifies() {
+        let prover = BbProver::new(project_root());
+        prover.write_evm_vk("deposit").expect("deposit vk");
+
+        let sk = SpendingKey::from_bytes([3u8; 32]);
+        let owner = sk.derive_owner_pubkey();
+        let token = Address::repeat_byte(0x22);
+        let salt = B256::repeat_byte(0x07);
+        let note = Note::with_salt(token, U256::from(1000u64), owner, salt, Epoch(0));
+
+        let input = DepositInput {
+            commitment: field_to_decimal(note.commitment().0),
+            token: token_field(token),
+            amount: field_to_decimal(B256::from(U256::from(1000u64))),
+            current_epoch_at_deposit: 0,
+            owner_pubkey: field_to_decimal(owner.0),
+            salt: field_to_decimal(salt),
+        };
+
+        prover.prove_evm("deposit", &input).expect("prove deposit");
+        assert!(prover.verify_evm("deposit").expect("verify"), "deposit proof must verify");
+    }
+
+    /// The (non-recursive) insertion proof generates and verifies under `-t evm`,
+    /// for a real 2-insertion built off the indexed-Merkle tree — exercising the
+    /// `InsertionWitness` -> `Prover.toml` mapping the relayer will use.
+    #[test]
+    #[ignore = "shells nargo+bb; proves the insertion circuit (-t evm)"]
+    fn insertion_proof_verifies() {
+        let prover = BbProver::new(project_root());
+        prover.write_evm_vk("insertion").expect("insertion vk");
+
+        let mut tree = IndexedMerkleTree::new();
+        let pre_root = tree.root();
+        let pre_leaf_count = tree.leaf_count();
+        let n0 = B256::from(U256::from(111u64));
+        let n1 = B256::from(U256::from(222u64));
+        let w0 = tree.insert(n0).expect("insert n0");
+        let w1 = tree.insert(n1).expect("insert n1");
+        let post_root = tree.root();
+
+        let input =
+            InsertionToml::from_witnesses(pre_root, post_root, pre_leaf_count, &[n0, n1], &[w0, w1]);
+        prover.prove_evm("insertion", &input).expect("prove insertion");
+        assert!(prover.verify_evm("insertion").expect("verify"), "insertion proof must verify");
     }
 }
