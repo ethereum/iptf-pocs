@@ -5,15 +5,21 @@ import {Test, stdStorage, StdStorage} from "forge-std/src/Test.sol";
 import {ShieldedPoolExt} from "../src/ShieldedPoolExt.sol";
 import {MockVerifier} from "../src/mocks/MockVerifier.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
+import {PoseidonT3} from "poseidon-solidity/PoseidonT3.sol";
 
-/// @dev Slice 1.2 scope: deposit + epoch rollover. The two-proof spend path that
-///      advances `activeNullifierRoot` arrives in a later slice; here the active
-///      root is poked via `stdstore` to test that rollover freezes it.
+/// @dev Scope: deposit, epoch rollover, and the 2-in-2-out transfer spend path.
+///      With `MockVerifier` the proofs always accept, so these tests cover the
+///      contract's public-input marshaling, cross-proof wiring, and state
+///      transitions — not the in-circuit/proof-level checks (commitment
+///      membership, sorted-low-leaf double-spend, η binding), which are exercised
+///      by the circuit tests and the bb-prover integration harness.
 contract ShieldedPoolExtTest is Test {
     using stdStorage for StdStorage;
 
     ShieldedPoolExt public pool;
-    MockVerifier public verifier;
+    MockVerifier public verifier; // deposit
+    MockVerifier public transferVerifier; // wallet spend proof
+    MockVerifier public insertionVerifier; // relayer insertion proof
     MockERC20 public token;
 
     address public owner;
@@ -29,7 +35,18 @@ contract ShieldedPoolExtTest is Test {
     // pinned to the Rust mirror in the integration test.
     bytes32 constant EMPTY_IMT_ROOT = bytes32(uint256(0xE3217));
 
+    // Stand-in for the chain-update circuit's VK hash (SPEC `FixedVK`); the
+    // contract pins it as the spend proof's `chain_vk_hash` public input.
+    bytes32 constant CHAIN_VK_HASH = bytes32(uint256(0xC4A14));
+
     event Deposit(bytes32 indexed commitment, address indexed token, uint256 amount, bytes encryptedNote);
+    event Transfer(
+        bytes32 indexed nullifier1,
+        bytes32 indexed nullifier2,
+        bytes32 commitment1,
+        bytes32 commitment2,
+        bytes encryptedNotes
+    );
     event EpochRollover(uint64 indexed epoch, bytes32 root);
 
     function setUp() public {
@@ -37,7 +54,15 @@ contract ShieldedPoolExtTest is Test {
         user = address(0x1);
 
         verifier = new MockVerifier();
-        pool = new ShieldedPoolExt(address(verifier), EMPTY_IMT_ROOT);
+        transferVerifier = new MockVerifier();
+        insertionVerifier = new MockVerifier();
+        pool = new ShieldedPoolExt(
+            address(verifier),
+            address(transferVerifier),
+            address(insertionVerifier),
+            CHAIN_VK_HASH,
+            EMPTY_IMT_ROOT
+        );
 
         token = new MockERC20("USD Coin", "USDC", 6);
         pool.addSupportedToken(address(token));
@@ -140,11 +165,119 @@ contract ShieldedPoolExtTest is Test {
         pool.rolloverEpoch();
     }
 
+    // ========== Transfer (two-proof spend path) ==========
+
+    bytes32 constant NUL_0 = bytes32(uint256(0xA1));
+    bytes32 constant NUL_1 = bytes32(uint256(0xA2));
+    bytes32 constant OUT_0 = bytes32(uint256(11));
+    bytes32 constant OUT_1 = bytes32(uint256(12));
+    bytes32 constant POST_ROOT = bytes32(uint256(0xBEEF));
+
+    /// @dev Deposit once so the commitment root is non-zero and `isKnownRoot`.
+    function _depositAndGetRoot() internal returns (bytes32) {
+        vm.prank(user);
+        pool.deposit("", COMMITMENT_0, address(token), DEPOSIT_AMOUNT, "");
+        return pool.commitmentRoot();
+    }
+
+    function _transfer(bytes32 root, bytes32 postRoot) internal {
+        bytes32[2] memory nullifiers = [NUL_0, NUL_1];
+        bytes32[2] memory outs = [OUT_0, OUT_1];
+        uint64[2] memory epochCreated = [uint64(0), uint64(0)];
+        pool.transfer("spend", "insert", nullifiers, outs, root, epochCreated, postRoot, "notes");
+    }
+
+    function testTransferAdvancesActiveTreeAndInsertsOutputs() public {
+        bytes32 root = _depositAndGetRoot();
+        uint64 leafBefore = pool.activeLeafCount();
+        uint256 countBefore = pool.getCommitmentCount();
+
+        vm.expectEmit(true, true, false, true);
+        emit Transfer(NUL_0, NUL_1, OUT_0, OUT_1, "notes");
+        _transfer(root, POST_ROOT);
+
+        assertEq(pool.activeNullifierRoot(), POST_ROOT, "active root advanced to post-root");
+        assertEq(pool.activeLeafCount(), leafBefore + 2, "two leaves appended");
+        assertEq(pool.getCommitmentCount(), countBefore + 2, "two output commitments inserted");
+    }
+
+    function testTransferAcceptsHistoricalRoot() public {
+        bytes32 firstRoot = _depositAndGetRoot();
+        // A second deposit supersedes `firstRoot`, which stays valid as historical.
+        vm.prank(user);
+        pool.deposit("", COMMITMENT_1, address(token), DEPOSIT_AMOUNT, "");
+        assertTrue(pool.isKnownRoot(firstRoot));
+
+        _transfer(firstRoot, POST_ROOT);
+        assertEq(pool.activeNullifierRoot(), POST_ROOT);
+    }
+
+    function testTransferRevertsUnknownRoot() public {
+        vm.expectRevert(ShieldedPoolExt.InvalidRoot.selector);
+        _transfer(bytes32(uint256(0xDEAD)), POST_ROOT);
+    }
+
+    function testTransferRevertsInvalidSpendProof() public {
+        bytes32 root = _depositAndGetRoot();
+        transferVerifier.setResult(false);
+        vm.expectRevert(ShieldedPoolExt.InvalidProof.selector);
+        _transfer(root, POST_ROOT);
+    }
+
+    function testTransferRevertsInvalidInsertionProof() public {
+        bytes32 root = _depositAndGetRoot();
+        insertionVerifier.setResult(false);
+        vm.expectRevert(ShieldedPoolExt.InvalidProof.selector);
+        _transfer(root, POST_ROOT);
+    }
+
+    // ========== expectedChainAccumulator ==========
+
+    function testExpectedChainAccumulatorZeroWhenCaughtUp() public view {
+        // A note created in the current epoch has no frozen epochs to fold.
+        assertEq(pool.expectedChainAccumulator(pool.currentEpoch()), bytes32(0));
+    }
+
+    function testExpectedChainAccumulatorFoldsFrozenRoots() public {
+        pool.rolloverEpoch(); // freezes epoch 0 (EMPTY_IMT_ROOT; no spends)
+        pool.rolloverEpoch(); // freezes epoch 1
+        assertEq(pool.currentEpoch(), 2);
+
+        // Full range [0, 2): fold both frozen roots, seeded at 0.
+        uint256 acc = PoseidonT3.hash([uint256(0), uint256(EMPTY_IMT_ROOT)]);
+        acc = PoseidonT3.hash([acc, uint256(EMPTY_IMT_ROOT)]);
+        assertEq(pool.expectedChainAccumulator(0), bytes32(acc), "fold over both frozen epochs");
+
+        // Suffix [1, 2): fold only epoch 1.
+        uint256 accSuffix = PoseidonT3.hash([uint256(0), uint256(EMPTY_IMT_ROOT)]);
+        assertEq(pool.expectedChainAccumulator(1), bytes32(accSuffix), "fold over the suffix only");
+
+        // Empty range [2, 2): nothing to fold.
+        assertEq(pool.expectedChainAccumulator(2), bytes32(0), "fresh note folds nothing");
+    }
+
     // ========== Misc ==========
 
-    function testConstructorRevertsZeroVerifier() public {
+    function testConstructorWiring() public view {
+        assertEq(address(pool.depositVerifier()), address(verifier));
+        assertEq(address(pool.transferVerifier()), address(transferVerifier));
+        assertEq(address(pool.insertionVerifier()), address(insertionVerifier));
+        assertEq(pool.chainVkHash(), CHAIN_VK_HASH);
+    }
+
+    function testConstructorRevertsZeroDepositVerifier() public {
         vm.expectRevert(ShieldedPoolExt.ZeroAddress.selector);
-        new ShieldedPoolExt(address(0), EMPTY_IMT_ROOT);
+        new ShieldedPoolExt(address(0), address(transferVerifier), address(insertionVerifier), CHAIN_VK_HASH, EMPTY_IMT_ROOT);
+    }
+
+    function testConstructorRevertsZeroTransferVerifier() public {
+        vm.expectRevert(ShieldedPoolExt.ZeroAddress.selector);
+        new ShieldedPoolExt(address(verifier), address(0), address(insertionVerifier), CHAIN_VK_HASH, EMPTY_IMT_ROOT);
+    }
+
+    function testConstructorRevertsZeroInsertionVerifier() public {
+        vm.expectRevert(ShieldedPoolExt.ZeroAddress.selector);
+        new ShieldedPoolExt(address(verifier), address(transferVerifier), address(0), CHAIN_VK_HASH, EMPTY_IMT_ROOT);
     }
 
     function testAddSupportedTokenOnlyOwner() public {
