@@ -16,11 +16,17 @@ use alloy::primitives::B256;
 
 use crate::{
     adapters::{
-        indexed_merkle_tree::IndexedMerkleTree,
+        indexed_merkle_tree::{
+            IndexedMerkleTree,
+            IndexedTreeError,
+        },
         merkle_tree::CommitmentTree,
     },
     domain::{
-        indexed_merkle::NonMembershipWitness,
+        indexed_merkle::{
+            InsertionWitness,
+            NonMembershipWitness,
+        },
         merkle::CommitmentMerkleProof,
     },
     ports::state_replica::{
@@ -28,6 +34,20 @@ use crate::{
         StateReplicaQuery,
     },
 };
+
+/// Relayer inputs for the insertion proof: advancing the active tree from
+/// `pre_root` to `post_root` by inserting `nullifiers` at canonical indices
+/// starting at `pre_leaf_count`. Built against a snapshot of the active tree —
+/// the canonical tree advances via the Transfer/Withdraw event ingest when the
+/// spend's tx lands, so the relayer can build the proof before the tx confirms.
+#[derive(Debug, Clone)]
+pub struct InsertionInput {
+    pub pre_root: B256,
+    pub post_root: B256,
+    pub pre_leaf_count: u64,
+    pub nullifiers: Vec<B256>,
+    pub witnesses: Vec<InsertionWitness>,
+}
 
 /// In-memory replica of public `ShieldedPoolExt` state, rebuilt from events.
 pub struct StateReplica {
@@ -113,6 +133,30 @@ impl StateReplica {
     pub fn commitment_proof(&self, leaf_index: u64) -> Option<CommitmentMerkleProof> {
         self.commitment_tree.generate_commitment_proof(leaf_index)
     }
+
+    /// Relayer: build the insertion-proof inputs for a spend's `nullifiers`,
+    /// against a snapshot of the current active tree. Does NOT mutate the
+    /// canonical tree — that advances via the Transfer/Withdraw event ingest when
+    /// the spend lands — so the relayer can build the proof before the tx confirms.
+    pub fn build_insertion(
+        &self,
+        nullifiers: &[B256],
+    ) -> Result<InsertionInput, IndexedTreeError> {
+        let mut tree = self.active_tree.clone();
+        let pre_root = tree.root();
+        let pre_leaf_count = tree.leaf_count();
+        let mut witnesses = Vec::with_capacity(nullifiers.len());
+        for &nullifier in nullifiers {
+            witnesses.push(tree.insert(nullifier)?);
+        }
+        Ok(InsertionInput {
+            pre_root,
+            post_root: tree.root(),
+            pre_leaf_count,
+            nullifiers: nullifiers.to_vec(),
+            witnesses,
+        })
+    }
 }
 
 impl StateReplicaQuery for StateReplica {
@@ -145,6 +189,28 @@ mod tests {
 
     fn b(n: u64) -> B256 {
         B256::from(U256::from(n))
+    }
+
+    #[test]
+    fn relayer_insertion_witnesses_chain_to_post_root() {
+        let replica = StateReplica::new();
+        let nullifiers = [b(50), b(90)];
+
+        let input = replica.build_insertion(&nullifiers).unwrap();
+
+        // build_insertion uses a snapshot: the canonical active tree is untouched.
+        assert_eq!(replica.active_nullifier_root(), input.pre_root);
+        assert_eq!(input.pre_leaf_count, 1, "genesis leaf occupies index 0");
+
+        // Each witness advances the root (the same chain the insertion circuit
+        // verifies), reaching post_root.
+        let mut root = input.pre_root;
+        for (i, witness) in input.witnesses.iter().enumerate() {
+            root = witness
+                .verify_and_apply(root, input.nullifiers[i])
+                .expect("valid insertion");
+        }
+        assert_eq!(root, input.post_root);
     }
 
     #[test]

@@ -45,6 +45,7 @@ pub enum IndexedTreeError {
 }
 
 /// An off-chain indexed Merkle tree of fixed depth [`NULLIFIER_TREE_DEPTH`].
+#[derive(Clone)]
 pub struct IndexedMerkleTree {
     /// Occupied leaves in index order (index 0 = genesis leaf).
     leaves: Vec<IndexedLeaf>,
