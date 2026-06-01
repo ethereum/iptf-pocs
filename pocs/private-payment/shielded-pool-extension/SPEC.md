@@ -146,8 +146,8 @@ mapping(uint64 => bytes32) public frozenNullifierRoots;
 // Active-epoch nullifier set is an indexed Merkle tree; the contract holds
 // only the current root and a leaf counter, advanced by each spend and reset on rollover.
 bytes32 public activeNullifierRoot;
-uint64  public activeLeafCount;   // next free slot = canonical append index
-bytes32 public constant EMPTY_IMT_ROOT = /* root of an empty indexed Merkle tree, fixed at deployment */;
+uint64  public activeLeafCount;   // next free slot = canonical append index; starts at 1 (index 0 = genesis leaf)
+bytes32 public constant EMPTY_IMT_ROOT = /* root of the genesis-leaf-only indexed Merkle tree, fixed at deployment */;
 
 /// PoC: owner-only. Production: decentralized trigger.
 function rolloverEpoch() external onlyOwner;
@@ -156,11 +156,11 @@ function rolloverEpoch() external onlyOwner;
 function expectedChainAccumulator(uint64 epochCreated) external view returns (bytes32);
 ```
 
-The active-epoch nullifier set is an indexed Merkle tree: leaves are sorted by value and each leaf carries a `(next_value, next_index)` pointer to the next-larger leaf. Absence of η is proven with a `low_leaf` where `low_leaf.value < η < low_leaf.next_value`. Inserting η mutates two leaves: the predecessor (its `next_value`/`next_index` repoint to η) and a freshly written leaf at the next free slot. The relayer's insertion proof performs these insertions (see Insertion Circuit), so the contract sees only `(pre_active_root, post_active_root, pre_leaf_count)` and accepts the transition by verifying that proof. A valid sorted-low-leaf insertion is itself a non-membership proof of η in the prior tree, so no separate `activeNullifiers` mapping or uniqueness check is needed. On-chain active-tree state is one `bytes32` and one counter; per-leaf state is held off-chain and reconstructible from event logs.
+The active-epoch nullifier set is an indexed Merkle tree: leaves are sorted by value and each leaf carries a `(next_value, next_index)` pointer to the next-larger leaf. Absence of η is proven with a `low_leaf` where `low_leaf.value < η < low_leaf.next_value`. Index 0 holds a genesis leaf `(0, 0, 0)`, the bootstrap low-leaf covering `[0, +inf)`, so the first insertion always has a predecessor to mutate; real nullifiers therefore occupy indices `1, 2, ...` and `activeLeafCount` starts at 1 (the genesis-leaf-only tree's root is `EMPTY_IMT_ROOT`). Inserting η mutates two leaves: the predecessor (its `next_value`/`next_index` repoint to η) and a freshly written leaf at the next free slot. The relayer's insertion proof performs these insertions (see Insertion Circuit), so the contract sees only `(pre_active_root, post_active_root, pre_leaf_count)` and accepts the transition by verifying that proof. A valid sorted-low-leaf insertion is itself a non-membership proof of η in the prior tree, so no separate `activeNullifiers` mapping or uniqueness check is needed. On-chain active-tree state is one `bytes32` and one counter; per-leaf state is held off-chain and reconstructible from event logs.
 
 Canonical append. New leaves are placed at sequential indices starting from `activeLeafCount`, so the post-root is a deterministic function of the inserted-nullifier sequence. A replica replaying the emitted nullifiers in block-then-input order reproduces the identical tree and root. The circuit enforces both the sequential index and that the target slot was empty, so a spend cannot overwrite an existing nullifier leaf.
 
-On `rolloverEpoch()`: `frozenNullifierRoots[currentEpoch] = activeNullifierRoot`, then `activeNullifierRoot = EMPTY_IMT_ROOT`, `activeLeafCount = 0`, `currentEpoch += 1`, emit `EpochRollover(uint64 epoch, bytes32 root)`.
+On `rolloverEpoch()`: `frozenNullifierRoots[currentEpoch] = activeNullifierRoot`, then `activeNullifierRoot = EMPTY_IMT_ROOT`, `activeLeafCount = 1` (reset to the genesis-leaf-only tree), `currentEpoch += 1`, emit `EpochRollover(uint64 epoch, bytes32 root)`.
 
 Epoch cadence. The protocol does not impose an epoch duration; one epoch is whatever period elapses between two `rolloverEpoch()` calls. The PoC targets one rollover per month. Production deployments SHOULD pin a fixed cadence (e.g. one rollover every `N` blocks, or one per calendar period) so wallets and replicas can plan capacity. Coarse cadence directly bounds `k`, which sets both the per-spend on-chain accumulator hashing cost and the maximum chain-update work a wallet pays after an offline period.
 
