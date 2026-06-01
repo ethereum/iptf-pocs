@@ -10,12 +10,12 @@ import {PoseidonT3} from "poseidon-solidity/PoseidonT3.sol";
 /// @title ShieldedPoolExt
 /// @notice Privacy-preserving payment pool extended with epoch-based nullifiers
 ///         and PIR-served reads (research prototype). See ../../SPEC.md.
-/// @dev Current scope: deposits, epoch rollover, and the 2-in-2-out transfer
-///      spend path. `currentEpoch` advances via `rolloverEpoch()`, freezing each
-///      epoch's active-nullifier root. `transfer` runs the two-proof spend path
-///      (wallet spend proof + relayer insertion proof), advancing
-///      `activeNullifierRoot`/`activeLeafCount`. The single-input `withdraw`
-///      spend path arrives in a later slice.
+/// @dev Current scope: deposits, epoch rollover, and the full spend path —
+///      `transfer` (2-in-2-out) and `withdraw` (single input). `currentEpoch`
+///      advances via `rolloverEpoch()`, freezing each epoch's active-nullifier
+///      root. Both spend functions run the two-proof path (wallet spend proof +
+///      relayer insertion proof), advancing `activeNullifierRoot`/
+///      `activeLeafCount` via the shared `_verifyInsertionAndAdvance` helper.
 contract ShieldedPoolExt {
     using SafeERC20 for IERC20;
     using LeanIMT for LeanIMTData;
@@ -45,9 +45,18 @@ contract ShieldedPoolExt {
     /// @notice Verifier for the wallet's transfer spend proof (zero-knowledge).
     IVerifier public transferVerifier;
 
-    /// @notice Verifier for the relayer's insertion proof (advances the active
-    ///         nullifier tree; not zero-knowledge).
+    /// @notice Verifier for the relayer's 2-insertion proof used by `transfer`
+    ///         (advances the active nullifier tree by k=2; not zero-knowledge).
     IVerifier public insertionVerifier;
+
+    /// @notice Verifier for the wallet's withdraw spend proof (zero-knowledge).
+    IVerifier public withdrawVerifier;
+
+    /// @notice Verifier for the relayer's 1-insertion proof used by `withdraw`
+    ///         (advances the active nullifier tree by k=1; not zero-knowledge).
+    ///         Distinct from `insertionVerifier`: the insertion circuit's leaf
+    ///         count is fixed per circuit, so k=1 and k=2 are separate artifacts.
+    IVerifier public withdrawInsertionVerifier;
 
     /// @notice Hash of the chain-update circuit's verifying key (SPEC `FixedVK`),
     ///         fixed at deployment. Supplied as a spend-proof public input so a
@@ -91,6 +100,9 @@ contract ShieldedPoolExt {
         bytes32 commitment2,
         bytes encryptedNotes
     );
+    /// @dev `nullifier` is the spent note's active η; replicas replay it (in event
+    ///      order, interleaved with `Transfer`) to rebuild the active indexed tree.
+    event Withdraw(bytes32 indexed nullifier, address indexed recipient, address indexed token, uint256 amount);
     event EpochRollover(uint64 indexed epoch, bytes32 root);
     event TokenAdded(address indexed token);
     event TokenRemoved(address indexed token);
@@ -119,15 +131,21 @@ contract ShieldedPoolExt {
         address _depositVerifier,
         address _transferVerifier,
         address _insertionVerifier,
+        address _withdrawVerifier,
+        address _withdrawInsertionVerifier,
         bytes32 _chainVkHash,
         bytes32 _emptyImtRoot
     ) {
         if (_depositVerifier == address(0)) revert ZeroAddress();
         if (_transferVerifier == address(0)) revert ZeroAddress();
         if (_insertionVerifier == address(0)) revert ZeroAddress();
+        if (_withdrawVerifier == address(0)) revert ZeroAddress();
+        if (_withdrawInsertionVerifier == address(0)) revert ZeroAddress();
         depositVerifier = IVerifier(_depositVerifier);
         transferVerifier = IVerifier(_transferVerifier);
         insertionVerifier = IVerifier(_insertionVerifier);
+        withdrawVerifier = IVerifier(_withdrawVerifier);
+        withdrawInsertionVerifier = IVerifier(_withdrawInsertionVerifier);
         chainVkHash = _chainVkHash;
         emptyImtRoot = _emptyImtRoot;
         activeNullifierRoot = _emptyImtRoot;
@@ -251,29 +269,81 @@ contract ShieldedPoolExt {
         spendInputs[10] = expectedChainAccumulator(epochCreated[1]);
         if (!transferVerifier.verify(spendProof, spendInputs)) revert InvalidProof();
 
-        // Insertion proof: 5 public inputs (see circuits/insertion/src/main.nr).
-        // The contract pins the pre-state, so a proof built against a stale root
-        // (another spend landed first) fails the verify and the relayer rebuilds.
-        bytes32[] memory insertionInputs = new bytes32[](5);
-        insertionInputs[0] = activeNullifierRoot;
-        insertionInputs[1] = postActiveRoot;
-        insertionInputs[2] = bytes32(uint256(activeLeafCount));
-        // Cross-proof binding: indices 3-4 are the SAME `nullifiers` already fed to
-        // the spend proof above. One caller-supplied list pins both proofs to an
-        // identical η list, so there is no second list to assert equal — a relayer
-        // whose insertion proof covers a different list fails this verify, and a
+        // Insertion proof (k=2). Cross-proof binding: the SAME `nullifiers` fed to
+        // the spend proof above are the insertion proof's η list, so one caller-
+        // supplied list pins both proofs to an identical list — a relayer whose
+        // insertion proof covers a different list fails the insertion verify, and a
         // wallet whose spend proof covers a different list fails the spend verify.
-        insertionInputs[3] = nullifiers[0];
-        insertionInputs[4] = nullifiers[1];
-        if (!insertionVerifier.verify(insertionProof, insertionInputs)) revert InvalidProof();
+        // There is no second list to assert equal.
+        bytes32[] memory nullifierList = new bytes32[](2);
+        nullifierList[0] = nullifiers[0];
+        nullifierList[1] = nullifiers[1];
+        _verifyInsertionAndAdvance(insertionVerifier, insertionProof, nullifierList, postActiveRoot);
 
-        // Advance the active tree (two leaves appended) and append the outputs.
-        activeNullifierRoot = postActiveRoot;
-        activeLeafCount += 2;
+        // Append the two output commitments.
         _insertCommitment(uint256(outputCommitments[0]));
         _insertCommitment(uint256(outputCommitments[1]));
 
         emit Transfer(nullifiers[0], nullifiers[1], outputCommitments[0], outputCommitments[1], encryptedNotes);
+    }
+
+    /// @notice Withdraw a single input note's full value to `recipient`, advancing
+    ///         the active nullifier tree via the relayer's 1-insertion proof.
+    /// @dev Single-input spend path (SPEC "Withdraw (extended)"): the same two-proof
+    ///      structure as `transfer` with k=1. State-pinned public inputs and the
+    ///      cross-proof η binding work exactly as in `transfer` (which see). Funds
+    ///      move out last, after all state changes (checks-effects-interactions).
+    /// @param spendProof Wallet withdraw spend proof.
+    /// @param insertionProof Relayer 1-insertion proof advancing the active tree.
+    /// @param nullifier The spent note's active nullifier η; bound across both proofs.
+    /// @param token ERC-20 token being withdrawn (bound to the note by the proof).
+    /// @param amount Amount leaving the pool (bound to the note by the proof).
+    /// @param recipient Address that receives the withdrawn funds.
+    /// @param root Commitment-tree root the spend proof was built against.
+    /// @param epochCreated The note's creation epoch (bound to its commitment by
+    ///        the spend proof, so a caller cannot misreport it).
+    /// @param postActiveRoot New active-tree root attested by the insertion proof.
+    function withdraw(
+        bytes calldata spendProof,
+        bytes calldata insertionProof,
+        bytes32 nullifier,
+        address token,
+        uint256 amount,
+        address recipient,
+        bytes32 root,
+        uint64 epochCreated,
+        bytes32 postActiveRoot
+    ) external {
+        if (!supportedTokens[token]) revert UnsupportedToken();
+        if (amount == 0) revert ZeroAmount();
+        if (recipient == address(0)) revert ZeroAddress();
+        if (!isKnownRoot(root)) revert InvalidRoot();
+
+        // Spend proof: 9 public inputs in circuit declaration order (see
+        // circuits/withdraw/src/main.nr). The contract pins current_epoch,
+        // chainVkHash, and the expected accumulator.
+        bytes32[] memory spendInputs = new bytes32[](9);
+        spendInputs[0] = nullifier;
+        spendInputs[1] = bytes32(uint256(uint160(token)));
+        spendInputs[2] = bytes32(amount);
+        spendInputs[3] = bytes32(uint256(uint160(recipient)));
+        spendInputs[4] = root;
+        spendInputs[5] = bytes32(uint256(currentEpoch));
+        spendInputs[6] = chainVkHash;
+        spendInputs[7] = bytes32(uint256(epochCreated));
+        spendInputs[8] = expectedChainAccumulator(epochCreated);
+        if (!withdrawVerifier.verify(spendProof, spendInputs)) revert InvalidProof();
+
+        // Insertion proof (k=1). Cross-proof binding: the SAME `nullifier` fed to
+        // the spend proof above is the insertion proof's η list (see `transfer`).
+        bytes32[] memory nullifierList = new bytes32[](1);
+        nullifierList[0] = nullifier;
+        _verifyInsertionAndAdvance(withdrawInsertionVerifier, insertionProof, nullifierList, postActiveRoot);
+
+        // Interactions last: send the withdrawn funds out.
+        IERC20(token).safeTransfer(recipient, amount);
+
+        emit Withdraw(nullifier, recipient, token, amount);
     }
 
     /// @notice Roll over to the next epoch: freeze the current active-nullifier
@@ -325,6 +395,34 @@ contract ShieldedPoolExt {
         if (newOwner == address(0)) revert ZeroAddress();
         emit OwnershipTransferred(owner, newOwner);
         owner = newOwner;
+    }
+
+    /// @dev Verify the relayer's insertion proof and advance the active tree by
+    ///      `nullifierList.length` leaves. Shared by `transfer` (k=2) and
+    ///      `withdraw` (k=1). Insertion public inputs are
+    ///      `[pre_active_root, post_active_root, pre_leaf_count, η_1..k]`; the
+    ///      contract pins the pre-state (`activeNullifierRoot`/`activeLeafCount`),
+    ///      so a proof built against a stale root reverts and the relayer rebuilds.
+    ///      `nullifierList` is the shared η list that also feeds the spend proof,
+    ///      which is what binds the two proofs together (see `transfer`).
+    function _verifyInsertionAndAdvance(
+        IVerifier insVerifier,
+        bytes calldata insertionProof,
+        bytes32[] memory nullifierList,
+        bytes32 postActiveRoot
+    ) internal {
+        uint256 k = nullifierList.length;
+        bytes32[] memory insertionInputs = new bytes32[](3 + k);
+        insertionInputs[0] = activeNullifierRoot;
+        insertionInputs[1] = postActiveRoot;
+        insertionInputs[2] = bytes32(uint256(activeLeafCount));
+        for (uint256 i = 0; i < k; i++) {
+            insertionInputs[3 + i] = nullifierList[i];
+        }
+        if (!insVerifier.verify(insertionProof, insertionInputs)) revert InvalidProof();
+
+        activeNullifierRoot = postActiveRoot;
+        activeLeafCount += uint64(k);
     }
 
     /// @dev Insert a commitment, retaining the superseded root as historical.

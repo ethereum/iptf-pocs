@@ -7,23 +7,27 @@ import {MockVerifier} from "../src/mocks/MockVerifier.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {PoseidonT3} from "poseidon-solidity/PoseidonT3.sol";
 
-/// @dev Scope: deposit, epoch rollover, and the 2-in-2-out transfer spend path.
-///      With `MockVerifier` the proofs always accept, so these tests cover the
-///      contract's public-input marshaling, cross-proof wiring, and state
-///      transitions — not the in-circuit/proof-level checks (commitment
-///      membership, sorted-low-leaf double-spend, η binding), which are exercised
-///      by the circuit tests and the bb-prover integration harness.
+/// @dev Scope: deposit, epoch rollover, and the full spend path — transfer
+///      (2-in-2-out) and withdraw (single input). With `MockVerifier` the proofs
+///      always accept, so these tests cover the contract's public-input
+///      marshaling, cross-proof wiring, and state transitions — not the
+///      in-circuit/proof-level checks (commitment membership, sorted-low-leaf
+///      double-spend, η binding), which are exercised by the circuit tests and
+///      the bb-prover integration harness.
 contract ShieldedPoolExtTest is Test {
     using stdStorage for StdStorage;
 
     ShieldedPoolExt public pool;
     MockVerifier public verifier; // deposit
-    MockVerifier public transferVerifier; // wallet spend proof
-    MockVerifier public insertionVerifier; // relayer insertion proof
+    MockVerifier public transferVerifier; // wallet transfer spend proof
+    MockVerifier public insertionVerifier; // relayer 2-insertion proof
+    MockVerifier public withdrawVerifier; // wallet withdraw spend proof
+    MockVerifier public withdrawInsertionVerifier; // relayer 1-insertion proof
     MockERC20 public token;
 
     address public owner;
     address public user;
+    address public recipient;
 
     // Small commitment values that fit in the BN254 scalar field.
     bytes32 constant COMMITMENT_0 = bytes32(uint256(1));
@@ -47,19 +51,25 @@ contract ShieldedPoolExtTest is Test {
         bytes32 commitment2,
         bytes encryptedNotes
     );
+    event Withdraw(bytes32 indexed nullifier, address indexed recipient, address indexed token, uint256 amount);
     event EpochRollover(uint64 indexed epoch, bytes32 root);
 
     function setUp() public {
         owner = address(this);
         user = address(0x1);
+        recipient = address(0x2);
 
         verifier = new MockVerifier();
         transferVerifier = new MockVerifier();
         insertionVerifier = new MockVerifier();
+        withdrawVerifier = new MockVerifier();
+        withdrawInsertionVerifier = new MockVerifier();
         pool = new ShieldedPoolExt(
             address(verifier),
             address(transferVerifier),
             address(insertionVerifier),
+            address(withdrawVerifier),
+            address(withdrawInsertionVerifier),
             CHAIN_VK_HASH,
             EMPTY_IMT_ROOT
         );
@@ -256,28 +266,94 @@ contract ShieldedPoolExtTest is Test {
         assertEq(pool.expectedChainAccumulator(2), bytes32(0), "fresh note folds nothing");
     }
 
+    // ========== Withdraw (single-input two-proof spend path) ==========
+
+    bytes32 constant WNUL = bytes32(uint256(0xB1));
+
+    function _withdraw(bytes32 root, uint256 amount) internal {
+        pool.withdraw("spend", "insert", WNUL, address(token), amount, recipient, root, 0, POST_ROOT);
+    }
+
+    function testWithdrawAdvancesActiveTreeAndTransfersOut() public {
+        bytes32 root = _depositAndGetRoot(); // pool now holds DEPOSIT_AMOUNT; root known
+        uint64 leafBefore = pool.activeLeafCount();
+        uint256 recipientBefore = token.balanceOf(recipient);
+        uint256 poolBefore = token.balanceOf(address(pool));
+
+        vm.expectEmit(true, true, true, true);
+        emit Withdraw(WNUL, recipient, address(token), DEPOSIT_AMOUNT);
+        _withdraw(root, DEPOSIT_AMOUNT);
+
+        assertEq(pool.activeNullifierRoot(), POST_ROOT, "active root advanced to post-root");
+        assertEq(pool.activeLeafCount(), leafBefore + 1, "one leaf appended");
+        assertEq(token.balanceOf(recipient), recipientBefore + DEPOSIT_AMOUNT, "funds sent to recipient");
+        assertEq(token.balanceOf(address(pool)), poolBefore - DEPOSIT_AMOUNT, "funds left the pool");
+    }
+
+    function testWithdrawRevertsUnsupportedToken() public {
+        MockERC20 unsupported = new MockERC20("Unsupported", "UNS", 18);
+        vm.expectRevert(ShieldedPoolExt.UnsupportedToken.selector);
+        pool.withdraw("s", "i", WNUL, address(unsupported), 1, recipient, bytes32(0), 0, POST_ROOT);
+    }
+
+    function testWithdrawRevertsZeroAmount() public {
+        vm.expectRevert(ShieldedPoolExt.ZeroAmount.selector);
+        pool.withdraw("s", "i", WNUL, address(token), 0, recipient, bytes32(0), 0, POST_ROOT);
+    }
+
+    function testWithdrawRevertsZeroRecipient() public {
+        vm.expectRevert(ShieldedPoolExt.ZeroAddress.selector);
+        pool.withdraw("s", "i", WNUL, address(token), 1, address(0), bytes32(0), 0, POST_ROOT);
+    }
+
+    function testWithdrawRevertsUnknownRoot() public {
+        vm.expectRevert(ShieldedPoolExt.InvalidRoot.selector);
+        _withdraw(bytes32(uint256(0xDEAD)), 1);
+    }
+
+    function testWithdrawRevertsInvalidSpendProof() public {
+        bytes32 root = _depositAndGetRoot();
+        withdrawVerifier.setResult(false);
+        vm.expectRevert(ShieldedPoolExt.InvalidProof.selector);
+        _withdraw(root, DEPOSIT_AMOUNT);
+    }
+
+    function testWithdrawRevertsInvalidInsertionProof() public {
+        bytes32 root = _depositAndGetRoot();
+        withdrawInsertionVerifier.setResult(false);
+        vm.expectRevert(ShieldedPoolExt.InvalidProof.selector);
+        _withdraw(root, DEPOSIT_AMOUNT);
+    }
+
     // ========== Misc ==========
 
     function testConstructorWiring() public view {
         assertEq(address(pool.depositVerifier()), address(verifier));
         assertEq(address(pool.transferVerifier()), address(transferVerifier));
         assertEq(address(pool.insertionVerifier()), address(insertionVerifier));
+        assertEq(address(pool.withdrawVerifier()), address(withdrawVerifier));
+        assertEq(address(pool.withdrawInsertionVerifier()), address(withdrawInsertionVerifier));
         assertEq(pool.chainVkHash(), CHAIN_VK_HASH);
     }
 
-    function testConstructorRevertsZeroDepositVerifier() public {
-        vm.expectRevert(ShieldedPoolExt.ZeroAddress.selector);
-        new ShieldedPoolExt(address(0), address(transferVerifier), address(insertionVerifier), CHAIN_VK_HASH, EMPTY_IMT_ROOT);
+    /// @dev Each verifier slot rejects the zero address; index marks which slot.
+    function _construct(uint256 zeroAt) internal returns (ShieldedPoolExt) {
+        address[5] memory v = [
+            address(verifier),
+            address(transferVerifier),
+            address(insertionVerifier),
+            address(withdrawVerifier),
+            address(withdrawInsertionVerifier)
+        ];
+        v[zeroAt] = address(0);
+        return new ShieldedPoolExt(v[0], v[1], v[2], v[3], v[4], CHAIN_VK_HASH, EMPTY_IMT_ROOT);
     }
 
-    function testConstructorRevertsZeroTransferVerifier() public {
-        vm.expectRevert(ShieldedPoolExt.ZeroAddress.selector);
-        new ShieldedPoolExt(address(verifier), address(0), address(insertionVerifier), CHAIN_VK_HASH, EMPTY_IMT_ROOT);
-    }
-
-    function testConstructorRevertsZeroInsertionVerifier() public {
-        vm.expectRevert(ShieldedPoolExt.ZeroAddress.selector);
-        new ShieldedPoolExt(address(verifier), address(transferVerifier), address(0), CHAIN_VK_HASH, EMPTY_IMT_ROOT);
+    function testConstructorRevertsZeroVerifier() public {
+        for (uint256 i = 0; i < 5; i++) {
+            vm.expectRevert(ShieldedPoolExt.ZeroAddress.selector);
+            _construct(i);
+        }
     }
 
     function testAddSupportedTokenOnlyOwner() public {
