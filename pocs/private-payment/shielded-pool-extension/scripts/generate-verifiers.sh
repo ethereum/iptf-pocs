@@ -1,49 +1,54 @@
 #!/bin/bash
-# Generate Solidity verifiers from Noir circuits.
-# Only the EVM-targeted circuits (deposit, transfer, withdraw) get Solidity
-# verifiers — the chain-update circuit is consumed recursively off-chain.
-# Requires: nargo, bb (barretenberg CLI).
+# Generate Solidity verifiers from the EVM-targeted Noir circuits.
+#
+# Four circuits are verified on-chain: deposit, the two spend circuits (transfer,
+# withdraw), and the relayer insertion proof. The chain-update circuit is consumed
+# recursively off-chain (no Solidity verifier).
+#
+# VK generation needs only the compiled circuit, not a witness, so there is no
+# Prover.toml / `nargo execute` step. Each verifier is emitted as bb's default
+# `HonkVerifier`; forge disambiguates the same-named contracts by file path, and
+# `ShieldedPoolExt` takes verifier *addresses*, so the contract names need not be
+# unique.
+#
+# Requires nargo 1.0.0-beta.21 + bb 5.0.0-nightly on PATH (see README).
+#
+# NOTE: withdraw's k=1 insertion proof needs a single-insertion instantiation of
+# the insertion circuit, which is not yet built; only the k=2 `insertion` verifier
+# is generated here (see README "Implementation shortcuts").
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CIRCUITS_DIR="$PROJECT_ROOT/circuits"
+TARGET_DIR="$PROJECT_ROOT/target"
 VERIFIERS_DIR="$PROJECT_ROOT/contracts/src/verifiers"
 
 mkdir -p "$VERIFIERS_DIR"
 
-CIRCUITS=("deposit" "transfer" "withdraw")
+CIRCUITS=("deposit" "transfer" "withdraw" "insertion")
 
 echo "=== Generating Solidity Verifiers ==="
-echo "Circuits directory: $CIRCUITS_DIR"
 echo "Output directory: $VERIFIERS_DIR"
 echo ""
 
+echo "Compiling circuits..."
+(cd "$PROJECT_ROOT" && nargo compile --workspace)
+echo ""
+
 for circuit in "${CIRCUITS[@]}"; do
-    CIRCUIT_DIR="$CIRCUITS_DIR/$circuit"
-
-    if [ ! -d "$CIRCUIT_DIR" ]; then
-        echo "ERROR: Circuit directory not found: $CIRCUIT_DIR"
-        exit 1
-    fi
-
     echo "Processing $circuit circuit..."
-    cd "$CIRCUIT_DIR"
 
-    echo "  [1/4] Compiling circuit..."
-    nargo check
+    VK_DIR="$TARGET_DIR/vk_${circuit}"
+    rm -rf "$VK_DIR"
 
-    echo "  [2/4] Executing circuit..."
-    nargo execute witness
-
-    echo "  [3/4] Generating verification key..."
-    bb write_vk -b "../../target/${circuit}.json" -o ./target --oracle_hash keccak
+    echo "  [1/2] Generating verification key (keccak oracle)..."
+    bb write_vk -b "$TARGET_DIR/${circuit}.json" -o "$VK_DIR" --oracle_hash keccak
 
     CONTRACT_NAME="$(echo ${circuit:0:1} | tr '[:lower:]' '[:upper:]')${circuit:1}Verifier"
     OUTPUT_FILE="$VERIFIERS_DIR/${CONTRACT_NAME}.sol"
 
-    echo "  [4/4] Generating Solidity verifier: $CONTRACT_NAME"
-    bb write_solidity_verifier -k ./target/vk -o "$OUTPUT_FILE"
+    echo "  [2/2] Generating Solidity verifier: $OUTPUT_FILE"
+    bb write_solidity_verifier -k "$VK_DIR/vk" -o "$OUTPUT_FILE"
 
     echo "  Done: $OUTPUT_FILE"
     echo ""
