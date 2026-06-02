@@ -2791,6 +2791,8 @@ name = "private-payment-shielded-pool-extension"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-rlp",
+ "alloy-trie",
  "ark-bn254",
  "ark-ff 0.4.2",
  "chacha20poly1305",

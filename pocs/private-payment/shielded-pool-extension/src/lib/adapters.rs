@@ -3,6 +3,7 @@ pub mod channel;
 pub mod commitment_pir;
 pub mod ethereum_rpc;
 pub mod indexed_merkle_tree;
+pub mod light_client;
 pub mod merkle_tree;
 pub mod pir;
 pub mod pir_client;

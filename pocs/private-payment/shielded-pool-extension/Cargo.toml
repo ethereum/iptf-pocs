@@ -25,6 +25,8 @@ thiserror = "2.0"
 rand = "0.8.5"
 tracing = "0.1"
 simplepir = "1.0.1"
+alloy-trie = "0.9"
+alloy-rlp = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"
