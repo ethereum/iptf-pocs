@@ -24,7 +24,14 @@ hex = "0.4"
 thiserror = "2.0"
 rand = "0.8.5"
 tracing = "0.1"
+simplepir = "1.0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.0"
+
+# SimplePIR uses intentional wrapping u64 arithmetic (built for release); disable
+# overflow-checks for just that dependency so it works under the debug/test
+# profile too, without relaxing overflow safety in our own crate.
+[profile.dev.package.simplepir]
+overflow-checks = false

@@ -2802,6 +2802,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "simplepir",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3018,6 +3019,16 @@ checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
  "serde",
+]
+
+[[package]]
+name = "rand_distr"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
+dependencies = [
+ "num-traits",
+ "rand 0.8.6",
 ]
 
 [[package]]
@@ -3552,6 +3563,18 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "simplepir"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18ca22e3623d85c5bf3d522e81c6426d2efe450e7fd7c8ad89008b4d265b390e"
+dependencies = [
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "rand_distr",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
