@@ -92,4 +92,19 @@ mod tests {
             assert_eq!(pir.fetch(index), expected, "PIR fetch must recover the stored record at {index}");
         }
     }
+
+    /// The server's only input is `query_cipher`; it must not reveal the index.
+    /// (a) The cipher size is identical for any index (no length side-channel).
+    /// (b) Two queries for the SAME index differ (probabilistic encryption — the
+    /// server cannot even tell two reads hit the same leaf). The residual
+    /// guarantee — that the ciphertexts are computationally indistinguishable —
+    /// rests on LWE semantic security and is not asserted here.
+    #[test]
+    fn query_does_not_leak_the_index() {
+        let pir = PirDatabase::from_records((0..16).map(|i| i as u64).collect());
+        let mk = |index| query(index, pir.side_len, SECRET_DIMENSION, pir.server_hint, plaintext_mod()).1;
+
+        assert_eq!(mk(0).len(), mk(7).len(), "query size must not depend on the index");
+        assert_ne!(mk(3), mk(3), "repeated queries for one index must differ (semantic security)");
+    }
 }
