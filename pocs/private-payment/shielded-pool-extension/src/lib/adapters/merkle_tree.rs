@@ -69,6 +69,12 @@ impl CommitmentTree {
         self.0.root()
     }
 
+    /// All tree nodes, level-major (`nodes()[level][index]`, level 0 = leaves).
+    /// The flattened source for the tree-pir database (see `commitment_pir`).
+    pub fn nodes(&self) -> &[Vec<[u8; 32]>] {
+        self.0.tree().nodes()
+    }
+
     /// Generate a membership proof for the leaf at `leaf_index`.
     pub fn generate_commitment_proof(&self, leaf_index: u64) -> Option<CommitmentMerkleProof> {
         let proof = self.0.generate_proof(leaf_index as usize).ok()?;

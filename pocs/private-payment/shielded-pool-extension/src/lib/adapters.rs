@@ -1,5 +1,6 @@
 pub mod bb_prover;
 pub mod channel;
+pub mod commitment_pir;
 pub mod ethereum_rpc;
 pub mod indexed_merkle_tree;
 pub mod merkle_tree;
