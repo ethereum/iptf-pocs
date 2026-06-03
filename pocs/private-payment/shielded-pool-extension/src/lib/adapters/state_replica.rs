@@ -6,9 +6,9 @@
 //! correctness — served witnesses are re-checked in-circuit against
 //! light-client-verified roots.
 //!
-//! Slice 1.3 builds this core and drives it with a synthetic event stream. The
-//! HTTP server binary and the live RPC event source are wired in the e2e slice;
-//! this struct is the logic both will reuse.
+//! Driven by a synthetic event stream in unit tests and by the live RPC event
+//! source in the on-chain e2e. The wallet and relayer share one in-process
+//! instance (the e2e is in-process; there is no separate HTTP server).
 
 use std::collections::HashMap;
 
@@ -128,8 +128,8 @@ impl StateReplica {
         self.active_tree.root()
     }
 
-    /// Membership path for an owned commitment leaf (served cleartext by the PIR
-    /// stub; obliviously via PIR in Slice 2).
+    /// Membership path for an owned commitment leaf (served cleartext by the
+    /// `CleartextPirClient` dev stub; obliviously by the real `SimplePirClient`).
     pub fn commitment_proof(&self, leaf_index: u64) -> Option<CommitmentMerkleProof> {
         self.commitment_tree.generate_commitment_proof(leaf_index)
     }

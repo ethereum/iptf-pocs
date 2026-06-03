@@ -1,8 +1,9 @@
-//! Cleartext PIR client (Slice 1 stand-in for the PIR'd commitment-path read).
+//! Cleartext PIR client: a dev stand-in for the PIR'd commitment-path read.
 //!
 //! Fetches the membership path from the shared in-process state replica in clear
-//! — the server learns the leaf index. Slice 2 replaces this with a real PIR
-//! backend behind the same [`PirClient`] trait; callers do not change.
+//! — the server learns the leaf index. The real [`SimplePirClient`] (below)
+//! implements the same [`PirClient`] trait without revealing the index; callers
+//! do not change.
 
 use std::sync::{
     Arc,
@@ -54,7 +55,7 @@ impl PirClient for CleartextPirClient {
     }
 }
 
-/// Real SimplePIR commitment-path client (Slice 2). Holds a snapshot PIR database
+/// Real SimplePIR commitment-path client. Holds a snapshot PIR database
 /// of the commitment tree (the server side) plus the public leaf count. A fetch
 /// derives the sibling positions from the leaf index via `stateless_path` — no
 /// tree access — then PIR-fetches each sibling's limbs and reassembles the proof,

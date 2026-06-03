@@ -14,12 +14,12 @@ pub enum PirError {
 /// The single PIR'd read: the commitment-tree membership path for a leaf the
 /// wallet owns (its index is known from its own minting event).
 ///
-/// PoC: the cleartext adapter sends the leaf index to the server, which learns
-/// it. Slice 2 swaps in a real PIR backend that computes the sibling-node offsets
-/// locally and fetches each node obliviously over the `tree-pir` flattened array,
-/// so the leaf index never leaves the wallet — this trait and its callers are
-/// unchanged. Phantom-epoch lookups and the active tree are NOT PIR'd (see
-/// `StateReplicaQuery` and SPEC.md "Off-Chain State-Replica Server").
+/// Two adapters implement this trait. The `CleartextPirClient` dev stub sends the
+/// leaf index to the server (which learns it) — convenient for tests, not private.
+/// The real `SimplePirClient` computes the sibling-node offsets locally and
+/// fetches each node obliviously over the `tree-pir` flattened array, so the leaf
+/// index never leaves the wallet. Phantom-epoch lookups and the active tree are
+/// NOT PIR'd (see `StateReplicaQuery` and SPEC.md "Off-Chain State-Replica Server").
 pub trait PirClient {
     /// Fetch the membership path for the commitment at `leaf_index`.
     fn fetch_membership_path(&self, leaf_index: u64) -> Result<CommitmentMerkleProof, PirError>;

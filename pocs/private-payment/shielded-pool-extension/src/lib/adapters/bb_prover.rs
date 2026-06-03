@@ -1,10 +1,10 @@
 //! Barretenberg prover adapter.
 //!
-//! Slice 1.4 wires the **chain-update** recursion (the IVC inner artifact):
+//! Wires the **chain-update** recursion (the IVC inner artifact):
 //! `bb ... -t noir-recursive` for recursion-friendly proofs, reading the raw
 //! `vk` / `vk_hash` / `proof` / `public_inputs` binaries and chunking them into
 //! Fr field-decimals (the segfaulting `proof_as_fields_honk` is avoided). The
-//! EVM-targeted spend/insertion proving (keccak/`-t evm`) lands in later slices.
+//! EVM-targeted spend/insertion proving uses keccak (`-t evm`).
 //!
 //! Requires `nargo` 1.0.0-beta.21 + `bb` 5.0.0-nightly on PATH (see the
 //! `noir-recursion-recipe` memory). The recursion test is `#[ignore]`d (it

@@ -4,6 +4,10 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use zeroize::{
+    Zeroize,
+    ZeroizeOnDrop,
+};
 
 use crate::crypto::poseidon::poseidon1;
 
@@ -35,6 +39,22 @@ impl SpendingKey {
     /// Get the raw bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_ref()
+    }
+}
+
+// The spending key is the master spend secret; wipe its bytes on drop so they do
+// not linger in freed memory.
+impl Zeroize for SpendingKey {
+    fn zeroize(&mut self) {
+        self.0 .0.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for SpendingKey {}
+
+impl Drop for SpendingKey {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 

@@ -6,8 +6,7 @@
 //! (`currentEpoch`, `activeNullifierRoot`, `activeLeafCount`, `frozenNullifierRoots`,
 //! `expectedChainAccumulator`, `chainVkHash`) and the two-proof `transfer` /
 //! `withdraw` signatures (wallet spend proof + relayer insertion proof). Methods
-//! are inherent (the single-backend PoC does not need a port trait, so
-//! `ports/on_chain.rs` stays a stub).
+//! are inherent: the single-backend PoC does not need an on-chain port trait.
 
 use alloy::{
     network::EthereumWallet,
@@ -107,6 +106,17 @@ pub struct TxReceipt {
     pub success: bool,
 }
 
+impl From<alloy::rpc::types::TransactionReceipt> for TxReceipt {
+    fn from(receipt: alloy::rpc::types::TransactionReceipt) -> Self {
+        Self {
+            tx_hash: receipt.transaction_hash,
+            block_number: receipt.block_number.unwrap_or(0),
+            gas_used: receipt.gas_used,
+            success: receipt.status(),
+        }
+    }
+}
+
 /// RPC adapter for `ShieldedPoolExt`.
 pub struct EthereumRpc {
     provider: DynProvider,
@@ -140,15 +150,6 @@ impl EthereumRpc {
 
     fn pool(&self) -> IShieldedPoolExt::IShieldedPoolExtInstance<&DynProvider> {
         IShieldedPoolExt::new(self.pool, &self.provider)
-    }
-
-    fn convert_receipt(receipt: &alloy::rpc::types::TransactionReceipt) -> TxReceipt {
-        TxReceipt {
-            tx_hash: receipt.transaction_hash,
-            block_number: receipt.block_number.unwrap_or(0),
-            gas_used: receipt.gas_used,
-            success: receipt.status(),
-        }
     }
 
     // ===== Reads =====
@@ -338,6 +339,6 @@ impl EthereumRpc {
         if !receipt.status() {
             return Err(OnChainError::TransactionReverted(format!("{what} reverted")));
         }
-        Ok(Self::convert_receipt(&receipt))
+        Ok(receipt.into())
     }
 }

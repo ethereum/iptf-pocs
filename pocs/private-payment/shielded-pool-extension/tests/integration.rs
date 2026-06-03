@@ -90,6 +90,12 @@ fn decimal_to_b256(decimal: &str) -> B256 {
 /// Deploy everything via the forge script (forge deploys + links the libraries),
 /// returning `(pool, token)` read back from `deployments.toml`.
 fn deploy(root: &Path, endpoint: &str, chain_vk_hash: B256, empty_imt_root: B256) -> (Address, Address) {
+    // Seed the [31337] chain skeleton the forge-std `Config` base reads on load
+    // (it requires the file to exist with the chain table); the deploy script
+    // then records the deployed addresses under [31337.address].
+    std::fs::write(root.join("deployments.toml"), format!("[31337]\nendpoint_url = \"{endpoint}\"\n"))
+        .expect("write deployments.toml skeleton");
+
     let status = Command::new("forge")
         .args([
             "script",
@@ -109,8 +115,10 @@ fn deploy(root: &Path, endpoint: &str, chain_vk_hash: B256, empty_imt_root: B256
 
     let content = std::fs::read_to_string(root.join("deployments.toml")).expect("deployments.toml");
     let v: toml::Value = content.parse().expect("parse deployments.toml");
-    let pool = v["shielded_pool"].as_str().unwrap().parse().expect("pool address");
-    let token = v["mock_token"].as_str().unwrap().parse().expect("token address");
+    // `Config` writes chain-keyed tables: [31337.address] <key> = <addr>.
+    let addrs = &v["31337"]["address"];
+    let pool = addrs["shielded_pool"].as_str().unwrap().parse().expect("pool address");
+    let token = addrs["mock_token"].as_str().unwrap().parse().expect("token address");
     (pool, token)
 }
 

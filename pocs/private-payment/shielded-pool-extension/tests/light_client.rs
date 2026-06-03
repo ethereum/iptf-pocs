@@ -1,4 +1,4 @@
-//! Light-client root-verification integration test (Slice 3).
+//! Light-client root-verification integration test.
 //!
 //! Spawns anvil, deploys `MockERC20` + mints, then verifies several real storage
 //! slots (mixed inclusion + exclusion) through the two-level MPT verifier against

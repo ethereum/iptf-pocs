@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Script} from "forge-std/src/Script.sol";
+import {Config} from "forge-std/src/Config.sol";
 import {ShieldedPoolExt} from "../src/ShieldedPoolExt.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {HonkVerifier as DepositVerifier} from "../src/verifiers/DepositVerifier.sol";
@@ -14,10 +15,13 @@ import {HonkVerifier as InsertionVerifier} from "../src/verifiers/InsertionVerif
 ///      (the empty indexed-Merkle-tree root) are computed off-chain by the
 ///      integration test (via `bb` and the Rust IMT) and passed as env vars.
 ///      Forge auto-deploys + links the contract libraries (ZKTranscriptLib in the
-///      verifiers; PoseidonT3 + LeanIMT in the pool). Writes `deployments.toml`
-///      for the test to read.
-contract Deploy is Script {
+///      verifiers; PoseidonT3 + LeanIMT in the pool). Deployed addresses are
+///      recorded to `deployments.toml` through the forge-std `Config` base; the
+///      integration test seeds the `[31337]` chain skeleton the base reads on load.
+contract Deploy is Script, Config {
     function run() external {
+        _loadConfig("./deployments.toml", true);
+
         bytes32 chainVkHash = vm.envBytes32("CHAIN_VK_HASH");
         bytes32 emptyImtRoot = vm.envBytes32("EMPTY_IMT_ROOT");
 
@@ -33,9 +37,7 @@ contract Deploy is Script {
             new ShieldedPoolExt(depositV, transferV, insertionV, withdrawV, insertionV, chainVkHash, emptyImtRoot);
         vm.stopBroadcast();
 
-        string memory out = string.concat(
-            "shielded_pool = \"", vm.toString(address(pool)), "\"\n", "mock_token = \"", vm.toString(address(token)), "\"\n"
-        );
-        vm.writeFile("deployments.toml", out);
+        config.set("shielded_pool", address(pool));
+        config.set("mock_token", address(token));
     }
 }

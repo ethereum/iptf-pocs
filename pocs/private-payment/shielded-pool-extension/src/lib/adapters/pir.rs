@@ -1,5 +1,5 @@
 //! SimplePIR primitive: an oblivious fetch of a single `u64` record (each record
-//! `< 2^MOD_POWER`). The commitment-path read (Slice 2) is built on this — the
+//! `< 2^MOD_POWER`). The commitment-path read is built on this — the
 //! server's only input to `answer` is the encrypted query, so it never learns the
 //! index. Server (`answer`) and client (`query`/`recover`) run in one process for
 //! the PoC; that does not weaken the index-privacy property (the server's input is

@@ -13,8 +13,9 @@
 //! empty tree's root equals [`empty_root`].
 //!
 //! PoC note: `root()` and `merkle_path()` recompute the occupied levels on each
-//! call (O(occupied) hashing); fine at PoC scale, not optimized for Visa-scale
-//! epochs.
+//! call (O(occupied) hashing); fine at PoC scale. Production would persist the
+//! node array and update only the O(depth) nodes on each insert's path
+//! (incremental Merkle update), making `root()`/`merkle_path()` O(1)/O(depth).
 //!
 //! [`leaf_count`]: IndexedMerkleTree::leaf_count
 //! [`empty_root`]: IndexedMerkleTree::empty_root

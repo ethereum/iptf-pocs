@@ -24,7 +24,11 @@ impl EncryptedNote {
         }
     }
 
-    /// Serialize to bytes for on-chain storage.
+    /// Serialize to bytes for the on-chain event log (the `Deposit`/`Transfer`
+    /// event carries the encrypted note; it is not written to contract storage).
+    /// Log cost is linear in ciphertext size; a production deployment would use a
+    /// compact note format or an off-chain note log with FMD/OMR note-discovery
+    /// (SPEC "Off-Chain State-Replica Server").
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes =
             Vec::with_capacity(1 + self.ephemeral_pubkey.len() + self.ciphertext.len());
@@ -98,7 +102,8 @@ impl EncryptedTransferNotes {
         Self { note_1, note_2 }
     }
 
-    /// Serialize to bytes for on-chain storage.
+    /// Serialize to bytes for the on-chain `Transfer` event log (see
+    /// [`EncryptedNote::to_bytes`] for the calldata-size note).
     pub fn to_bytes(&self) -> Vec<u8> {
         let bytes_1 = self.note_1.to_bytes();
         let bytes_2 = self.note_2.to_bytes();

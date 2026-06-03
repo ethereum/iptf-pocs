@@ -49,7 +49,7 @@ impl Note {
     ) -> Self {
         let mut rng = rand::thread_rng();
         let mut salt_bytes = [0u8; 32];
-        rng.fill(&mut salt_bytes[5..]); // keep within the field
+        rng.fill(&mut salt_bytes[5..]); // 27 random bytes (top 5 zeroed) stay < BN254 modulus; no rejection sampling
 
         Self {
             token,
