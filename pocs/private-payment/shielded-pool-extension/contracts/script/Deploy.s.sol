@@ -9,6 +9,7 @@ import {HonkVerifier as DepositVerifier} from "../src/verifiers/DepositVerifier.
 import {HonkVerifier as TransferVerifier} from "../src/verifiers/TransferVerifier.sol";
 import {HonkVerifier as WithdrawVerifier} from "../src/verifiers/WithdrawVerifier.sol";
 import {HonkVerifier as InsertionVerifier} from "../src/verifiers/InsertionVerifier.sol";
+import {HonkVerifier as WithdrawInsertionVerifier} from "../src/verifiers/WithdrawInsertionVerifier.sol";
 
 /// @notice E2e deployment: real bb verifiers + mock token + `ShieldedPoolExt`.
 /// @dev `CHAIN_VK_HASH` (the chain-update circuit's VK hash) and `EMPTY_IMT_ROOT`
@@ -30,11 +31,12 @@ contract Deploy is Script, Config {
         address transferV = address(new TransferVerifier());
         address withdrawV = address(new WithdrawVerifier());
         address insertionV = address(new InsertionVerifier());
+        // k=1 insertion verifier for the single-input withdraw (transfer uses k=2).
+        address withdrawInsertionV = address(new WithdrawInsertionVerifier());
         MockERC20 token = new MockERC20("USD Coin", "USDC", 6);
-        // withdrawInsertionVerifier (k=1) has no circuit yet; reuse the k=2
-        // insertion verifier as a placeholder (the e2e is transfer-scoped).
-        ShieldedPoolExt pool =
-            new ShieldedPoolExt(depositV, transferV, insertionV, withdrawV, insertionV, chainVkHash, emptyImtRoot);
+        ShieldedPoolExt pool = new ShieldedPoolExt(
+            depositV, transferV, insertionV, withdrawV, withdrawInsertionV, chainVkHash, emptyImtRoot
+        );
         vm.stopBroadcast();
 
         config.set("shielded_pool", address(pool));

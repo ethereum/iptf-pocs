@@ -9,8 +9,8 @@
 //! proof + relayer insertion proof, bound by the shared nullifier list), and the
 //! active-tree advance.
 //!
-//! Scoped to the transfer flow (deposit -> rollover -> transfer). Withdraw is the
-//! same machinery at k=1 (unit-tested in the contract suite).
+//! Covers both spend flows (deposit -> rollover -> transfer, and the same through
+//! withdraw): transfer exercises the k=2 insertion proof, withdraw the k=1 one.
 //!
 //! Heavy (real recursive proving + anvil + forge): `#[ignore]`d. Run with:
 //!   cargo test --test integration -- --ignored --nocapture
@@ -44,6 +44,7 @@ use private_payment_shielded_pool_extension::{
             DepositInput,
             InsertionToml,
             TransferInput,
+            WithdrawInput,
             CHAIN_PROOF_PUB_LEN,
             RECURSIVE_PROOF_LENGTH,
             ULTRA_VK_LENGTH_IN_FIELDS,
@@ -324,4 +325,117 @@ async fn transfer_flow_verifies_on_chain() {
     assert_eq!(rpc.active_nullifier_root().await.unwrap(), post_root, "active root advanced");
     assert_eq!(rpc.active_leaf_count().await.unwrap(), 3, "two nullifiers appended (1 -> 3)");
     assert_eq!(rpc.commitment_count().await.unwrap(), 3, "two outputs appended (1 -> 3)");
+}
+
+#[tokio::test]
+#[ignore = "spawns anvil + forge + proves real circuits (minutes); run with --ignored"]
+async fn withdraw_flow_verifies_on_chain() {
+    let root = project_root();
+    let prover = BbProver::new(root.clone());
+
+    // Off-chain constructor params: chainVkHash from bb, emptyImtRoot from the IMT.
+    let (vk_fields, vk_hash) = prover.write_chain_update_vk().expect("chain vk");
+    let chain_vk_hash = decimal_to_b256(&vk_hash);
+    let empty_imt_root = IndexedMerkleTree::new().root();
+
+    let anvil = Anvil::new().spawn();
+    let endpoint = anvil.endpoint();
+    let (pool, token) = deploy(&root, &endpoint, chain_vk_hash, empty_imt_root);
+
+    let rpc = EthereumRpc::new(&endpoint, DEV_KEY, pool).await.expect("rpc");
+    let deployer = rpc.signer_address();
+    rpc.add_supported_token(token).await.expect("add token");
+    let amount = U256::from(1000u64);
+    rpc.mint_mock_token(token, deployer, amount).await.expect("mint");
+    rpc.approve_token(token, amount).await.expect("approve");
+
+    let sk = SpendingKey::from_bytes([3u8; 32]);
+    let owner = sk.derive_owner_pubkey();
+    let salt_a = B256::repeat_byte(0x07);
+    let note_a = Note::with_salt(token, amount, owner, salt_a, Epoch(0));
+    let commit_a = note_a.commitment();
+
+    // ===== 1. Deposit at epoch 0 (real deposit proof) =====
+    prover.write_evm_vk("deposit").expect("deposit vk");
+    let dep = DepositInput {
+        commitment: fd(commit_a.0),
+        token: fd(token_field(token)),
+        amount: fd(B256::from(amount)),
+        current_epoch_at_deposit: 0,
+        owner_pubkey: fd(owner.0),
+        salt: fd(salt_a),
+    };
+    let dep_proof = prover.prove_evm("deposit", &dep).expect("prove deposit");
+    rpc.deposit(Bytes::from(dep_proof.proof), commit_a.0, token, amount, Bytes::new())
+        .await
+        .expect("on-chain deposit");
+    let commitment_root = rpc.commitment_root().await.unwrap(); // single-leaf tree => commit_a
+
+    // ===== 2. Rollover to epoch 1 (freezes the empty epoch-0 active tree) =====
+    rpc.rollover_epoch().await.expect("rollover");
+    let frozen0 = rpc.frozen_nullifier_root(0).await.unwrap();
+
+    // ===== 3. Chain proof: genesis -> extend over frozen epoch 0 =====
+    let genesis = chain_genesis(&vk_hash, commit_a, &sk, token, amount, salt_a);
+    let genesis_art = prover.prove_chain_update(&genesis).expect("genesis chain proof");
+    let frozen_tree = IndexedMerkleTree::new(); // empty epoch-0 tree (root == frozen0)
+    let phantom_eta_0 = commit_a.nullifier(&sk, Epoch(0)).0;
+    let nmw = frozen_tree.non_membership_witness(phantom_eta_0).expect("non-membership");
+    let acc1 = expected_accumulator(&[frozen0]);
+    let step = chain_step(&vk_hash, &vk_fields, commit_a, &sk, token, amount, salt_a, &genesis_art, frozen0, acc1, &nmw);
+    let chain_art = prover.prove_chain_update(&step).expect("chain step (caught up to epoch 1)");
+
+    // ===== 4. Withdraw: note_a's full 1000 exits to `recipient` (1 input, no change) =====
+    let recipient = Address::repeat_byte(0xBB);
+    let eta = commit_a.nullifier(&sk, Epoch(1)).0;
+    let wi = WithdrawInput {
+        nullifier_active: fd(eta),
+        token: fd(token_field(token)),
+        amount: 1000,
+        recipient: fd(token_field(recipient)),
+        commitment_root: fd(commitment_root),
+        current_epoch: "1".into(),
+        chain_vk_hash: vk_hash.clone(),
+        epoch_created_in: "0".into(),
+        chain_accumulator_in: fd(acc1),
+        spending_key: fd(sk.0),
+        salt: fd(salt_a),
+        proof_length: 0,
+        path: zeros(32),
+        indices: vec![false; 32],
+        chain_vk: vk_fields.clone(),
+        chain_proof: chain_art.proof.clone(),
+        chain_pub: chain_art.public_inputs.clone(),
+    };
+    prover.write_evm_vk("withdraw").expect("withdraw vk");
+    let spend = prover.prove_evm("withdraw", &wi).expect("prove withdraw");
+
+    // ===== 5. Relayer k=1 insertion proof for [eta] (the insertion_withdraw circuit) =====
+    let mut active = IndexedMerkleTree::new(); // epoch-1 active tree starts empty
+    let pre_root = active.root();
+    let pre_count = active.leaf_count();
+    let w = active.insert(eta).expect("insert eta");
+    let post_root = active.root();
+    let it = InsertionToml::from_witnesses(pre_root, post_root, pre_count, &[eta], &[w]);
+    prover.write_evm_vk("insertion_withdraw").expect("insertion_withdraw vk");
+    let ins = prover.prove_evm("insertion_withdraw", &it).expect("prove k=1 insertion");
+
+    // ===== 6. Submit both proofs on-chain (exercises the real k=1 withdraw verifier) =====
+    rpc.withdraw(
+        Bytes::from(spend.proof),
+        Bytes::from(ins.proof),
+        eta,
+        token,
+        amount,
+        recipient,
+        commitment_root,
+        0,
+        post_root,
+    )
+    .await
+    .expect("on-chain withdraw (spend + k=1 insertion proofs)");
+
+    assert_eq!(rpc.active_nullifier_root().await.unwrap(), post_root, "active root advanced");
+    assert_eq!(rpc.active_leaf_count().await.unwrap(), 2, "one nullifier appended (1 -> 2)");
+    assert_eq!(rpc.commitment_count().await.unwrap(), 1, "withdraw adds no output commitment");
 }

@@ -153,6 +153,30 @@ pub struct TransferInput {
     pub chain_pub_1: Vec<String>,
 }
 
+/// `Prover.toml` shape for the withdraw circuit (field names match its `main`):
+/// a single input note fully exiting to `recipient` (no change outputs), so one
+/// chain proof and one nullifier.
+#[derive(Serialize)]
+pub struct WithdrawInput {
+    pub nullifier_active: String,
+    pub token: String,
+    pub amount: u64,
+    pub recipient: String,
+    pub commitment_root: String,
+    pub current_epoch: String,
+    pub chain_vk_hash: String,
+    pub epoch_created_in: String,
+    pub chain_accumulator_in: String,
+    pub spending_key: String,
+    pub salt: String,
+    pub proof_length: u32,
+    pub path: Vec<String>,
+    pub indices: Vec<bool>,
+    pub chain_vk: Vec<String>,
+    pub chain_proof: Vec<String>,
+    pub chain_pub: Vec<String>,
+}
+
 /// A produced EVM-target proof and its public inputs, as raw bytes (the form the
 /// Solidity `HonkVerifier` consumes: `proof` and the `bytes32[]` public inputs).
 #[derive(Debug, Clone)]

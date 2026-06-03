@@ -1,11 +1,12 @@
 use insertion_core::{NULLIFIER_TREE_DEPTH, run_insertions};
 
-// Insertion circuit (relayer-produced; verified on-chain; need not be zk).
-// Instantiates the shared `insertion_core::run_insertions` at N_INSERTS = 2 (a
-// 2-in transfer). The single-input withdraw uses the same core at N_INSERTS = 1
-// (see `circuits/insertion_withdraw`). See ../../SPEC.md "Insertion Circuit (new)".
+// Withdraw's insertion circuit: the shared `insertion_core::run_insertions` at
+// N_INSERTS = 1 (a single-input withdraw inserts one nullifier). Identical logic
+// to `circuits/insertion` (k = 2); only the insertion count differs. The
+// contract's `withdrawInsertionVerifier` consumes this circuit's verifier. See
+// ../../SPEC.md "Insertion Circuit (new)" and "Withdraw (extended)".
 
-global N_INSERTS: u32 = 2;
+global N_INSERTS: u32 = 1;
 
 fn main(
     pre_active_root: pub Field,

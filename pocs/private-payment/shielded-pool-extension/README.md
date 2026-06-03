@@ -9,7 +9,7 @@ The note format, deposit, and attestation flows of the parent are preserved. The
 
 ## Status
 
-Implemented end-to-end as a research PoC: the extended circuits, the two-proof spend contract, the off-chain stack (state replica, bb prover, SimplePIR commitment-path read, light-client storage-proof verifier), and a self-contained on-chain integration test. See "Implementation shortcuts" below for the deliberate spec-vs-impl divergences. The protocol is proof-system agnostic; see [SPEC.md](./SPEC.md) for the abstract requirements an implementation must meet. This folder is a self-contained PoC (no cross-PoC imports from `../shielded-pool/`); any source mirrored from the parent is duplicated locally per the repo's PoC-independence rule.
+Implemented end-to-end as a research PoC: the extended circuits, the two-proof spend contract, the off-chain stack (state replica, bb prover, SimplePIR commitment-path read, light-client storage-proof verifier), and self-contained on-chain integration tests covering both spend flows — transfer (k=2 insertion) and withdraw (k=1 insertion). See "Implementation shortcuts" below for the deliberate spec-vs-impl divergences. The protocol is proof-system agnostic; see [SPEC.md](./SPEC.md) for the abstract requirements an implementation must meet. This folder is a self-contained PoC (no cross-PoC imports from `../shielded-pool/`); any source mirrored from the parent is duplicated locally per the repo's PoC-independence rule.
 
 ## Layout
 
@@ -78,9 +78,7 @@ chmod +x scripts/generate-verifiers.sh
 
 [SPEC.md](./SPEC.md) describes the full protocol, including the parent's KYC attestation registry and flows (unchanged by this extension). Where this PoC's implementation deliberately diverges from the spec, it is noted here:
 
-- **KYC attestation is not enforced in the deposit circuit.** The deposit proves only commitment well-formedness and the `epoch_created` binding; it does not verify attestation membership. This is an implementation-scope choice — attestation is orthogonal to the PIR + epoch-nullifier mechanisms this extension demonstrates, and is fully exercised in the parent [shielded-pool](../shielded-pool/) PoC.
-
-- **Withdraw's `N_INSERTS = 1` insertion circuit/verifier is not built.** `scripts/generate-verifiers.sh` emits the real Solidity verifiers for `deposit`/`transfer`/`withdraw`/`insertion` (the latter at k=2, a 2-in transfer). The insertion circuit's leaf count is a per-circuit compile-time constant, so the single-input `withdraw` needs a 1-insertion variant of `circuits/insertion`, which isn't built. Consequently the contract's `withdrawInsertionVerifier` slot and the deploy reuse the k=2 `insertion` verifier as a placeholder, and the on-chain e2e is **transfer-scoped** — `withdraw` is exercised only in the contract unit tests (mock verifier). The two-proof contract path itself (`transfer` + `withdraw`, cross-proof η binding, `expectedChainAccumulator`, the shared `_verifyInsertionAndAdvance`) is complete.
+- **KYC attestation is not enforced in the deposit circuit.** This extension *composes with* the parent [shielded-pool](../shielded-pool/) rather than replacing it: it layers the PIR commitment-path read and epoch-nullifier machinery on top of the parent's flows. The deposit here proves commitment well-formedness and the new `epoch_created` binding, but does not re-verify KYC attestation membership — that check is orthogonal to the mechanisms this extension demonstrates and is fully enforced in the parent's deposit circuit.
 
 - **No on-chain nullifier-uniqueness check (differs from the parent contract).** The parent rejected identical/spent nullifiers with an explicit mapping and `IdenticalNullifiers` guard. This extension keeps no on-chain nullifier set: active-epoch double-spend and in-tx duplicate η are caught inside the insertion proof's sorted-low-leaf step (SPEC "On-Chain State"), so the contract only pins the two proofs to one shared η list.
 
