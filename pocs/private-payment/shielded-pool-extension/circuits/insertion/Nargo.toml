@@ -1,0 +1,8 @@
+[package]
+name = "insertion"
+type = "bin"
+authors = [""]
+compiler_version = ">=1.0.0"
+
+[dependencies]
+insertion_core = { path = "../insertion_core" }

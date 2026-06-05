@@ -1,0 +1,9 @@
+.env
+dependencies/
+target/
+**/Prover.toml
+contracts/out/
+contracts/cache/
+contracts/broadcast/**/31337/**
+deployments.toml
+**/.DS_Store

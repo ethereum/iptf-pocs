@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "circuits/deposit",
+    "circuits/transfer",
+    "circuits/withdraw",
+    "circuits/chain_update",
+    "circuits/insertion",
+    "circuits/insertion_withdraw",
+]
+default-member = "circuits/transfer"
